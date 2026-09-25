@@ -10,6 +10,7 @@ from app.api.routes.events import router as events_router
 from app.api.routes.metrics import router as metrics_router
 from app.api.routes.repositories import router as repositories_router
 from app.api.routes.tasks import router as tasks_router
+from app.api.routes.workspaces import router as workspaces_router
 from app.config import settings
 from app.observability.logging import logger
 
@@ -44,6 +45,7 @@ app.include_router(approvals_router, prefix="/api")
 app.include_router(events_router, prefix="/api")
 app.include_router(metrics_router, prefix="/api")
 app.include_router(benchmarks_router, prefix="/api")
+app.include_router(workspaces_router, prefix="/api")
 
 
 @app.get("/health", tags=["system"])
