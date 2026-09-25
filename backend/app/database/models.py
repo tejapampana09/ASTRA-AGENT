@@ -54,9 +54,13 @@ class TaskRecord(Base):
     workspace_path = Column(String, nullable=True)
     iterations = Column(Integer, default=0)
     retries = Column(Integer, default=0)
+    timeout_seconds = Column(Integer, default=1800)
+    heartbeat_at = Column(DateTime(timezone=True), nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     final_report = Column(JSONType, nullable=True)
+    error_message = Column(Text, nullable=True)
 
     repository = relationship("RepositoryRecord", back_populates="tasks")
     steps = relationship("TaskStepRecord", back_populates="task", cascade="all, delete-orphan")
@@ -222,4 +226,47 @@ class EngineeringDecisionRecord(Base):
     decision = Column(Text, nullable=False)  # detailed explanation or rule
     evidence = Column(JSONType, nullable=True)  # rationale, related tasks, code patterns
     created_at = Column(DateTime(timezone=True), default=utc_now)
+
+
+class CheckpointRecord(Base):
+    __tablename__ = "langgraph_checkpoints"
+
+    thread_id = Column(String, primary_key=True)
+    checkpoint_ns = Column(String, primary_key=True, default="")
+    checkpoint_id = Column(String, primary_key=True)
+    parent_checkpoint_id = Column(String, nullable=True)
+    checkpoint_type = Column(String, default="msgpack")
+    checkpoint_data = Column(Text, nullable=False)  # base64 encoded JsonPlus payload
+    metadata_type = Column(String, default="msgpack")
+    metadata_data = Column(Text, nullable=True)      # base64 encoded JsonPlus payload
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+
+
+class CheckpointBlobRecord(Base):
+    __tablename__ = "langgraph_checkpoint_blobs"
+
+    thread_id = Column(String, primary_key=True)
+    checkpoint_ns = Column(String, primary_key=True, default="")
+    channel = Column(String, primary_key=True)
+    version = Column(String, primary_key=True)
+    type = Column(String, nullable=False)
+    blob_data = Column(Text, nullable=False)        # base64 encoded raw data
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+
+
+class CheckpointWriteRecord(Base):
+    __tablename__ = "langgraph_checkpoint_writes"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    thread_id = Column(String, nullable=False, index=True)
+    checkpoint_ns = Column(String, default="", nullable=False)
+    checkpoint_id = Column(String, nullable=False, index=True)
+    task_id = Column(String, nullable=False)
+    idx = Column(Integer, nullable=False)
+    channel = Column(String, nullable=False)
+    type = Column(String, nullable=False)
+    value_data = Column(Text, nullable=False)       # base64 encoded JsonPlus payload
+    task_path = Column(String, default="")
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+
 

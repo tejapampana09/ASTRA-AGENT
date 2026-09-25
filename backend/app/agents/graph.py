@@ -290,12 +290,14 @@ def should_execute_or_pause(state: AstraAgentState) -> Literal["execute", "appro
     return "execute"
 
 
-def build_astra_graph() -> StateGraph:
+def build_astra_graph(checkpointer: Optional[Any] = None) -> StateGraph:
     """
     Builds and compiles the ASTRA 2.0 autonomous engineering workflow graph
-    implementing the full Phase 3 state machine.
+    implementing the full Phase 3 and Phase 4 state machine with durable checkpointing.
     """
-    from langgraph.checkpoint.memory import MemorySaver
+    if checkpointer is None:
+        from app.runtime.checkpointer import get_durable_checkpointer
+        checkpointer = get_durable_checkpointer()
 
     workflow = StateGraph(AstraAgentState)
 
@@ -359,7 +361,6 @@ def build_astra_graph() -> StateGraph:
     workflow.add_edge("escalate", "finalize")
     workflow.add_edge("finalize", END)
 
-    checkpointer = MemorySaver()
     return workflow.compile(checkpointer=checkpointer)
 
 
