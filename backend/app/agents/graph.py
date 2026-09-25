@@ -119,6 +119,8 @@ def finalize_task(state: AstraAgentState) -> Dict[str, Any]:
         "retries": state.get("retry_count", 0),
         "failures_diagnosed": len(failure_history),
         "failure_history": failure_history,
+        "tool_calls": state.get("tool_calls", []),
+        "decisions": state.get("plan_metadata", {}).get("decisions", []),
         "errors": state.get("errors", []),
     }
 

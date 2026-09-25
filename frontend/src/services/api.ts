@@ -49,3 +49,22 @@ export async function rejectTicket(ticketId: string, comment?: string): Promise<
     body: JSON.stringify({ comment }),
   });
 }
+
+export async function recoverTask(taskId: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/tasks/${taskId}/recover`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed to recover task: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getTaskHealth(taskId: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/tasks/${taskId}/health`);
+  if (!res.ok) throw new Error(`Failed to fetch health: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getTaskAudit(taskId: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/tasks/${taskId}/audit`);
+  if (!res.ok) throw new Error(`Failed to fetch audit: ${res.statusText}`);
+  return res.json();
+}
+
