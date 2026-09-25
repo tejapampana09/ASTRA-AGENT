@@ -69,10 +69,16 @@ class AgentRuntime:
 
         selected_model = model or os.environ.get("LLM_MODEL")
         key = api_key or os.environ.get("LLM_API_KEY")
+        detected_base_url = base_url or os.environ.get("LLM_BASE_URL")
 
         # Auto-detect standard provider environment variables and match model prefix
         if not key:
-            if os.environ.get("GEMINI_API_KEY"):
+            if os.environ.get("OPENROUTER_API_KEY") or (key and str(key).startswith("sk-or-v1")):
+                key = os.environ.get("OPENROUTER_API_KEY") or key
+                detected_base_url = detected_base_url or "https://openrouter.ai/api/v1"
+                if not selected_model or "claude" in selected_model:
+                    selected_model = "openrouter/anthropic/claude-3.5-sonnet"
+            elif os.environ.get("GEMINI_API_KEY"):
                 key = os.environ.get("GEMINI_API_KEY")
                 if not selected_model or "claude" in selected_model:
                     selected_model = "gemini/gemini-2.5-flash"
@@ -85,6 +91,15 @@ class AgentRuntime:
                 if not selected_model:
                     selected_model = "openai/gpt-4o"
 
+        # Respect explicitly configured LLM_MODEL from environment if present
+        env_model = os.environ.get("LLM_MODEL")
+        if env_model:
+            selected_model = env_model
+        elif key and str(key).startswith("sk-or-v1-"):
+            detected_base_url = detected_base_url or "https://openrouter.ai/api/v1"
+            if not selected_model:
+                selected_model = "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
+
         selected_model = selected_model or self.settings.LLM_MODEL
 
         llm_kwargs: Dict[str, Any] = {
@@ -94,8 +109,9 @@ class AgentRuntime:
         }
         if key:
             llm_kwargs["api_key"] = SecretStr(key)
-        if base_url or self.settings.LLM_BASE_URL:
-            llm_kwargs["base_url"] = base_url or self.settings.LLM_BASE_URL
+        effective_base_url = detected_base_url or self.settings.LLM_BASE_URL
+        if effective_base_url:
+            llm_kwargs["base_url"] = effective_base_url
 
         return LLM(**llm_kwargs)
 

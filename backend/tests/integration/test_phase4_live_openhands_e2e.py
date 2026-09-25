@@ -29,6 +29,15 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict
 
+from dotenv import load_dotenv
+
+# Load local .env if present
+_env_path = Path(__file__).resolve().parent.parent.parent.parent / ".env"
+if _env_path.exists():
+    load_dotenv(_env_path)
+else:
+    load_dotenv()
+
 import pytest
 
 from app.agents.graph import build_astra_graph
@@ -46,6 +55,7 @@ def has_live_llm_key() -> bool:
     return bool(
         settings.LLM_API_KEY
         or os.environ.get("LLM_API_KEY")
+        or os.environ.get("OPENROUTER_API_KEY")
         or os.environ.get("GEMINI_API_KEY")
         or os.environ.get("ANTHROPIC_API_KEY")
         or os.environ.get("OPENAI_API_KEY")
