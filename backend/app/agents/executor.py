@@ -54,7 +54,17 @@ def execute_step(state: AstraAgentState) -> Dict[str, Any]:
 
     prompt = "\n".join(prompt_lines)
 
-    runtime = AgentRuntime()
+    # ------------------------------------------------------------------
+    # Runtime selection: ASTRA_MOCK_AGENT=1 → MockAgentRuntime (tests)
+    # Production: AgentRuntime (OpenHands SDK + real LLM)
+    # ------------------------------------------------------------------
+    import os
+    if os.environ.get("ASTRA_MOCK_AGENT") == "1":
+        from app.runtime.mock_agent_runtime import MockAgentRuntime
+        runtime: Any = MockAgentRuntime()
+    else:
+        runtime = AgentRuntime()
+
     result = runtime.execute_task(workspace=workspace, prompt=prompt)
 
     tool_calls_dict = [
