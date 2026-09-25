@@ -174,10 +174,10 @@ class IsolatedWorkspace:
                 check=False
             )
             files = []
-            for line in res.stdout.strip().splitlines():
+            for line in res.stdout.splitlines():
                 if not line.strip():
                     continue
-                file_part = line[3:].strip()
+                file_part = line[2:].strip()
                 if " -> " in file_part:
                     file_part = file_part.split(" -> ")[1].strip()
                 file_part = file_part.strip('"\'')

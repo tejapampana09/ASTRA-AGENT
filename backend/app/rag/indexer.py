@@ -63,6 +63,7 @@ class SemanticCodeChunker:
 
     ROUTE_DECORATORS = {"get", "post", "put", "delete", "patch", "api_route", "route"}
     DB_MODEL_BASES = {"base", "declarativebase", "basemodel", "model", "document"}
+    CONFIG_NAMES = {"pyproject.toml", "requirements.txt", "setup.py", "package.json", ".env.example", "Dockerfile"}
 
     @classmethod
     def get_git_file_meta(cls, file_path: Path, repo_root: Path) -> Dict[str, Any]:

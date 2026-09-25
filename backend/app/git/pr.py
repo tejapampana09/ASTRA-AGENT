@@ -206,6 +206,7 @@ class PullRequestManager:
                             "url": data.get("html_url"),
                             "title": data.get("title"),
                             "state": data.get("state", "open"),
+                            "body": payload["body"],
                         }
                     else:
                         logger.warning(f"GitHub API rejected PR: {resp.status_code} {resp.text}")
@@ -226,23 +227,26 @@ class PullRequestManager:
             "state": "open",
             "head": head_branch,
             "base": base_branch,
+            "body": payload["body"],
         }
 
     @classmethod
     def merge_pull_request(
         cls,
         repo: str,
-        pull_number: int,
+        pull_number: Optional[int] = None,
         human_approved: bool = False,
-        token: Optional[str] = None
+        token: Optional[str] = None,
+        pr_number: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Merges a Pull Request.
         MANDATORY SAFETY RULE: Requires explicit human approval.
         Raises PermissionError if human_approved is False!
         """
+        target_pr = pull_number if pull_number is not None else (pr_number if pr_number is not None else 1)
         if not human_approved:
-            logger.error(f"Attempted to merge PR #{pull_number} without human approval!")
+            logger.error(f"Attempted to merge PR #{target_pr} without human approval!")
             raise PermissionError(
                 "CRITICAL SAFETY VIOLATION: Merging a pull request requires explicit human approval."
             )

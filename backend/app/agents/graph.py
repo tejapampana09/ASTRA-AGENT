@@ -175,54 +175,58 @@ def finalize_task(state: AstraAgentState) -> Dict[str, Any]:
         if workspace_path and files_changed:
             ws_p = Path(workspace_path)
             if ws_p.exists():
-                indexer = IncrementalIndexer()
-                indexer.index_changes(ws_p, repo_id=repo_id, explicit_changed_files=files_changed)
-
-        # Autonomous Git Commit and PR Creation (Phase 4.1)
-        commit_info = None
-        pr_info = None
-        if workspace_path and verification_status in ["verified", "VERIFIED"]:
-            ws_p = Path(workspace_path)
-            if ws_p.exists():
                 try:
-                    from app.git.commit import CommitManager
-                    from app.git.pr import PullRequestManager
-                    from app.git.branch import BranchManager
-
-                    current_branch = BranchManager.get_current_branch(ws_p)
-                    test_summary = f"{test_results.get('passed', 0)} passed, {test_results.get('failed', 0)} failed"
-                    commit_info = CommitManager.create_commit(
-                        workspace_path=ws_p,
-                        task_id=task_id,
-                        goal=state.get("user_goal", ""),
-                        files_changed=files_changed,
-                        verification_status=verification_status,
-                        test_summary=test_summary
-                    )
-
-                    pr_desc = PullRequestManager.generate_pr_description(
-                        task_id=task_id,
-                        goal=state.get("user_goal", ""),
-                        files_changed=files_changed,
-                        verification_evidence=verification_evidence,
-                        failure_history=failure_history
-                    )
-
-                    pr_info = PullRequestManager.create_pull_request(
-                        repo=repo_id,
-                        head_branch=current_branch,
-                        base_branch="main",
-                        title=f"ASTRA: {state.get('user_goal', '')[:60]}",
-                        body=pr_desc
-                    )
-                except Exception as git_err:
-                    logger.warning(f"Git/PR creation in finalize_task: {git_err}")
-
-        final_report["commit"] = commit_info
-        final_report["pull_request"] = pr_info
+                    indexer = IncrementalIndexer()
+                    indexer.index_changes(ws_p, repo_id=repo_id, explicit_changed_files=files_changed)
+                except Exception as idx_err:
+                    logger.warning(f"Error during incremental indexing in finalize_task: {idx_err}")
 
     except Exception as mem_err:
-        logger.warning(f"Error persisting task memory or incremental index: {mem_err}")
+        logger.warning(f"Error persisting task memory in finalize_task: {mem_err}")
+
+    # Autonomous Git Commit and PR Creation (Phase 4.1)
+    workspace_path = state.get("workspace_path")
+    commit_info = None
+    pr_info = None
+    if workspace_path and verification_status in ["verified", "VERIFIED"]:
+        ws_p = Path(workspace_path)
+        if ws_p.exists():
+            try:
+                from app.git.commit import CommitManager
+                from app.git.pr import PullRequestManager
+                from app.git.branch import BranchManager
+
+                current_branch = BranchManager.get_current_branch(ws_p)
+                test_summary = f"{test_results.get('passed', 0)} passed, {test_results.get('failed', 0)} failed"
+                commit_info = CommitManager.create_commit(
+                    workspace_path=ws_p,
+                    task_id=task_id,
+                    goal=state.get("user_goal", ""),
+                    files_changed=files_changed,
+                    verification_status=verification_status,
+                    test_summary=test_summary
+                )
+
+                pr_desc = PullRequestManager.generate_pr_description(
+                    task_id=task_id,
+                    goal=state.get("user_goal", ""),
+                    files_changed=files_changed,
+                    verification_evidence=verification_evidence,
+                    failure_history=failure_history
+                )
+
+                pr_info = PullRequestManager.create_pull_request(
+                    repo=repo_id,
+                    head_branch=current_branch,
+                    base_branch="main",
+                    title=f"ASTRA: {state.get('user_goal', '')[:60]}",
+                    body=pr_desc
+                )
+            except Exception as git_err:
+                logger.warning(f"Git/PR creation in finalize_task: {git_err}")
+
+    final_report["commit"] = commit_info
+    final_report["pull_request"] = pr_info
 
     return {
         "final_result": final_report
