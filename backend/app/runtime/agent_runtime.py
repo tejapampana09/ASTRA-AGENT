@@ -67,8 +67,25 @@ class AgentRuntime:
         from openhands.sdk import LLM
         from pydantic import SecretStr
 
-        selected_model = model or self.settings.LLM_MODEL
-        key = api_key or self.settings.LLM_API_KEY or os.environ.get("LLM_API_KEY", "")
+        selected_model = model or os.environ.get("LLM_MODEL")
+        key = api_key or os.environ.get("LLM_API_KEY")
+
+        # Auto-detect standard provider environment variables and match model prefix
+        if not key:
+            if os.environ.get("GEMINI_API_KEY"):
+                key = os.environ.get("GEMINI_API_KEY")
+                if not selected_model or "claude" in selected_model:
+                    selected_model = "gemini/gemini-2.5-flash"
+            elif os.environ.get("ANTHROPIC_API_KEY"):
+                key = os.environ.get("ANTHROPIC_API_KEY")
+                if not selected_model:
+                    selected_model = "anthropic/claude-sonnet-4-5-20250929"
+            elif os.environ.get("OPENAI_API_KEY"):
+                key = os.environ.get("OPENAI_API_KEY")
+                if not selected_model:
+                    selected_model = "openai/gpt-4o"
+
+        selected_model = selected_model or self.settings.LLM_MODEL
 
         llm_kwargs: Dict[str, Any] = {
             "model": selected_model,
