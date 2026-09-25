@@ -14,50 +14,10 @@ from app.runtime.jobs import JobStatus, PersistentJobManager, persistent_job_man
 from app.runtime.workspace import WorkspaceManager
 
 
-@dataclass
-class TaskEvent:
-    task_id: str
-    event_type: str
-    message: str
-    payload: Dict[str, Any] = field(default_factory=dict)
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+from app.runtime.events import AgentEvent, AgentEventType, CentralEventBus, central_event_bus
 
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "task_id": self.task_id,
-            "event_type": self.event_type,
-            "message": self.message,
-            "payload": self.payload,
-            "timestamp": self.timestamp,
-        }
-
-
-class EventBroker:
-    """Pub/Sub broker for real-time task event streaming over SSE."""
-
-    def __init__(self):
-        self._subscribers: Dict[str, List[asyncio.Queue]] = {}
-
-    def subscribe(self, task_id: str) -> asyncio.Queue:
-        if task_id not in self._subscribers:
-            self._subscribers[task_id] = []
-        q: asyncio.Queue = asyncio.Queue()
-        self._subscribers[task_id].append(q)
-        return q
-
-    def unsubscribe(self, task_id: str, q: asyncio.Queue) -> None:
-        if task_id in self._subscribers and q in self._subscribers[task_id]:
-            self._subscribers[task_id].remove(q)
-            if not self._subscribers[task_id]:
-                del self._subscribers[task_id]
-
-    async def publish(self, event: TaskEvent) -> None:
-        if event.task_id in self._subscribers:
-            for q in list(self._subscribers[event.task_id]):
-                await q.put(event)
-
-
-event_broker = EventBroker()
+TaskEvent = AgentEvent
+event_broker = central_event_bus
 
 
 class TaskLifecycleManager:

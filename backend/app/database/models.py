@@ -150,7 +150,9 @@ class AgentEventRecord(Base):
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     task_id = Column(String, ForeignKey("tasks.id"), nullable=False)
+    sequence_id = Column(Integer, default=1)
     event_type = Column(String, nullable=False)
+    source = Column(String, default="system")
     message = Column(Text, nullable=False)
     payload = Column(JSONType, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)

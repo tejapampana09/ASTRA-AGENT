@@ -42,3 +42,16 @@ async def stream_task_events(task_id: str, request: Request):
             event_broker.unsubscribe(task_id, queue)
 
     return EventSourceResponse(event_generator())
+
+
+@router.get("/history/{task_id}")
+async def get_task_event_history(task_id: str, limit: int = 100):
+    """
+    Returns full chronological audit log of canonical agent events for task.
+    """
+    task = task_lifecycle.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    events = event_broker.get_history(task_id, limit=limit)
+    return [e.to_dict() for e in events]
+
