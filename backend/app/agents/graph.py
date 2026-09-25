@@ -66,8 +66,12 @@ def should_continue_or_finalize(
     iteration_count = state.get("iteration_count", 0)
     retry_count = state.get("retry_count", 0)
 
-    if status == "verified":
+    if status in ["verified", "VERIFIED"]:
         logger.info("Verification passed with empirical evidence. Routing to finalize.")
+        return "finalize"
+
+    if status in ["partially_verified", "PARTIALLY_VERIFIED"] and iteration_count >= 2:
+        logger.info("Task partially verified and iteration complete. Routing to finalize.")
         return "finalize"
 
     if iteration_count >= settings.MAX_ITERATIONS:
@@ -82,10 +86,33 @@ def should_continue_or_finalize(
     return "debug"
 
 
+def approval_wait(state: AstraAgentState) -> Dict[str, Any]:
+    """
+    Halts graph execution when an action requires human approval.
+    """
+    task_id = state.get("task_id", "")
+    logger.warning(f"[{task_id}] Execution paused pending human approval.")
+    return {
+        "verification_status": "paused_for_approval",
+        "observations": list(state.get("observations", [])) + [
+            "Workflow paused: Human authorization required before execution."
+        ]
+    }
+
+
+def should_execute_or_pause(state: AstraAgentState) -> Literal["execute", "approval_wait"]:
+    if state.get("approval_required") and state.get("approval_status") == "pending":
+        return "approval_wait"
+    return "execute"
+
+
 def build_astra_graph() -> StateGraph:
     """
-    Builds and compiles the ASTRA 2.0 autonomous engineering workflow graph.
+    Builds and compiles the ASTRA 2.0 autonomous engineering workflow graph
+    with support for human-in-the-loop interruption and memory checkpointing.
     """
+    from langgraph.checkpoint.memory import MemorySaver
+
     workflow = StateGraph(AstraAgentState)
 
     # Register Nodes
@@ -93,6 +120,7 @@ def build_astra_graph() -> StateGraph:
     workflow.add_node("load_repository_context", load_repository_context)
     workflow.add_node("plan", plan_task)
     workflow.add_node("risk_assessment", risk_assessment)
+    workflow.add_node("approval_wait", approval_wait)
     workflow.add_node("execute", execute_step)
     workflow.add_node("observe", observe_step)
     workflow.add_node("verify", verify_solution)
@@ -105,7 +133,18 @@ def build_astra_graph() -> StateGraph:
     workflow.add_edge("understand_task", "load_repository_context")
     workflow.add_edge("load_repository_context", "plan")
     workflow.add_edge("plan", "risk_assessment")
-    workflow.add_edge("risk_assessment", "execute")
+
+    # Human-in-the-loop conditional pause before execution
+    workflow.add_conditional_edges(
+        "risk_assessment",
+        should_execute_or_pause,
+        {
+            "execute": "execute",
+            "approval_wait": "approval_wait",
+        }
+    )
+    workflow.add_edge("approval_wait", END)
+
     workflow.add_edge("execute", "observe")
     workflow.add_edge("observe", "verify")
 
@@ -126,7 +165,8 @@ def build_astra_graph() -> StateGraph:
     # Finalize -> END
     workflow.add_edge("finalize", END)
 
-    return workflow.compile()
+    checkpointer = MemorySaver()
+    return workflow.compile(checkpointer=checkpointer)
 
 
 # Compiled application graph

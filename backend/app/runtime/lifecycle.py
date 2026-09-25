@@ -127,18 +127,29 @@ class TaskLifecycleManager:
         try:
             await event_broker.publish(TaskEvent(task_id=task_id, event_type="PLANNING", message="Initializing task planning."))
 
-            # Execute LangGraph workflow
-            # LangGraph ainvoke runs asynchronously
-            result_state = await astra_graph.ainvoke(initial_state)
+            config = {"configurable": {"thread_id": task_id}}
+            result_state = await astra_graph.ainvoke(initial_state, config=config)
+
+            # Check if execution was halted for human approval
+            if result_state.get("verification_status") == "paused_for_approval":
+                task_info["status"] = "paused_for_approval"
+                await event_broker.publish(
+                    TaskEvent(
+                        task_id=task_id,
+                        event_type="APPROVAL_REQUIRED",
+                        message="Task execution paused: Human authorization required before execution."
+                    )
+                )
+                return
 
             final_report = result_state.get("final_result", {})
-            status = final_report.get("status", "uncertain")
+            status = final_report.get("status", "UNCERTAIN")
 
-            task_info["status"] = "completed" if status == "verified" else "failed"
+            task_info["status"] = "completed" if status in ["VERIFIED", "verified"] else "failed"
             task_info["verification_status"] = status
             task_info["final_report"] = final_report
 
-            event_type = "TASK_COMPLETED" if status == "verified" else "TASK_FAILED"
+            event_type = "TASK_COMPLETED" if status in ["VERIFIED", "verified"] else "TASK_FAILED"
             await event_broker.publish(TaskEvent(task_id=task_id, event_type=event_type, message=f"Task finished with status: {status}", payload=final_report))
 
         except asyncio.CancelledError:
@@ -149,6 +160,43 @@ class TaskLifecycleManager:
             task_info["status"] = "failed"
             task_info["error"] = str(e)
             await event_broker.publish(TaskEvent(task_id=task_id, event_type="ERROR", message=str(e), payload={"error": str(e)}))
+
+    async def resume_task_after_approval(self, task_id: str, approved: bool) -> None:
+        """Resumes a paused LangGraph execution once an approval decision is reached."""
+        task_info = self._tasks.get(task_id)
+        if not task_info:
+            return
+
+        config = {"configurable": {"thread_id": task_id}}
+
+        if not approved:
+            task_info["status"] = "rejected"
+            await event_broker.publish(TaskEvent(task_id=task_id, event_type="TASK_FAILED", message="Operation rejected by reviewer."))
+            return
+
+        task_info["status"] = "running"
+        await event_broker.publish(TaskEvent(task_id=task_id, event_type="APPROVAL_GRANTED", message="Operation authorized. Resuming execution."))
+
+        try:
+            resume_update: AstraAgentState = {
+                "approval_status": "approved",
+                "approval_required": False
+            }
+            result_state = await astra_graph.ainvoke(resume_update, config=config)
+
+            final_report = result_state.get("final_result", {})
+            status = final_report.get("status", "UNCERTAIN")
+
+            task_info["status"] = "completed" if status in ["VERIFIED", "verified"] else "failed"
+            task_info["verification_status"] = status
+            task_info["final_report"] = final_report
+
+            event_type = "TASK_COMPLETED" if status in ["VERIFIED", "verified"] else "TASK_FAILED"
+            await event_broker.publish(TaskEvent(task_id=task_id, event_type=event_type, message=f"Task finished with status: {status}", payload=final_report))
+        except Exception as e:
+            logger.error(f"Error resuming task {task_id}: {e}", exc_info=True)
+            task_info["status"] = "failed"
+            await event_broker.publish(TaskEvent(task_id=task_id, event_type="ERROR", message=str(e)))
 
     def dispatch_task(self, task_id: str) -> None:
         """Schedules background execution without blocking caller."""

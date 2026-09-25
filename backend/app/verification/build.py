@@ -37,19 +37,14 @@ class BuildRunner:
         if python_files:
             cmd = [sys.executable, "-m", "compileall", "-q", "."]
             try:
-                res = subprocess.run(
-                    cmd,
-                    cwd=workspace_path,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout_seconds,
-                    check=False
-                )
-                status = "passed" if res.returncode == 0 else "failed"
+                from app.runtime.sandbox import get_sandbox_runner
+                sandbox = get_sandbox_runner()
+                res = sandbox.run(cmd, cwd=workspace_path, timeout_seconds=timeout_seconds)
+                status = "passed" if res.exit_code == 0 else "failed"
                 return BuildVerificationReport(
                     status=status,
                     command=" ".join(cmd),
-                    exit_code=res.returncode,
+                    exit_code=res.exit_code,
                     stdout=res.stdout,
                     stderr=res.stderr
                 )

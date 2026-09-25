@@ -7,25 +7,60 @@ from app.observability.logging import logger
 
 
 def plan_task(state: AstraAgentState) -> Dict[str, Any]:
-    """Generates an initial or refined execution plan based on goal and context."""
+    """
+    Generates a repository-aware, goal-specific execution plan grounded in
+    the detected architecture, symbols, frameworks, and test runners.
+    """
     goal = state.get("user_goal", "")
     task_id = state.get("task_id", "")
     context = state.get("repository_context", {})
+    summary = context.get("summary", {})
+    files = context.get("files", [])
+    symbols = context.get("symbols", [])
+    test_cmd = summary.get("test_command") or context.get("test_command") or "pytest"
+    backend = summary.get("backend") or "Application"
 
-    logger.info(f"[{task_id}] Generating execution plan for: {goal}")
+    logger.info(f"[{task_id}] Generating repository-aware execution plan for: {goal}")
 
-    # Build logical steps based on task requirements
+    # Identify primary candidate files based on goal keywords
+    target_files = []
+    goal_words = set(goal.lower().split())
+    for f in files:
+        if any(w in f.lower() for w in goal_words if len(w) > 3):
+            target_files.append(f)
+    if not target_files and files:
+        target_files = files[:3]
+
     plan = [
-        {"step": 1, "description": "Inspect repository files and directory structure", "status": "pending"},
-        {"step": 2, "description": f"Implement required changes for: {goal}", "status": "pending"},
-        {"step": 3, "description": "Run tests and verify implementation correctness", "status": "pending"},
-        {"step": 4, "description": "Review git diff and finalize execution report", "status": "pending"},
+        {
+            "step": 1,
+            "description": f"Inspect repository architecture ({backend}, {len(files)} files, {len(symbols)} symbols)",
+            "status": "pending",
+            "targets": target_files[:2]
+        },
+        {
+            "step": 2,
+            "description": f"Implement changes for goal: '{goal}'",
+            "status": "pending",
+            "framework": backend
+        },
+        {
+            "step": 3,
+            "description": f"Execute test verification suite using '{test_cmd}'",
+            "status": "pending",
+            "command": test_cmd
+        },
+        {
+            "step": 4,
+            "description": "Inspect git diff, ensure zero unintended regressions, and compile verified report",
+            "status": "pending"
+        }
     ]
 
     messages = list(state.get("messages", []))
     messages.append({
         "role": "assistant",
-        "content": f"Plan initialized with {len(plan)} steps."
+        "content": f"Repository-aware plan generated: {len(plan)} tailored steps for {backend}."
     })
 
     return {

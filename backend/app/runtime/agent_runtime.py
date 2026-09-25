@@ -198,9 +198,9 @@ class AgentRuntime:
             if not self._cancelled:
                 conversation.run()
 
-            # Record files changed
+            # Record files actually modified
             diff = workspace.get_git_diff()
-            files_changed = workspace.list_files()
+            files_changed = workspace.get_modified_files()
 
             duration = (datetime.now(timezone.utc) - start_time).total_seconds()
             emit("TASK_COMPLETED", "Task execution finished successfully")

@@ -59,17 +59,42 @@ class TestRunner:
 
     @staticmethod
     def detect_test_command(workspace_path: Path) -> Optional[List[str]]:
-        """Detect the appropriate test runner for the workspace."""
-        if (workspace_path / "pytest.ini").exists() or (workspace_path / "pyproject.toml").exists() or list(workspace_path.glob("**/test_*.py")):
+        """
+        Detect the appropriate test runner for the workspace.
+        Ensures test commands are only returned when real tests or explicit configurations exist.
+        """
+        # 1. Search for actual Python test files
+        python_test_files = []
+        for p in workspace_path.rglob("*"):
+            if any(part in {".git", "__pycache__", "node_modules", ".venv"} for part in p.parts):
+                continue
+            if p.is_file() and (p.name.startswith("test_") or p.name.endswith("_test.py")):
+                python_test_files.append(p)
+
+        has_explicit_pytest_cfg = (workspace_path / "pytest.ini").exists() or (
+            (workspace_path / "pyproject.toml").exists()
+            and "[tool.pytest" in (workspace_path / "pyproject.toml").read_text(encoding="utf-8", errors="replace")
+        )
+
+        if python_test_files or has_explicit_pytest_cfg:
             return [sys.executable, "-m", "pytest", "-v"]
 
-        if (workspace_path / "package.json").exists():
-            return ["npm", "test"]
+        # 2. Check Node.js package.json with a valid test script
+        pkg_file = workspace_path / "package.json"
+        if pkg_file.exists():
+            try:
+                import json
+                pkg_data = json.loads(pkg_file.read_text(encoding="utf-8"))
+                test_script = pkg_data.get("scripts", {}).get("test", "")
+                if test_script and "no test specified" not in test_script:
+                    return ["npm", "test"]
+            except Exception:
+                pass
 
-        if (workspace_path / "Cargo.toml").exists():
+        if (workspace_path / "Cargo.toml").exists() and list(workspace_path.glob("tests/*.rs")):
             return ["cargo", "test"]
 
-        if (workspace_path / "go.mod").exists():
+        if (workspace_path / "go.mod").exists() and list(workspace_path.glob("**/*_test.go")):
             return ["go", "test", "./..."]
 
         return None
@@ -89,33 +114,24 @@ class TestRunner:
             )
 
         cmd_str = " ".join(cmd)
-        logger.info(f"Running verification tests in {workspace_path}: {cmd_str}")
+        logger.info(f"Running verification tests in {workspace_path} via sandbox: {cmd_str}")
 
         try:
-            res = subprocess.run(
-                cmd,
-                cwd=workspace_path,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-                check=False
-            )
+            from app.runtime.sandbox import get_sandbox_runner
+            sandbox = get_sandbox_runner()
+            res = sandbox.run(cmd, cwd=workspace_path, timeout_seconds=timeout_seconds)
 
-            stdout = res.stdout
-            stderr = res.stderr
-            exit_code = res.returncode
+            if res.timeout_exceeded:
+                return TestVerificationReport(
+                    status="error",
+                    command=cmd_str,
+                    exit_code=-1,
+                    stderr=f"Test execution timed out after {timeout_seconds} seconds"
+                )
 
-            report = cls._parse_pytest_output(stdout, stderr, exit_code, cmd_str)
+            report = cls._parse_pytest_output(res.stdout, res.stderr, res.exit_code, cmd_str)
             return report
 
-        except subprocess.TimeoutExpired:
-            logger.error(f"Test execution timed out after {timeout_seconds}s")
-            return TestVerificationReport(
-                status="error",
-                command=cmd_str,
-                exit_code=-1,
-                stderr=f"Test execution timed out after {timeout_seconds} seconds"
-            )
         except Exception as e:
             logger.error(f"Failed to execute tests: {e}")
             return TestVerificationReport(

@@ -57,6 +57,32 @@ class IsolatedWorkspace:
         except Exception:
             return False
 
+    def get_modified_files(self) -> List[str]:
+        """Return list of files that have actually been created, modified, or deleted."""
+        if not self.is_git_repo:
+            return []
+        try:
+            res = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=self.path,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            files = []
+            for line in res.stdout.strip().splitlines():
+                if not line.strip():
+                    continue
+                file_part = line[3:].strip()
+                if " -> " in file_part:
+                    file_part = file_part.split(" -> ")[1].strip()
+                file_part = file_part.strip('"\'')
+                files.append(file_part.replace("\\", "/"))
+            return sorted(files)
+        except Exception as e:
+            logger.warning(f"Failed to get modified files from git: {e}")
+            return []
+
     def get_git_diff(self) -> str:
         """Return git diff of changes within the workspace."""
         if not self.is_git_repo:

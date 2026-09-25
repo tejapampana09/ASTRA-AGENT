@@ -42,15 +42,23 @@ def verify_solution(state: AstraAgentState) -> Dict[str, Any]:
     # 4. Inspect Diff
     diff_report = DiffEngine.inspect_diff(ws_path)
 
-    # Determine status based on empirical evidence
+    # Determine verification tier based on empirical evidence
     status = "failed"
-    if test_report.status == "passed" and test_report.passed > 0 and build_report.status != "failed":
+    has_test_evidence = test_report.status == "passed" and test_report.passed > 0 and test_report.failed == 0 and test_report.errors == 0
+    build_clean = build_report.status in ["passed", "skipped"]
+    has_diff_evidence = diff_report.files_changed_count > 0 or diff_report.total_added > 0
+
+    if has_test_evidence and build_clean and has_diff_evidence:
         status = "verified"
+    elif build_report.status == "passed" and has_diff_evidence and test_report.status == "no_tests_found":
+        # Build passed and files changed, but no unit test evidence exists to prove behavior
+        status = "partially_verified"
     elif test_report.status == "no_tests_found":
-        # If no tests exist, cannot establish verified correctness -> UNCERTAIN
         status = "uncertain"
-    elif test_report.failed > 0 or test_report.status == "failed" or build_report.status == "failed":
+    elif test_report.failed > 0 or test_report.errors > 0 or test_report.status == "failed" or build_report.status == "failed":
         status = "failed"
+    else:
+        status = "uncertain"
 
     verification_evidence = {
         "status": status,

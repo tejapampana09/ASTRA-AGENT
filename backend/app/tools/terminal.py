@@ -49,16 +49,9 @@ class RunCommandTool(AstraTool):
         env["CI"] = "true"
 
         try:
-            res = subprocess.run(
-                cmd_str,
-                shell=True,
-                cwd=workspace_path,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env=env,
-                check=False
-            )
+            from app.runtime.sandbox import get_sandbox_runner
+            sandbox = get_sandbox_runner()
+            res = sandbox.run(cmd_str, cwd=workspace_path, timeout_seconds=timeout)
 
             # Enforce output size limits (e.g. 100 KB max)
             max_chars = 100_000
@@ -68,11 +61,11 @@ class RunCommandTool(AstraTool):
             combined = f"STDOUT:\n{stdout_truncated}\nSTDERR:\n{stderr_truncated}" if res.stderr else stdout_truncated
 
             return ToolExecutionResult(
-                success=(res.returncode == 0),
+                success=(res.exit_code == 0),
                 output=combined,
-                exit_code=res.returncode,
-                error=res.stderr if res.returncode != 0 else None,
-                metadata={"exit_code": res.returncode}
+                exit_code=res.exit_code,
+                error=res.stderr if res.exit_code != 0 else None,
+                metadata={"exit_code": res.exit_code, "sandboxed": res.is_sandboxed}
             )
 
         except subprocess.TimeoutExpired:

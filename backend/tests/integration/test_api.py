@@ -54,6 +54,36 @@ def test_scan_repository_api():
 
 
 def test_approvals_api():
+    from app.api.dependencies import get_approval_manager
+
+    mgr = get_approval_manager()
+    ticket = mgr.create_request("task-test-approval", "execute_terminal_command", {"command": "git push origin main"})
+
+    # 1. List approvals
     res = client.get("/api/approvals")
     assert res.status_code == 200
-    assert isinstance(res.json(), list)
+    tickets = res.json()
+    assert any(t["id"] == ticket.id for t in tickets)
+
+    # 2. Filter by task_id
+    res_task = client.get("/api/approvals?task_id=task-test-approval")
+    assert res_task.status_code == 200
+    assert len(res_task.json()) >= 1
+
+    # 3. Approve ticket
+    approve_res = client.post(f"/api/approvals/{ticket.id}/approve", json={"comment": "Looks good, proceed"})
+    assert approve_res.status_code == 200
+    assert approve_res.json()["status"] == "approved"
+    assert mgr.get_ticket(ticket.id).status == "approved"
+
+    # 4. Create another ticket and reject
+    ticket2 = mgr.create_request("task-test-approval-2", "execute_terminal_command", {"command": "rm -rf /tmp/test"})
+    reject_res = client.post(f"/api/approvals/{ticket2.id}/reject", json={"comment": "Command denied"})
+    assert reject_res.status_code == 200
+    assert reject_res.json()["status"] == "rejected"
+    assert mgr.get_ticket(ticket2.id).status == "rejected"
+
+    # 5. Non-existent ticket returns 404
+    missing_res = client.post("/api/approvals/non-existent-id/approve", json={})
+    assert missing_res.status_code == 404
+

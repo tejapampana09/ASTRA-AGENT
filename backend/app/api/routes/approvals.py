@@ -4,7 +4,8 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.api.dependencies import get_approval_manager
+from app.api.dependencies import get_approval_manager, get_task_lifecycle
+from app.runtime.lifecycle import TaskLifecycleManager
 from app.safety.approvals import ApprovalManager, ApprovalTicket
 
 router = APIRouter(prefix="/approvals", tags=["approvals"])
@@ -38,11 +39,14 @@ async def list_pending_approvals(
 async def approve_ticket(
     ticket_id: str,
     req: ApprovalActionRequest,
-    mgr: ApprovalManager = Depends(get_approval_manager)
+    mgr: ApprovalManager = Depends(get_approval_manager),
+    lifecycle: TaskLifecycleManager = Depends(get_task_lifecycle)
 ):
     try:
         ticket = mgr.approve(ticket_id, comment=req.comment)
-        return {"status": "approved", "ticket_id": ticket.id}
+        import asyncio
+        asyncio.create_task(lifecycle.resume_task_after_approval(ticket.task_id, approved=True))
+        return {"status": "approved", "ticket_id": ticket.id, "resumed": True}
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
 
@@ -51,10 +55,13 @@ async def approve_ticket(
 async def reject_ticket(
     ticket_id: str,
     req: ApprovalActionRequest,
-    mgr: ApprovalManager = Depends(get_approval_manager)
+    mgr: ApprovalManager = Depends(get_approval_manager),
+    lifecycle: TaskLifecycleManager = Depends(get_task_lifecycle)
 ):
     try:
         ticket = mgr.reject(ticket_id, reason=req.comment)
+        import asyncio
+        asyncio.create_task(lifecycle.resume_task_after_approval(ticket.task_id, approved=False))
         return {"status": "rejected", "ticket_id": ticket.id}
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
