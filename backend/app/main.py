@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.approvals import router as approvals_router
+from app.api.routes.benchmarks import router as benchmarks_router
 from app.api.routes.events import router as events_router
 from app.api.routes.metrics import router as metrics_router
 from app.api.routes.repositories import router as repositories_router
@@ -42,6 +43,7 @@ app.include_router(repositories_router, prefix="/api")
 app.include_router(approvals_router, prefix="/api")
 app.include_router(events_router, prefix="/api")
 app.include_router(metrics_router, prefix="/api")
+app.include_router(benchmarks_router, prefix="/api")
 
 
 @app.get("/health", tags=["system"])
