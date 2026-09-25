@@ -7,6 +7,7 @@ import httpx
 
 from app.config import settings
 from app.observability.logging import logger
+from app.safety.policies import SecurityPolicies
 
 
 def _run_git(workspace_path: Path, args: List[str]) -> subprocess.CompletedProcess:
@@ -111,7 +112,8 @@ class PullRequestManager:
             f"*Generated autonomously by ASTRA 2.0 Engineering System for task `{task_id}`.*"
         ])
 
-        return "\n".join(sections)
+        desc = "\n".join(sections)
+        return SecurityPolicies.sanitize_secrets(desc)
 
     @classmethod
     def analyze_pr_diff(cls, workspace_path: Path, base_ref: str = "main") -> Dict[str, Any]:
@@ -179,10 +181,10 @@ class PullRequestManager:
         url = f"{base_url}/repos/{repo}/pulls"
 
         payload = {
-            "title": title,
+            "title": SecurityPolicies.sanitize_secrets(title),
             "head": head_branch,
             "base": base_branch,
-            "body": body,
+            "body": SecurityPolicies.sanitize_secrets(body),
             "draft": False,
         }
 

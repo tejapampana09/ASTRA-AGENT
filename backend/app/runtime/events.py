@@ -104,15 +104,20 @@ class CentralEventBus:
         Emits a canonical AgentEvent with auto-generated monotonic sequence ID.
         Distributes to active subscribers and persists to SQL database.
         """
+        from app.safety.policies import SecurityPolicies
+
         seq_id = self._next_sequence_id(task_id)
         type_str = event_type.value if isinstance(event_type, Enum) else str(event_type)
+
+        clean_message = SecurityPolicies.sanitize_secrets(message)
+        clean_payload = SecurityPolicies.sanitize_payload(payload or {})
 
         event = AgentEvent(
             task_id=task_id,
             sequence_id=seq_id,
             event_type=type_str,
-            message=message,
-            payload=payload or {},
+            message=clean_message,
+            payload=clean_payload,
             source=source,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
@@ -134,19 +139,21 @@ class CentralEventBus:
                         sequence_id=seq_id,
                         event_type=type_str,
                         source=source,
-                        message=message,
-                        payload=payload or {},
+                        message=clean_message,
+                        payload=clean_payload,
                     )
                     session.add(rec)
                     session.commit()
             except Exception as e:
                 logger.debug(f"Failed to persist AgentEventRecord: {e}")
 
-        logger.info(f"[{task_id}][#{seq_id}][{type_str}][{source}] {message}")
+        logger.info(f"[{task_id}][#{seq_id}][{type_str}][{source}] {clean_message}")
         return event
 
     async def publish(self, event: Any) -> None:
         """Compatibility adapter for legacy TaskEvent objects."""
+        from app.safety.policies import SecurityPolicies
+
         if hasattr(event, "sequence_id"):
             seq_id = event.sequence_id
             type_str = str(event.event_type)
@@ -160,12 +167,15 @@ class CentralEventBus:
             payload = getattr(event, "payload", {})
             source = getattr(event, "source", "system")
 
+        clean_msg = SecurityPolicies.sanitize_secrets(msg)
+        clean_payload = SecurityPolicies.sanitize_payload(payload)
+
         canonical_event = AgentEvent(
             task_id=event.task_id,
             sequence_id=seq_id,
             event_type=type_str,
-            message=msg,
-            payload=payload,
+            message=clean_msg,
+            payload=clean_payload,
             source=source,
             timestamp=getattr(event, "timestamp", datetime.now(timezone.utc).isoformat()),
         )
