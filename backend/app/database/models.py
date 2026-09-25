@@ -3,10 +3,13 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base, relationship
 
+from app.config import settings
+
+JSONType = JSON().with_variant(JSONB(), "postgresql")
 Base = declarative_base()
 
 
@@ -33,7 +36,7 @@ class RepositoryRecord(Base):
     name = Column(String, nullable=False)
     url_or_path = Column(String, nullable=False)
     default_branch = Column(String, default="main")
-    architecture_summary = Column(JSONB, nullable=True)
+    architecture_summary = Column(JSONType, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
 
     project = relationship("ProjectRecord", back_populates="repositories")
@@ -53,7 +56,7 @@ class TaskRecord(Base):
     retries = Column(Integer, default=0)
     created_at = Column(DateTime(timezone=True), default=utc_now)
     completed_at = Column(DateTime(timezone=True), nullable=True)
-    final_report = Column(JSONB, nullable=True)
+    final_report = Column(JSONType, nullable=True)
 
     repository = relationship("RepositoryRecord", back_populates="tasks")
     steps = relationship("TaskStepRecord", back_populates="task", cascade="all, delete-orphan")
@@ -84,7 +87,7 @@ class ToolCallRecord(Base):
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     task_id = Column(String, ForeignKey("tasks.id"), nullable=False)
     tool_name = Column(String, nullable=False)
-    arguments = Column(JSONB, nullable=True)
+    arguments = Column(JSONType, nullable=True)
     result = Column(Text, nullable=True)
     error = Column(Text, nullable=True)
     duration_ms = Column(Float, default=0.0)
@@ -128,7 +131,7 @@ class ApprovalRecord(Base):
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     task_id = Column(String, ForeignKey("tasks.id"), nullable=False)
     tool_name = Column(String, nullable=False)
-    arguments = Column(JSONB, nullable=True)
+    arguments = Column(JSONType, nullable=True)
     risk_level = Column(String, nullable=False)
     status = Column(String, default="pending")  # pending, approved, rejected
     reviewer_comment = Column(Text, nullable=True)
@@ -145,7 +148,7 @@ class AgentEventRecord(Base):
     task_id = Column(String, ForeignKey("tasks.id"), nullable=False)
     event_type = Column(String, nullable=False)
     message = Column(Text, nullable=False)
-    payload = Column(JSONB, nullable=True)
+    payload = Column(JSONType, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
 
     task = relationship("TaskRecord", back_populates="events")
@@ -157,9 +160,13 @@ class MemoryEntryRecord(Base):
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     repository_id = Column(String, nullable=True)
     key = Column(String, nullable=False)
-    value = Column(JSONB, nullable=False)
+    value = Column(JSONType, nullable=False)
     category = Column(String, default="architecture")  # architecture, convention, issue, past_run
     created_at = Column(DateTime(timezone=True), default=utc_now)
+
+
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import Index
 
 
 class CodeChunkRecord(Base):
@@ -175,9 +182,19 @@ class CodeChunkRecord(Base):
     commit_sha = Column(String, nullable=True)
     start_line = Column(Integer, default=1)
     end_line = Column(Integer, default=1)
-    metadata_json = Column(JSONB, nullable=True)
-    embedding = Column(JSONB, nullable=True)
+    metadata_json = Column(JSONType, nullable=True)
+    embedding = Column(Vector(settings.EMBEDDING_DIMENSION), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
+
+    __table_args__ = (
+        Index(
+            "ix_code_chunks_embedding_hnsw",
+            embedding,
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
+
 
 
 class TaskEpisodicMemoryRecord(Base):
@@ -187,10 +204,10 @@ class TaskEpisodicMemoryRecord(Base):
     repo_id = Column(String, index=True, nullable=False)
     task_id = Column(String, index=True, nullable=False)
     goal = Column(Text, nullable=False)
-    modified_files = Column(JSONB, nullable=True)
+    modified_files = Column(JSONType, nullable=True)
     test_status = Column(String, default="verified")
-    discoveries = Column(JSONB, nullable=True)
+    discoveries = Column(JSONType, nullable=True)
     solution_summary = Column(Text, nullable=True)
-    conventions_learned = Column(JSONB, nullable=True)
+    conventions_learned = Column(JSONType, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
 

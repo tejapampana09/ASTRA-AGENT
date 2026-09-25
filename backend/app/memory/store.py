@@ -39,14 +39,22 @@ class TaskEpisodicMemory:
 
 class TaskMemoryStore:
     """
-    Episodic memory store for ASTRA 2.0.
-    Retains cross-task learnings, past failure discoveries, and solution strategies.
-    Ensures that when Task 2 touches code touched in Task 1, prior findings are instantly accessible.
+    Durable episodic memory store for ASTRA 2.0.
+    Persists cross-task learnings, past failure discoveries, and solution strategies
+    to PostgreSQL / database models so memory survives agent restarts and process restarts.
     """
 
     def __init__(self, db_session_factory=None):
-        self._session_factory = db_session_factory
-        # In-memory dictionary: repo_id -> List[TaskEpisodicMemory]
+        if db_session_factory is None:
+            try:
+                from app.database.session import get_sync_session_factory
+                self._session_factory = get_sync_session_factory()
+            except Exception:
+                self._session_factory = None
+        else:
+            self._session_factory = db_session_factory
+
+        # In-memory working cache: repo_id -> List[TaskEpisodicMemory]
         self._memories: Dict[str, List[TaskEpisodicMemory]] = {}
 
     def record_task_experience(
@@ -61,7 +69,7 @@ class TaskMemoryStore:
         solution_summary: str = "",
         conventions_learned: Optional[List[str]] = None,
     ) -> TaskEpisodicMemory:
-        """Stores a task's full episodic memory."""
+        """Stores a task's full episodic memory to the database and working memory."""
         mem = TaskEpisodicMemory(
             task_id=task_id,
             repo_id=repo_id,
@@ -78,7 +86,7 @@ class TaskMemoryStore:
             self._memories[repo_id] = []
         self._memories[repo_id].append(mem)
 
-        # Persist to database if session factory is available
+        # Durable database persistence across restarts
         if self._session_factory:
             try:
                 from app.database.models import TaskEpisodicMemoryRecord
@@ -99,7 +107,7 @@ class TaskMemoryStore:
             except Exception as e:
                 logger.warning(f"Could not persist episodic memory to database: {e}")
 
-        logger.info(f"Recorded task memory for task {task_id} in repo {repo_id}: {len(discoveries or [])} discoveries, {len(files_modified)} files.")
+        logger.info(f"Recorded durable task memory for task {task_id} in repo {repo_id}: {len(discoveries or [])} discoveries, {len(files_modified)} files.")
         return mem
 
     def retrieve_relevant_task_memories(
@@ -111,12 +119,30 @@ class TaskMemoryStore:
     ) -> List[TaskEpisodicMemory]:
         """
         Retrieves prior task memories relevant to the current task.
-        Scores relevance based on:
-        1. Overlapping files modified (highest weight)
-        2. Keyword overlap in task goals
-        3. Related failure discoveries
+        Queries the persistent database first, ensuring cross-process restart safety.
+        Scores relevance based on file overlap, goal keyword overlap, and failure discoveries.
         """
-        repo_memories = self._memories.get(repo_id, [])
+        repo_memories = list(self._memories.get(repo_id, []))
+
+        # Query database to restore memories across restarts
+        if self._session_factory:
+            try:
+                from app.database.models import TaskEpisodicMemoryRecord
+                from sqlalchemy import select
+                with self._session_factory() as session:
+                    db_records = session.execute(
+                        select(TaskEpisodicMemoryRecord).filter_by(repo_id=repo_id)
+                    ).scalars().all()
+
+                    existing_ids = {m.task_id for m in repo_memories}
+                    for rec in db_records:
+                        if rec.task_id not in existing_ids:
+                            mem_obj = self._record_to_memory(rec)
+                            repo_memories.append(mem_obj)
+                            existing_ids.add(rec.task_id)
+            except Exception as e:
+                logger.debug(f"Episodic memory DB query fallback: {e}")
+
         if not repo_memories:
             return []
 
@@ -154,6 +180,21 @@ class TaskMemoryStore:
         scored_memories.sort(key=lambda x: x[1], reverse=True)
         return [m for m, _ in scored_memories[:top_k]]
 
+    @staticmethod
+    def _record_to_memory(rec) -> TaskEpisodicMemory:
+        return TaskEpisodicMemory(
+            task_id=rec.task_id,
+            repo_id=rec.repo_id,
+            goal=rec.goal,
+            files_modified=rec.modified_files or [],
+            test_status=rec.test_status or "verified",
+            failure_history=[],
+            discoveries=rec.discoveries or [],
+            solution_summary=rec.solution_summary or "",
+            conventions_learned=rec.conventions_learned or [],
+            timestamp=rec.created_at.isoformat() if rec.created_at else ""
+        )
+
     def format_memory_for_agent_prompt(self, memories: List[TaskEpisodicMemory]) -> str:
         """Formats retrieved memories into an actionable prompt section for the planner and agent."""
         if not memories:
@@ -177,5 +218,21 @@ class TaskMemoryStore:
         return "\n".join(lines)
 
 
-# Global singleton task memory store
-task_memory_store = TaskMemoryStore()
+# Global singleton task memory store with database session factory auto-wired
+_task_memory_store: Optional[TaskMemoryStore] = None
+
+
+def get_task_memory_store() -> TaskMemoryStore:
+    global _task_memory_store
+    if _task_memory_store is None:
+        _task_memory_store = TaskMemoryStore()
+    return _task_memory_store
+
+
+def set_task_memory_store(store: TaskMemoryStore) -> None:
+    global _task_memory_store
+    _task_memory_store = store
+
+
+# Backward compatibility instance
+task_memory_store = get_task_memory_store()

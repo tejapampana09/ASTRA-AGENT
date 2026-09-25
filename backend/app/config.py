@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     DATABASE_URL_SYNC: str = "postgresql://postgres:postgrespassword@localhost:5432/astra_db"
     REDIS_URL: str = "redis://localhost:6379/0"
 
+    # Embedding & Vector RAG Settings
+    EMBEDDING_MODEL: str = "text-embedding-3-small"
+    EMBEDDING_DIMENSION: int = 1536
+    VECTOR_INDEX_TYPE: str = "hnsw"  # hnsw or ivfflat
+
+
     # LLM Settings
     LLM_PROVIDER: str = "litellm"
     LLM_MODEL: str = "anthropic/claude-sonnet-4-5-20250929"

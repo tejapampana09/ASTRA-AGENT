@@ -52,7 +52,7 @@ def finalize_task(state: AstraAgentState) -> Dict[str, Any]:
 
     # Record task experience into episodic memory
     try:
-        from app.memory.store import task_memory_store
+        from app.memory.store import get_task_memory_store
         from app.rag.incremental import IncrementalIndexer
 
         repo_id = state.get("repository_id") or task_id or "default_repo"
@@ -64,7 +64,8 @@ def finalize_task(state: AstraAgentState) -> Dict[str, Any]:
 
         solution = f"Modified {len(files_changed)} files: {', '.join(files_changed)}" if files_changed else "No file changes required"
 
-        task_memory_store.record_task_experience(
+        mem_store = get_task_memory_store()
+        mem_store.record_task_experience(
             task_id=task_id,
             repo_id=repo_id,
             goal=state.get("user_goal", ""),

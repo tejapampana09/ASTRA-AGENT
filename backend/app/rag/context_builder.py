@@ -42,12 +42,14 @@ class ContextBuilder:
         )
 
         # 3. Retrieve relevant past task memory
-        relevant_memories = task_memory_store.retrieve_relevant_task_memories(
+        from app.memory.store import get_task_memory_store
+        mem_store = get_task_memory_store()
+        relevant_memories = mem_store.retrieve_relevant_task_memories(
             repo_id=repo_id,
             current_goal=task_goal,
             candidate_files=candidate_files or [c.file_path for c in retrieval.chunks]
         )
-        memory_prompt_section = task_memory_store.format_memory_for_agent_prompt(relevant_memories)
+        memory_prompt_section = mem_store.format_memory_for_agent_prompt(relevant_memories)
 
         # 4. Format architectural call chain
         chain_info = None
