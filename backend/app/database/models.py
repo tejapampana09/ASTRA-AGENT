@@ -211,3 +211,15 @@ class TaskEpisodicMemoryRecord(Base):
     conventions_learned = Column(JSONType, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
 
+
+class EngineeringDecisionRecord(Base):
+    __tablename__ = "engineering_decisions"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    repo_id = Column(String, index=True, nullable=False)
+    category = Column(String, index=True, nullable=False)  # architecture, problematic_module, proven_fix, convention, rule
+    subject = Column(String, nullable=False)  # e.g. "auth/jwt.py" or "FastAPI Pydantic v2"
+    decision = Column(Text, nullable=False)  # detailed explanation or rule
+    evidence = Column(JSONType, nullable=True)  # rationale, related tasks, code patterns
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+
