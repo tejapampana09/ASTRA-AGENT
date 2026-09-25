@@ -57,6 +57,32 @@ class TaskMemoryStore:
         # In-memory working cache: repo_id -> List[TaskEpisodicMemory]
         self._memories: Dict[str, List[TaskEpisodicMemory]] = {}
 
+    @property
+    def _in_memory_cache(self) -> Dict[str, List[TaskEpisodicMemory]]:
+        return self._memories
+
+    def get_task_memory(self, task_id: str) -> Optional[TaskEpisodicMemory]:
+        """Finds memory for a specific task_id from cache or database."""
+        for repo_id, mem_list in self._memories.items():
+            for mem in mem_list:
+                if mem.task_id == task_id:
+                    return mem
+
+        if self._session_factory:
+            try:
+                from app.database.models import TaskEpisodicMemoryRecord
+                from sqlalchemy import select
+                with self._session_factory() as session:
+                    rec = session.execute(
+                        select(TaskEpisodicMemoryRecord).filter_by(task_id=task_id)
+                    ).scalars().first()
+                    if rec:
+                        return self._record_to_memory(rec)
+            except Exception as e:
+                logger.debug(f"get_task_memory DB query fallback: {e}")
+
+        return None
+
     def record_task_experience(
         self,
         task_id: str,
