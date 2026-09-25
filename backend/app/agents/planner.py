@@ -22,40 +22,69 @@ def plan_task(state: AstraAgentState) -> Dict[str, Any]:
 
     logger.info(f"[{task_id}] Generating repository-aware execution plan for: {goal}")
 
-    # Identify primary candidate files based on goal keywords
+    # Identify primary candidate files based on goal keywords, flow chain, and past memories
     target_files = []
     goal_words = set(goal.lower().split())
+    flow_chain = context.get("flow_chain")
+    past_memories = context.get("past_memories", [])
+
     for f in files:
         if any(w in f.lower() for w in goal_words if len(w) > 3):
             target_files.append(f)
+
+    # Add files from past related tasks if present
+    for mem in past_memories:
+        for mf in mem.get("files_modified", []):
+            if mf not in target_files and mf in files:
+                target_files.append(mf)
+
     if not target_files and files:
         target_files = files[:3]
 
-    plan = [
+    plan_steps = [
         {
             "step": 1,
-            "description": f"Inspect repository architecture ({backend}, {len(files)} files, {len(symbols)} symbols)",
+            "description": f"Inspect repository architecture ({backend}, {len(files)} files, {len(symbols)} symbols)" + (f" and trace flow: {flow_chain['summary']}" if flow_chain and flow_chain.get("summary") else ""),
             "status": "pending",
-            "targets": target_files[:2]
-        },
-        {
+            "targets": target_files[:3],
+            "flow_chain": flow_chain.get("summary") if flow_chain else None
+        }
+    ]
+
+    # If prior experience exists, add memory reflection step
+    if past_memories:
+        top_mem = past_memories[0]
+        discoveries_text = "; ".join(top_mem.get("discoveries", []))[:150]
+        plan_steps.append({
             "step": 2,
+            "description": f"Apply prior task memory from {top_mem.get('task_id')}: {discoveries_text or 'utilize past solution patterns'}",
+            "status": "pending",
+            "past_task_id": top_mem.get("task_id")
+        })
+
+    next_step_num = len(plan_steps) + 1
+    plan_steps.extend([
+        {
+            "step": next_step_num,
             "description": f"Implement changes for goal: '{goal}'",
             "status": "pending",
             "framework": backend
         },
         {
-            "step": 3,
+            "step": next_step_num + 1,
             "description": f"Execute test verification suite using '{test_cmd}'",
             "status": "pending",
             "command": test_cmd
         },
         {
-            "step": 4,
+            "step": next_step_num + 2,
             "description": "Inspect git diff, ensure zero unintended regressions, and compile verified report",
             "status": "pending"
         }
-    ]
+    ])
+
+    plan = plan_steps
+
 
     messages = list(state.get("messages", []))
     messages.append({

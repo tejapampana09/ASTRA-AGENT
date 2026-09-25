@@ -50,6 +50,41 @@ def finalize_task(state: AstraAgentState) -> Dict[str, Any]:
 
     logger.info(f"[{task_id}] Final report generated with status: {verification_status}")
 
+    # Record task experience into episodic memory
+    try:
+        from app.memory.store import task_memory_store
+        from app.rag.incremental import IncrementalIndexer
+
+        repo_id = state.get("repository_id") or task_id or "default_repo"
+        failures = list(state.get("failure_history", []))
+        discoveries = []
+        for f in failures:
+            if isinstance(f, dict) and f.get("error"):
+                discoveries.append(f"Observed failure: {f['error'][:200]}")
+
+        solution = f"Modified {len(files_changed)} files: {', '.join(files_changed)}" if files_changed else "No file changes required"
+
+        task_memory_store.record_task_experience(
+            task_id=task_id,
+            repo_id=repo_id,
+            goal=state.get("user_goal", ""),
+            files_modified=files_changed,
+            test_status=verification_status,
+            failure_history=failures,
+            discoveries=discoveries,
+            solution_summary=solution
+        )
+
+        # Incrementally update vector index for modified files
+        workspace_path = state.get("workspace_path")
+        if workspace_path and files_changed:
+            ws_p = Path(workspace_path)
+            if ws_p.exists():
+                indexer = IncrementalIndexer()
+                indexer.index_changes(ws_p, repo_id=repo_id, explicit_changed_files=files_changed)
+    except Exception as mem_err:
+        logger.warning(f"Error persisting task memory or incremental index: {mem_err}")
+
     return {
         "final_result": final_report
     }

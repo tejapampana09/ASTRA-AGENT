@@ -160,3 +160,37 @@ class MemoryEntryRecord(Base):
     value = Column(JSONB, nullable=False)
     category = Column(String, default="architecture")  # architecture, convention, issue, past_run
     created_at = Column(DateTime(timezone=True), default=utc_now)
+
+
+class CodeChunkRecord(Base):
+    __tablename__ = "code_chunks"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    repo_id = Column(String, index=True, nullable=False)
+    file_path = Column(String, index=True, nullable=False)
+    symbol = Column(String, nullable=True)
+    chunk_type = Column(String, index=True, nullable=False)  # file_header, class, function, api_route, db_model, test, config, documentation
+    language = Column(String, default="python")
+    content = Column(Text, nullable=False)
+    commit_sha = Column(String, nullable=True)
+    start_line = Column(Integer, default=1)
+    end_line = Column(Integer, default=1)
+    metadata_json = Column(JSONB, nullable=True)
+    embedding = Column(JSONB, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+
+
+class TaskEpisodicMemoryRecord(Base):
+    __tablename__ = "task_episodic_memories"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    repo_id = Column(String, index=True, nullable=False)
+    task_id = Column(String, index=True, nullable=False)
+    goal = Column(Text, nullable=False)
+    modified_files = Column(JSONB, nullable=True)
+    test_status = Column(String, default="verified")
+    discoveries = Column(JSONB, nullable=True)
+    solution_summary = Column(Text, nullable=True)
+    conventions_learned = Column(JSONB, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+

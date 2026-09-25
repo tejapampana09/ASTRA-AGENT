@@ -116,6 +116,32 @@ class RepositoryScanner:
             summary.backend = "Flask"
         elif "express" in dep_str:
             summary.backend = "Express"
+        else:
+            # Fallback: scan python files for framework imports
+            for py_f in repo_path.rglob("*.py"):
+                if any(part in {".git", "__pycache__", "node_modules", ".venv"} for part in py_f.parts):
+                    continue
+                try:
+                    head = py_f.read_text(encoding="utf-8", errors="ignore")[:1000].lower()
+                    if "fastapi" in head:
+                        summary.backend = "FastAPI"
+                        languages.add("Python")
+                        break
+                    elif "flask" in head:
+                        summary.backend = "Flask"
+                        languages.add("Python")
+                        break
+                    elif "django" in head:
+                        summary.backend = "Django"
+                        languages.add("Python")
+                        break
+                except Exception:
+                    pass
+
+        # Detect Python language if python files exist
+        if any(repo_path.rglob("*.py")):
+            languages.add("Python")
+        summary.languages = sorted(list(languages))
 
         # 4. Detect Database
         if "postgres" in dep_str or "psycopg" in dep_str or "asyncpg" in dep_str:

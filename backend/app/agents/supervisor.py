@@ -84,9 +84,40 @@ def load_repository_context(state: AstraAgentState) -> Dict[str, Any]:
                     all_files.append(rel)
             repo_context["files"] = all_files[:100]
 
+            # 5. Semantic Repository RAG & Architectural Call-Chain Context
+            try:
+                from app.rag.context_builder import context_builder
+                from app.rag.embeddings import EmbeddingClient
+                from app.rag.indexer import RepositorySemanticIndexer
+                from app.rag.vector_store import get_vector_store
+
+                repo_id = state.get("repository_id") or task_id or "default_repo"
+                v_store = get_vector_store()
+                emb_client = EmbeddingClient()
+
+                # Index repository if not already indexed
+                chunks = RepositorySemanticIndexer.index_repository(ws_path, repo_id=repo_id)
+                for chunk in chunks:
+                    chunk.embedding = emb_client.get_embedding_sync(chunk.content)
+                v_store.upsert_chunks(chunks)
+
+                # Synthesize context, code flow chain, and retrieve prior memories
+                rag_context = context_builder.build_context(
+                    repo_path=ws_path,
+                    repo_id=repo_id,
+                    task_goal=state.get("user_goal", ""),
+                    candidate_files=all_files
+                )
+                repo_context["rag"] = rag_context
+                repo_context["flow_chain"] = rag_context.get("flow_chain")
+                repo_context["past_memories"] = rag_context.get("past_memories", [])
+            except Exception as rag_err:
+                logger.warning(f"RAG context indexing error: {rag_err}")
+
     logger.info(
         f"[{task_id}] Deep repository context loaded: {len(repo_context.get('files', []))} files, "
-        f"{len(repo_context.get('symbols', []))} symbols, framework={repo_context.get('summary', {}).get('backend')}"
+        f"{len(repo_context.get('symbols', []))} symbols, framework={repo_context.get('summary', {}).get('backend')}, "
+        f"flow_chain={repo_context.get('flow_chain', {}).get('summary') if repo_context.get('flow_chain') else 'None'}"
     )
 
     return {
