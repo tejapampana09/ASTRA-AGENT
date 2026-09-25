@@ -187,6 +187,7 @@ def finalize_task(state: AstraAgentState) -> Dict[str, Any]:
     # Autonomous Git Commit and PR Creation (Phase 4.1)
     workspace_path = state.get("workspace_path")
     commit_info = None
+    push_info = None
     pr_info = None
     if workspace_path and verification_status in ["verified", "VERIFIED"]:
         ws_p = Path(workspace_path)
@@ -205,6 +206,12 @@ def finalize_task(state: AstraAgentState) -> Dict[str, Any]:
                     files_changed=files_changed,
                     verification_status=verification_status,
                     test_summary=test_summary
+                )
+
+                push_info = PullRequestManager.push_branch(
+                    workspace_path=ws_p,
+                    remote="origin",
+                    branch_name=current_branch
                 )
 
                 pr_desc = PullRequestManager.generate_pr_description(
@@ -226,6 +233,7 @@ def finalize_task(state: AstraAgentState) -> Dict[str, Any]:
                 logger.warning(f"Git/PR creation in finalize_task: {git_err}")
 
     final_report["commit"] = commit_info
+    final_report["push"] = push_info
     final_report["pull_request"] = pr_info
 
     return {
