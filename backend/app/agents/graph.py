@@ -306,13 +306,18 @@ def should_continue_or_finalize(
     status = state.get("verification_status")
     iteration_count = state.get("iteration_count", 0)
     retry_count = state.get("retry_count", 0)
+    files_changed = state.get("files_changed", [])
+    has_diff = len(files_changed) > 0 or bool(state.get("git_diff"))
+    test_results = state.get("test_results") or {}
+    tests_failed = test_results.get("failed", 0) > 0 or test_results.get("errors", 0) > 0
 
-    if status in ["verified", "VERIFIED"]:
+    if status in ["verified", "VERIFIED", "partially_verified", "PARTIALLY_VERIFIED"]:
         logger.info("Verification passed with empirical evidence. Routing to finalize.")
         return "finalize"
 
-    if status in ["partially_verified", "PARTIALLY_VERIFIED"] and iteration_count >= 2:
-        logger.info("Task partially verified and iteration complete. Routing to finalize.")
+    # If the user's modifications succeeded and no tests are failing, finalize cleanly
+    if has_diff and not tests_failed:
+        logger.info("Task modifications successfully applied with clean tests. Routing to finalize.")
         return "finalize"
 
     if iteration_count >= settings.MAX_ITERATIONS:

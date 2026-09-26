@@ -367,10 +367,20 @@ class AstraCLI:
                             console.print(f"[bold red]Error:[/bold red] Target path is not a directory: {target_dir}\n")
                             continue
 
-                        # Completely reset repository and session context (Phase 3)
-                        self.repo_path = str(target_dir)
+                        # Completely reset repository and session context
+                        # 1. Clear previous repository RAG context & vector store chunks
+                        try:
+                            from app.rag.vector_store import get_vector_store
+                            vs = get_vector_store()
+                            old_repo_name = Path(self.repo_path).name or "default_repo"
+                            vs.delete_repo_chunks(old_repo_name)
+                            vs.delete_repo_chunks(str(Path(self.repo_path).resolve()))
+                        except Exception as e:
+                            logger.debug(f"Failed to clear old vector chunks: {e}")
 
-                        # Recreate session object to clear all stale context from previous repo
+                        # 2. Update active repository path and recreate session object
+                        self.repo_path = str(target_dir)
+                        new_repo_name = target_dir.name or "default_repo"
                         self.session = self._conversation_manager.create_session(
                             repository_path=self.repo_path,
                             model=self.model,
@@ -378,6 +388,16 @@ class AstraCLI:
                             initial_title=f"Session for {target_dir.name}",
                         )
                         self.session.workspace_path = str(target_dir)
+
+                        # 3. Explicitly build and load fresh repository index for new target
+                        try:
+                            from app.rag.indexer import RepositorySemanticIndexer
+                            from app.rag.vector_store import get_vector_store
+                            vs = get_vector_store()
+                            new_chunks = RepositorySemanticIndexer.index_repository(target_dir, repo_id=new_repo_name)
+                            vs.upsert_chunks(new_chunks)
+                        except Exception as e:
+                            logger.debug(f"Failed to load new repo index: {e}")
 
                         self.print_header()
                     else:

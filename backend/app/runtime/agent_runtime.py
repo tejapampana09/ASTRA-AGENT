@@ -43,6 +43,8 @@ class AstraExecutionResult:
     error: Optional[str] = None
     total_iterations: int = 0
     duration_seconds: float = 0.0
+import re
+
 # OpenHands SDK LiteLLM telemetry compatibility patch for Gemini
 try:
     import openhands.sdk.llm.utils.telemetry as _oh_telemetry
@@ -68,20 +70,117 @@ try:
 except Exception:
     pass
 
-# OpenHands FileEditor automatic path resolution patch for relative paths
+# OpenHands FileEditor automatic path resolution & security containment patch
 try:
-    from openhands.tools.file_editor.editor import FileEditor, is_host_absolute_path
+    from openhands.tools.file_editor.editor import FileEditor, is_host_absolute_path, FileEditorObservation
     _orig_file_editor_call = FileEditor.__call__
 
     def _safe_file_editor_call(self, *, command, path, **kwargs):
         _p = Path(path)
         if not is_host_absolute_path(_p) and self._cwd is not None:
-            path = str((Path(self._cwd) / _p).resolve())
-        return _orig_file_editor_call(self, command=command, path=path, **kwargs)
+            _p = (Path(self._cwd) / _p).resolve()
+        else:
+            _p = _p.resolve()
+
+        active_ws = getattr(AgentRuntime, "_current_active_workspace", None)
+        if active_ws is not None and hasattr(active_ws, "validate_path"):
+            try:
+                active_ws.validate_path(_p)
+            except Exception as e:
+                logger.warning(f"FileEditor path security violation blocked: {_p} outside workspace ({e})")
+                return FileEditorObservation.from_text(
+                    text=f"Security violation: path '{path}' is outside repository root ({e})",
+                    command=command,
+                    path=str(_p),
+                    is_error=True,
+                )
+
+        return _orig_file_editor_call(self, command=command, path=str(_p), **kwargs)
 
     FileEditor.__call__ = _safe_file_editor_call
 except Exception:
     pass
+
+# OpenHands Terminal security containment & policy validation patch
+try:
+    from openhands.tools.terminal import TerminalExecutor, TerminalAction, TerminalObservation
+    from app.safety.policies import SecurityPolicies
+    _orig_terminal_call = TerminalExecutor.__call__
+
+    def _safe_terminal_call(self, action: TerminalAction, conversation=None) -> TerminalObservation:
+        active_ws = getattr(AgentRuntime, "_current_active_workspace", None)
+
+        if not action.is_input and action.command:
+            cmd = action.command.strip()
+
+            # 1. Enforce blocked dangerous commands (e.g. rm -rf /, fork bombs, disk writes)
+            is_allowed, reason = SecurityPolicies.validate_command(cmd)
+            if not is_allowed:
+                logger.warning(f"Terminal command blocked by policy: {cmd} ({reason})")
+                return TerminalObservation.from_text(
+                    f"Command blocked by ASTRA security policy: {reason}",
+                    is_error=True,
+                    command=cmd,
+                    exit_code=1,
+                )
+
+            # 2. Enforce workspace directory containment on commands attempting to escape
+            if active_ws is not None and hasattr(active_ws, "path"):
+                ws_root = Path(active_ws.path).resolve()
+
+                # Check cd attempts that escape root
+                cd_match = re.search(r"\bcd\s+([^;&|]+)", cmd)
+                if cd_match:
+                    target_dir = cd_match.group(1).strip().strip("'\"")
+                    if target_dir in ["..", "../..", "/"] or target_dir.startswith("..") or target_dir.startswith("~"):
+                        logger.warning(f"Terminal cd escape blocked: {target_dir} outside {ws_root}")
+                        return TerminalObservation.from_text(
+                            f"Security violation: directory escape '{target_dir}' outside workspace root '{ws_root}'",
+                            is_error=True,
+                            command=cmd,
+                            exit_code=1,
+                        )
+
+                # Check for explicit external paths (e.g. cat C:\somewhere\outside)
+                for token in cmd.split():
+                    clean_token = token.strip("'\"").strip()
+                    if (
+                        (clean_token.startswith("/") and not clean_token.startswith("/c/"))
+                        or (len(clean_token) >= 3 and clean_token[1:3] in [":\\", ":/"])
+                    ):
+                        try:
+                            p = Path(clean_token).resolve()
+                            p.relative_to(ws_root)
+                        except (ValueError, Exception):
+                            logger.warning(f"Terminal path security violation: {clean_token} outside {ws_root}")
+                            return TerminalObservation.from_text(
+                                f"Security violation: path '{clean_token}' is outside repository root '{ws_root}'",
+                                is_error=True,
+                                command=cmd,
+                                exit_code=1,
+                            )
+
+        # Execute command through OpenHands
+        obs = _orig_terminal_call(self, action, conversation=conversation)
+
+        # 3. Post-execution working directory containment check
+        if active_ws is not None and hasattr(active_ws, "path") and hasattr(self, "session"):
+            ws_root = Path(active_ws.path).resolve()
+            sess_cwd = getattr(self.session, "cwd", None) or getattr(self.session, "_cwd", None)
+            if sess_cwd:
+                try:
+                    Path(sess_cwd).resolve().relative_to(ws_root)
+                except (ValueError, Exception):
+                    logger.warning(f"Terminal working directory escaped to {sess_cwd}. Resetting back to {ws_root}")
+                    if hasattr(self.session, "execute"):
+                        self.session.execute(TerminalAction(command=f'cd "{ws_root}"', is_input=False))
+
+        return obs
+
+    TerminalExecutor.__call__ = _safe_terminal_call
+except Exception as e:
+    pass
+
 
 
 class AgentRuntime:
@@ -319,7 +418,7 @@ class AgentRuntime:
                 except Exception as cb_err:
                     logger.warning(f"Error in on_event callback: {cb_err}")
 
-        emit("TASK_STARTED", f"Initializing agent workspace for task {workspace.task_id}")
+        AgentRuntime._current_active_workspace = workspace
 
         try:
             from openhands.sdk import Agent, Conversation, LocalWorkspace
@@ -361,12 +460,20 @@ class AgentRuntime:
                 workspace_path=str(workspace.path) if workspace else None,
             )
 
+            # Decouple OpenHands Local vs Isolated workspace execution
+            if is_local:
+                oh_workspace = LocalWorkspace(working_dir=workspace.path)
+                delete_workspace_on_close = False
+            else:
+                oh_workspace = LocalWorkspace(working_dir=workspace.path)
+                delete_workspace_on_close = True
+
             conversation = Conversation(
                 agent=agent,
-                workspace=LocalWorkspace(working_dir=workspace.path),
+                workspace=oh_workspace,
                 callbacks=[openhands_event_listener],
                 max_iteration_per_run=max_iterations or self.settings.MAX_ITERATIONS,
-                delete_on_close=False,
+                delete_on_close=delete_workspace_on_close,
                 visualizer=SilentVisualizer(),
             )
 
@@ -413,3 +520,5 @@ class AgentRuntime:
         finally:
             with self._lock:
                 self._active_conversation = None
+            AgentRuntime._current_active_workspace = None
+

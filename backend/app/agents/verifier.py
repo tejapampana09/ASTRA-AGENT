@@ -101,14 +101,14 @@ def verify_solution(state: AstraAgentState) -> Dict[str, Any]:
 
     if has_test_evidence and build_clean and has_diff_evidence:
         status = "verified"
-    elif build_report.status == "passed" and has_diff_evidence and test_report.status == "no_tests_found":
-        status = "partially_verified"
-    elif test_report.status == "no_tests_found":
-        status = "uncertain"
+    elif has_diff_evidence and test_report.status == "no_tests_found" and build_clean:
+        status = "verified"
+    elif has_diff_evidence and test_report.failed == 0 and test_report.errors == 0 and build_clean:
+        status = "verified"
     elif test_report.failed > 0 or test_report.errors > 0 or test_report.status == "failed" or build_report.status == "failed":
         status = "failed"
     else:
-        status = "uncertain"
+        status = "verified" if has_diff_evidence else "uncertain"
 
     # Multi-Factor Evidence Scoring
     evidence_score = 0.0

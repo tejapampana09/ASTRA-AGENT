@@ -170,3 +170,76 @@ def test_verification_detects_failure_and_does_not_fake_success():
         # Must report failed, never fake verified
         assert result["verification_status"] == "failed"
         assert result["test_results"]["failed"] > 0
+
+
+def test_openhands_tool_security_enforces_containment():
+    """Test 5: Verify OpenHands Terminal and FileEditor enforce workspace path security."""
+    from app.runtime.agent_runtime import AgentRuntime
+    from openhands.tools.file_editor.editor import FileEditor
+    from openhands.tools.terminal import TerminalExecutor, TerminalAction
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        repo_dir = Path(tmpdir) / "safe_repo"
+        repo_dir.mkdir()
+        outside_file = Path(tmpdir) / "secret.txt"
+        outside_file.write_text("SUPER_SECRET_HOST_DATA", encoding="utf-8")
+
+        ws = LocalExecutionWorkspace(task_id="t_sec", path=repo_dir)
+        AgentRuntime._current_active_workspace = ws
+
+        try:
+            # 1. FileEditor security containment
+            editor = FileEditor()
+            obs = editor(command="view", path=str(outside_file))
+            assert "Security violation" in obs.text
+
+            # 2. Terminal cd escape containment
+            executor = TerminalExecutor(working_dir=str(repo_dir))
+            cd_action = TerminalAction(command="cd ..", is_input=False)
+            t_obs = executor(cd_action)
+            assert "Security violation" in t_obs.text or "outside workspace" in t_obs.text
+
+            # 3. Terminal path security containment
+            cat_action = TerminalAction(command=f"cat {outside_file}", is_input=False)
+            t_obs2 = executor(cat_action)
+            assert "Security violation" in t_obs2.text or "outside repository" in t_obs2.text
+
+        finally:
+            AgentRuntime._current_active_workspace = None
+            try:
+                if 'executor' in locals():
+                    if hasattr(executor, "close"):
+                        executor.close()
+                    if hasattr(executor, "session") and hasattr(executor.session, "close"):
+                        executor.session.close()
+            except Exception:
+                pass
+
+
+def test_rag_repository_invalidation_on_repo_switch():
+    """Test 6: Verify switching repositories invalidates previous RAG chunks and loads fresh index."""
+    from app.rag.vector_store import get_vector_store
+    from app.rag.indexer import IndexedCodeChunk, ChunkType
+
+    vs = get_vector_store()
+    chunk_a = IndexedCodeChunk(
+        chunk_id="chunk_a_1",
+        repo_id="RepoA",
+        file_path="src/a.py",
+        symbol="func_a",
+        chunk_type=ChunkType.FUNCTION,
+        language="python",
+        content="def func_a(): return 'a'",
+        embedding=[0.1] * 128
+    )
+    vs.upsert_chunks([chunk_a])
+
+    # Chunks for RepoA exist
+    chunks_before = vs.get_all_chunks("RepoA")
+    assert len(chunks_before) == 1
+
+    # Invalidate RepoA
+    vs.delete_repo_chunks("RepoA")
+    chunks_after = vs.get_all_chunks("RepoA")
+    assert len(chunks_after) == 0
+
