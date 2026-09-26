@@ -439,17 +439,18 @@ class AgentRuntime:
             llm = self._configure_llm(model=model, api_key=api_key)
             tools = self._configure_tools()
 
-            is_ollama = "ollama" in str(getattr(llm, "model", "")).lower() or "qwen" in str(getattr(llm, "model", "")).lower()
             agent_kwargs: Dict[str, Any] = {
                 "llm": llm,
                 "tools": tools,
+                "system_prompt": (
+                    "You are ASTRA, a helpful, direct, and practical autonomous software engineer.\n"
+                    "Your primary goal is to fulfill the user's exact request directly and efficiently in this workspace.\n"
+                    "- If asked to create, write, or modify code, HTML, CSS, frontend files, documentation, or scripts: write the files directly using `file_editor` or `terminal` and finish.\n"
+                    "- Do NOT run exploratory commands (like ls -R), do NOT create unrequested test suites, and do NOT touch unrelated files unless explicitly asked.\n"
+                    "- If asked to fix a bug or run tests: inspect the relevant files, fix the bug, and verify.\n"
+                    "- Always take direct action to produce the user's requested deliverable cleanly and concisely."
+                ),
             }
-            if is_ollama:
-                agent_kwargs["system_prompt"] = (
-                    "You are an expert autonomous software engineer. "
-                    "Your task is to inspect, edit, and verify code using the provided tools. "
-                    "Always execute tool actions directly to solve the user's task."
-                )
 
             agent = Agent(**agent_kwargs)
 

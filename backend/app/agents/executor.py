@@ -44,9 +44,9 @@ def execute_step(state: AstraAgentState) -> Dict[str, Any]:
 
     # Build prompt combining goal and failure feedback if replanning
     prompt_lines = [
-        f"Task Goal: {goal}",
+        f"User Request: {goal}",
         "Execute the necessary modifications directly in the workspace.",
-        "IMPORTANT: You are already in the repository root directory. Always use relative paths for all commands and file operations. If the user only asks to write, edit, or create files (such as HTML, CSS, frontend, documentation, or scripts), fulfill their request directly without creating unnecessary test suites unless tests were specifically requested.",
+        "Take direct action to fulfill the request. If the user asks to write, edit, or create files, write them directly using file_editor or terminal and complete the task. Do not run unnecessary commands or create unrequested test suites.",
     ]
 
     failure_history = state.get("failure_history", [])
