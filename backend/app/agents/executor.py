@@ -118,6 +118,7 @@ def execute_step(state: AstraAgentState) -> Dict[str, Any]:
         "observations": observations,
         "errors": errors,
         "files_changed": result.modified_files,
+        "agent_message": result.message or "",
     }
 
 

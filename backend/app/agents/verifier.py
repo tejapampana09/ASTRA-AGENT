@@ -71,6 +71,13 @@ def verify_solution(state: AstraAgentState) -> Dict[str, Any]:
         targeted_report = TestRunner.run_tests(ws_path, custom_command=targeted_cmd)
 
     # 3. Test Suite Verification
+    goal_lower = str(state.get("user_goal", "")).lower()
+    needs_tests = (
+        target_test_file is not None
+        or any(k in goal_lower for k in ["test", "bug", "fix", "verify", "failing", "error", "check", "regression"])
+        or any(f.endswith(".py") for f in updated_files_changed)
+    )
+
     if targeted_report and targeted_report.is_successful and targeted_report.passed > 0:
         logger.info(
             f"[{task_id}] Targeted test {target_test_file} verified successfully "
@@ -80,8 +87,10 @@ def verify_solution(state: AstraAgentState) -> Dict[str, Any]:
     elif targeted_report and not targeted_report.is_successful and targeted_report.status == "failed":
         test_report = targeted_report
         logger.warning(f"[{task_id}] Targeted test {target_test_file} failed; skipping full regression.")
-    else:
+    elif needs_tests:
         test_report = TestRunner.run_tests(ws_path)
+    else:
+        test_report = TestVerificationReport(status="skipped")
 
     # 4. Build Validation
     build_report = BuildRunner.run_build(ws_path, files_changed=updated_files_changed)

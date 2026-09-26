@@ -37,3 +37,5 @@ class AstraAgentState(TypedDict, total=False):
     workspace_path: Optional[str]
     failure_history: List[Dict[str, Any]]
     git_diff: str
+    agent_message: str
+    final_summary: str

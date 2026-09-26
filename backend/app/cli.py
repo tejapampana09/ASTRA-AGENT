@@ -222,6 +222,7 @@ class AstraCLI:
         event_queue = central_event_bus.subscribe(task_id)
         agent_task = asyncio.create_task(self.lifecycle.run_task_async(task_id))
 
+        task_completed_shown = False
         with console.status("[bold cyan]ASTRA is analyzing repository...[/bold cyan]", spinner="dots") as status:
             try:
                 while not agent_task.done() or not event_queue.empty():
@@ -313,9 +314,11 @@ class AstraCLI:
                         status.start()
 
                     elif ev_type in ["TASK_COMPLETED"]:
-                        status.stop()
-                        console.print("\n[bold green]Task completed.[/bold green]\n")
-                        status.start()
+                        if not task_completed_shown:
+                            task_completed_shown = True
+                            status.stop()
+                            console.print("\n[bold green]Task completed.[/bold green]\n")
+                            status.start()
 
                     elif ev_type in ["TASK_FAILED"]:
                         status.stop()
@@ -336,9 +339,13 @@ class AstraCLI:
             self.session.workspace_path = task_data["workspace_path"]
 
         report = (task_data or {}).get("final_report") or {}
+        summary_text = report.get("summary") or ""
         evidence = report.get("evidence") or {}
         tests = evidence.get("tests") or {}
         files = evidence.get("files_changed") or []
+
+        if summary_text:
+            console.print(f"[bold green]ASTRA:[/bold green] {summary_text}\n")
 
         if files or tests.get("passed", 0) > 0 or report.get("commit"):
             result_items = []
@@ -348,7 +355,7 @@ class AstraCLI:
                 result_items.append(f"[cyan]{len(files)} files modified[/cyan]")
             if report.get("commit"):
                 result_items.append(f"commit [bold]{report['commit'].get('commit_sha', '')[:7]}[/bold]")
-            console.print(f"[dim]Summary: {', '.join(result_items)}[/dim]\n")
+            console.print(f"[dim]Stats: {', '.join(result_items)}[/dim]\n")
 
     async def run_repl(self) -> None:
         """Interactive REPL matching Gemini CLI / Claude Code styling."""

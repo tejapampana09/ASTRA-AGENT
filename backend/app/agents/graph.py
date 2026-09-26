@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any, Dict, Literal
 
 from langgraph.graph import END, START, StateGraph
@@ -108,10 +109,43 @@ def finalize_task(state: AstraAgentState) -> Dict[str, Any]:
     verification_evidence = state.get("verification_evidence", {})
     failure_history = state.get("failure_history", [])
 
+    # Synthesize rich human-readable executive summary
+    summary_parts = []
+    if failure_history and verification_status in ["verified", "VERIFIED", "passed"]:
+        primary_fail = failure_history[0]
+        cat = primary_fail.get("category", "issue")
+        hyp = primary_fail.get("hypothesis", "")
+        summary_parts.append(f"Fixed {cat} defect: {hyp}")
+
+    agent_msg = state.get("agent_message") or ""
+    if agent_msg and agent_msg.strip() and agent_msg.strip() != "Task executed by OpenHands Agent.":
+        summary_parts.append(agent_msg.strip())
+    elif files_changed:
+        summary_parts.append(f"Modified {len(files_changed)} file(s): {', '.join(files_changed)}")
+    else:
+        # Check tool calls for directory or file operations
+        tool_cmds = [
+            tc.get("arguments", {}).get("command", "") or tc.get("name", "")
+            for tc in state.get("tool_calls", [])
+            if isinstance(tc, dict)
+        ]
+        created_dirs = []
+        for cmd in tool_cmds:
+            m = re.search(r"mkdir\s+([^\s;&|]+)", cmd)
+            if m:
+                created_dirs.append(m.group(1).strip("'\""))
+        if created_dirs:
+            summary_parts.append(f"Created folder: {', '.join(created_dirs)}")
+        elif not summary_parts:
+            summary_parts.append(f"Completed requested goal: {state.get('user_goal', '')}")
+
+    executive_summary = "\n".join(summary_parts)
+
     final_report = {
         "task_id": task_id,
         "status": verification_status,
         "goal": state.get("user_goal", ""),
+        "summary": executive_summary,
         "evidence": {
             "tests": {
                 "passed": test_results.get("passed", 0),

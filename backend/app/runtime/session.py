@@ -208,7 +208,7 @@ class ConversationSessionManager:
                 history_parts.append("\nSESSION SUMMARY OF CHANGES SO FAR:")
                 history_parts.append(session.context_summary)
 
-            history_parts.append("\nCURRENT GOAL TO EXECUTE (Building on the above context):")
+            history_parts.append("\nCURRENT GOAL TO EXECUTE (Focus strictly on this goal; only refer to previous context if this goal explicitly refers to prior work):")
             history_parts.append(current_goal)
 
             return "\n".join(history_parts)
