@@ -128,15 +128,24 @@ class AstraCLI:
             initial_title="Terminal CLI Session",
         )
 
-    def print_header(self):
-        model_display = "⚡ Gemini 3.8 Flash (gemini-3.8-flash)" if "gemini" in self.model else "🦙 Ollama Local (qwen2.5-coder:3b)"
-        repo_name = Path(self.repo_path).name or self.repo_path
+BANNER = """[bold cyan]
+    █████╗ ███████╗████████╗██████╗  █████╗ 
+   ██╔══██╗██╔════╝╚══██╔══╝██╔══██╗██╔══██╗
+   ███████║███████╗   ██║   ██████╔╝███████║
+   ██╔══██║╚════██║   ██║   ██╔══██╗██╔══██║
+   ██║  ██║███████║   ██║   ██║  ██║██║  ██║
+   ╚═╝  ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝
+[/bold cyan][dim]2.0 — Autonomous Software Engineer (Terminal Edition)[/dim]
+"""
 
-        console.print("\n[bold cyan]✦ ASTRA 2.0[/bold cyan] [dim]— Autonomous Coding Agent[/dim]")
-        console.print(f"  [dim]• Model:[/dim]      [bold]{model_display}[/bold]")
-        console.print(f"  [dim]• Mode:[/dim]       [bold]{self.mode.capitalize()}[/bold] (auto-verify & commit)")
-        console.print(f"  [dim]• Workspace:[/dim]  [cyan]{self.repo_path}[/cyan] ({repo_name})")
-        console.print("  [dim]• Commands:[/dim]   /model, /mode, /diff, /history, /help, /exit\n")
+    def print_header(self):
+        console.print(BANNER)
+        model_display = "⚡ Gemini 3.8 Flash (gemini-3.8-flash)" if "gemini" in self.model else "🦙 Ollama Local (qwen2.5-coder:3b)"
+        mode_display = "🚀 Autonomous (auto-correct & push)" if self.mode == "autonomous" else "🛡️ Guided (human approvals)"
+
+        console.print(f"Model:      {model_display}")
+        console.print(f"Mode:       {mode_display}")
+        console.print(f"Repository: [cyan]{self.repo_path}[/cyan]\n")
 
     async def execute_goal(self, goal: str) -> None:
         """Executes a goal cleanly with live terminal activity indicators like Gemini CLI / Claude Code."""
