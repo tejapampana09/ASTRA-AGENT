@@ -59,6 +59,8 @@ except Exception:
     sqlite_url = f"sqlite:///{db_file}"
     try:
         sqlite_engine = create_engine(sqlite_url, echo=False, connect_args={"check_same_thread": False})
+        from app.database.models import Base
+        Base.metadata.create_all(bind=sqlite_engine)
         sync_engine = sqlite_engine
         SyncSessionLocal = sessionmaker(bind=sqlite_engine, autocommit=False, autoflush=False)
     except Exception as e:

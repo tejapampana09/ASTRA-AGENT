@@ -84,7 +84,7 @@ def verify_solution(state: AstraAgentState) -> Dict[str, Any]:
         test_report = TestRunner.run_tests(ws_path)
 
     # 4. Build Validation
-    build_report = BuildRunner.run_build(ws_path)
+    build_report = BuildRunner.run_build(ws_path, files_changed=updated_files_changed)
 
     # 5. Lint & Static Analysis
     lint_report = LintRunner.run_lint(ws_path)
