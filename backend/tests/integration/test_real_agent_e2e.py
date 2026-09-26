@@ -7,10 +7,22 @@ import tempfile
 from pathlib import Path
 import pytest
 
+import urllib.request
+
 from app.runtime.lifecycle import TaskLifecycleManager
 from app.runtime.workspace import LocalExecutionWorkspace
 
 
+def is_ollama_available() -> bool:
+    try:
+        with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=1.0) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not is_ollama_available(), reason="Ollama local server is not running or unreachable")
 def test_real_openhands_agent_modifies_repo_and_passes_test():
     """
     REAL AGENT E2E TEST (No Mock):

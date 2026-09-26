@@ -63,3 +63,4 @@ temp_workspaces/
 sandbox_data/
 *.log
 *.db
+.astra_workspace.json

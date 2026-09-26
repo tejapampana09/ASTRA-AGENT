@@ -90,9 +90,44 @@ CONVERSATIONAL_PROMPTS = {
     "hey": "👋 Hey there! Ready to write, test, or refactor code. What should we work on?",
     "who are you": "🧠 I am ASTRA 2.0 — an Autonomous Software Engineering Agent. I can inspect repositories, plan changes, write code, run verification tests, debug failures, and create git commits completely autonomously.",
     "who are you?": "🧠 I am ASTRA 2.0 — an Autonomous Software Engineering Agent. I can inspect repositories, plan changes, write code, run verification tests, debug failures, and create git commits completely autonomously.",
-    "what can you do": "🛠️ **What I can do:**\n- 🔍 Investigate codebase architecture & dependencies\n- 📝 Plan multi-step modifications\n- 💻 Edit and create files in isolated workspaces\n- 🧪 Run test suites (pytest/unittest) and observe real test output\n- 🔁 Autonomously debug and replan if tests fail\n- 📦 Create conventional git commits and prepare pull requests",
-    "what can you do?": "🛠️ **What I can do:**\n- 🔍 Investigate codebase architecture & dependencies\n- 📝 Plan multi-step modifications\n- 💻 Edit and create files in isolated workspaces\n- 🧪 Run test suites (pytest/unittest) and observe real test output\n- 🔁 Autonomously debug and replan if tests fail\n- 📦 Create conventional git commits and prepare pull requests",
+    "what can you do": "🛠️ **What I can do:**\n- 🔍 Investigate codebase architecture & dependencies\n- 📝 Plan multi-step modifications\n- 💻 Edit and create files in your repository\n- 🧪 Run test suites (pytest/unittest) and observe real test output\n- 🔁 Autonomously debug and replan if tests fail\n- 📦 Create conventional git commits and prepare pull requests",
+    "what can you do?": "🛠️ **What I can do:**\n- 🔍 Investigate codebase architecture & dependencies\n- 📝 Plan multi-step modifications\n- 💻 Edit and create files in your repository\n- 🧪 Run test suites (pytest/unittest) and observe real test output\n- 🔁 Autonomously debug and replan if tests fail\n- 📦 Create conventional git commits and prepare pull requests",
 }
+
+
+def get_conversational_response(prompt: str) -> Optional[str]:
+    """Detects purely conversational or chit-chat queries to prevent spinning up full tasks."""
+    raw = prompt.strip().lower()
+    cleaned = re.sub(r"[^\w\s]", "", raw).strip()
+
+    if raw in CONVERSATIONAL_PROMPTS:
+        return CONVERSATIONAL_PROMPTS[raw]
+    if cleaned in CONVERSATIONAL_PROMPTS:
+        return CONVERSATIONAL_PROMPTS[cleaned]
+
+    # Greetings
+    if cleaned in ["yo", "sup", "howdy", "hola", "heya", "greetings"]:
+        return "👋 Hey! Ready to work on your code. What would you like to build, inspect, or test?"
+
+    # Status / casual queries ("whats going on", "what's up", "how are you")
+    if cleaned in [
+        "whats going on", "whts going on", "what is going on",
+        "whats up", "what is up", "wassup",
+        "how are you", "how are u", "how r u",
+        "how is it going", "hows it going", "hows everything",
+        "what are you doing", "what r u doing"
+    ]:
+        return "👋 Everything is running smoothly! I'm standing by to write code, fix bugs, or run tests in this workspace. What shall we work on?"
+
+    # Gratitude
+    if cleaned in ["thanks", "thank you", "thx", "ty", "cool", "great", "awesome", "perfect"]:
+        return "You're welcome! Let me know whenever you'd like to work on the next task."
+
+    # Identity
+    if cleaned in ["who are u", "what are you", "who made you"]:
+        return CONVERSATIONAL_PROMPTS["who are you"]
+
+    return None
 
 
 BANNER = """
@@ -158,9 +193,9 @@ class AstraCLI:
     async def execute_goal(self, goal: str) -> None:
         """Executes a goal cleanly with live terminal activity indicators."""
         # Check for simple conversational messages first
-        normalized = goal.strip().lower()
-        if normalized in CONVERSATIONAL_PROMPTS:
-            console.print(f"\n[bold green]ASTRA:[/bold green] {CONVERSATIONAL_PROMPTS[normalized]}\n")
+        conv_reply = get_conversational_response(goal)
+        if conv_reply:
+            console.print(f"\n[bold green]ASTRA:[/bold green] {conv_reply}\n")
             return
 
         silence_background_logging()
