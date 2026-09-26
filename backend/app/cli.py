@@ -128,7 +128,8 @@ class AstraCLI:
             initial_title="Terminal CLI Session",
         )
 
-BANNER = """[bold cyan]
+    def print_header(self):
+        banner = """[bold cyan]
     █████╗ ███████╗████████╗██████╗  █████╗ 
    ██╔══██╗██╔════╝╚══██╔══╝██╔══██╗██╔══██╗
    ███████║███████╗   ██║   ██████╔╝███████║
@@ -137,9 +138,7 @@ BANNER = """[bold cyan]
    ╚═╝  ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝
 [/bold cyan][dim]2.0 — Autonomous Software Engineer (Terminal Edition)[/dim]
 """
-
-    def print_header(self):
-        console.print(BANNER)
+        console.print(banner)
         model_display = "⚡ Gemini 3.8 Flash (gemini-3.8-flash)" if "gemini" in self.model else "🦙 Ollama Local (qwen2.5-coder:3b)"
         mode_display = "🚀 Autonomous (auto-correct & push)" if self.mode == "autonomous" else "🛡️ Guided (human approvals)"
 
