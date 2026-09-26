@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 import os
+import re
 import sys
 import uuid
 import warnings
