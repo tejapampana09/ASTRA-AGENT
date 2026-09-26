@@ -47,10 +47,19 @@ def verify_solution(state: AstraAgentState) -> Dict[str, Any]:
     # 2. Targeted Test Execution (Fast Feedback Loop)
     targeted_report: Optional[TestVerificationReport] = None
     target_test_file = None
-    if relevant_tests:
-        target_test_file = relevant_tests[0]
+
+    # Prioritize any test file explicitly modified or created in this task
+    changed_test_files = [
+        f for f in updated_files_changed
+        if "test" in f.lower() and f.endswith(".py") and not f.endswith("conftest.py")
+    ]
+    if changed_test_files:
+        target_test_file = changed_test_files[0]
+    elif relevant_tests:
+        candidate_tests = [t for t in relevant_tests if not t.endswith("conftest.py")]
+        if candidate_tests:
+            target_test_file = candidate_tests[0]
     elif updated_files_changed:
-        # Check if any changed file is a test or has an obvious test counterpart
         for f in updated_files_changed:
             if "test" in f.lower() and f.endswith(".py"):
                 target_test_file = f
@@ -61,9 +70,14 @@ def verify_solution(state: AstraAgentState) -> Dict[str, Any]:
         targeted_cmd = [sys.executable, "-m", "pytest", target_test_file, "-v"]
         targeted_report = TestRunner.run_tests(ws_path, custom_command=targeted_cmd)
 
-    # 3. Regression / Full Test Suite Execution
-    # If targeted test failed, we already have clear failure evidence; otherwise run full suite
-    if targeted_report and not targeted_report.is_successful and targeted_report.status == "failed":
+    # 3. Test Suite Verification
+    if targeted_report and targeted_report.is_successful and targeted_report.passed > 0:
+        logger.info(
+            f"[{task_id}] Targeted test {target_test_file} verified successfully "
+            f"({targeted_report.passed} passed). Using targeted verification evidence."
+        )
+        test_report = targeted_report
+    elif targeted_report and not targeted_report.is_successful and targeted_report.status == "failed":
         test_report = targeted_report
         logger.warning(f"[{task_id}] Targeted test {target_test_file} failed; skipping full regression.")
     else:
@@ -143,6 +157,37 @@ def verify_solution(state: AstraAgentState) -> Dict[str, Any]:
         f"Verifier: Status={status.upper()}, Score={round(evidence_score, 2)}. "
         f"Tests: {test_report.passed} passed, {test_report.failed} failed. Build: {build_report.status}."
     )
+
+    try:
+        from app.runtime.lifecycle import event_broker
+        from app.runtime.events import TaskEvent
+        event_broker.publish_sync(TaskEvent(
+            task_id=task_id,
+            event_type="TEST_COMPLETED",
+            message=f"Verification tests: {test_report.passed} passed, {test_report.failed} failed (status: {status.upper()})",
+            payload={
+                "command": test_report.command or "pytest",
+                "passed": test_report.passed,
+                "failed": test_report.failed,
+                "errors": test_report.errors,
+                "status": status,
+                "evidence_score": round(evidence_score, 2),
+            }
+        ))
+        if diff_report and diff_report.raw_diff:
+            event_broker.publish_sync(TaskEvent(
+                task_id=task_id,
+                event_type="DIFF_GENERATED",
+                message=f"Diff generated: {len(updated_files_changed)} files changed (+{diff_report.total_added}/-{diff_report.total_deleted})",
+                payload={
+                    "files_changed": updated_files_changed,
+                    "diff": diff_report.raw_diff[:3000],
+                    "total_added": diff_report.total_added,
+                    "total_deleted": diff_report.total_deleted,
+                }
+            ))
+    except Exception as e:
+        logger.debug(f"Failed to emit verification events: {e}")
 
     return {
         "verification_status": status,

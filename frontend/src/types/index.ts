@@ -1,8 +1,49 @@
+export type ConnectionState =
+  | 'connecting'
+  | 'connected'
+  | 'reconnecting'
+  | 'disconnected'
+  | 'completed'
+  | 'failed';
+
+export type AgentPhase =
+  | 'UNDERSTAND'
+  | 'REPOSITORY_CONTEXT'
+  | 'IMPACT_ANALYSIS'
+  | 'PLAN'
+  | 'EXECUTE'
+  | 'VERIFY'
+  | 'DEBUG'
+  | 'REPLAN'
+  | 'COMMIT'
+  | 'PUSH'
+  | 'PR'
+  | 'COMPLETED'
+  | 'FAILED';
+
 export interface Task {
   task_id: string;
   goal: string;
-  status: 'created' | 'running' | 'paused' | 'paused_for_approval' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'stale';
-  verification_status: 'pending' | 'verified' | 'failed' | 'uncertain' | 'partially_verified' | 'timed_out';
+  repository_path?: string;
+  model?: string;
+  mode?: string;
+  status:
+    | 'created'
+    | 'running'
+    | 'paused'
+    | 'paused_for_approval'
+    | 'completed'
+    | 'failed'
+    | 'cancelled'
+    | 'timed_out'
+    | 'stale';
+  verification_status:
+    | 'pending'
+    | 'verified'
+    | 'failed'
+    | 'uncertain'
+    | 'partially_verified'
+    | 'timed_out';
   workspace_path?: string;
   timeout_seconds?: number;
   heartbeat_at?: string;
@@ -63,6 +104,9 @@ export interface FinalReport {
     base_branch?: string;
     head_branch?: string;
     title?: string;
+    url?: string;
+    simulated?: boolean;
+    number?: number;
   };
   errors: string[];
 }
@@ -79,11 +123,49 @@ export interface ApprovalTicket {
 
 export interface AgentEvent {
   task_id: string;
-  sequence_id?: number;
+  sequence_id: number;
   event_type: string;
   source?: string;
   message: string;
   payload?: Record<string, any>;
+  timestamp: string;
+}
+
+export interface TranslatedActivity {
+  title: string;
+  subtitle?: string;
+  iconType:
+    | 'terminal'
+    | 'file'
+    | 'test_pass'
+    | 'test_fail'
+    | 'debug'
+    | 'plan'
+    | 'git'
+    | 'pr'
+    | 'approval'
+    | 'info'
+    | 'error';
+  phase: AgentPhase;
+  timestamp: string;
+  sequence_id: number;
+  rawEvent: AgentEvent;
+}
+
+export interface FileChangeItem {
+  path: string;
+  operation: 'created' | 'modified' | 'deleted';
+  timestamp: string;
+}
+
+export interface TerminalCommandItem {
+  id: string;
+  command: string;
+  tool?: string;
+  status: 'running' | 'completed' | 'failed';
+  output?: string;
+  exit_code?: number;
+  duration_ms?: number;
   timestamp: string;
 }
 

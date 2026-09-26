@@ -15,6 +15,8 @@ class CreateTaskRequest(BaseModel):
     goal: str = Field(..., description="High-level engineering task prompt")
     repository_path: Optional[str] = Field(None, description="Optional local path or source repo to clone/copy")
     timeout_seconds: Optional[int] = Field(None, description="Optional custom task runtime timeout in seconds")
+    model: Optional[str] = Field(None, description="Optional LLM model override: gemini or ollama")
+    mode: Optional[str] = Field("autonomous", description="Execution mode: autonomous or guided")
 
 
 class TaskResponse(BaseModel):
@@ -38,6 +40,8 @@ async def create_task(
         goal=req.goal,
         repository_path=req.repository_path,
         timeout_seconds=req.timeout_seconds,
+        model=req.model,
+        mode=req.mode,
     )
     # Dispatch execution in background task without blocking HTTP response
     lifecycle.dispatch_task(task_id)

@@ -101,6 +101,23 @@ def replan_step(state: AstraAgentState) -> Dict[str, Any]:
         f"Replanner: Initiated retry #{retry_count} with targeted fix plan for {target_repair_file} [{category}]."
     )
 
+    try:
+        from app.runtime.lifecycle import event_broker
+        from app.runtime.events import TaskEvent
+        event_broker.publish_sync(TaskEvent(
+            task_id=task_id,
+            event_type="REPLAN_TRIGGERED",
+            message=f"Replanning execution (attempt #{retry_count}): {hypothesis[:100]}",
+            payload={
+                "retry_count": retry_count,
+                "category": category,
+                "target_file": target_repair_file,
+                "hypothesis": hypothesis,
+            }
+        ))
+    except Exception as e:
+        logger.debug(f"Failed to emit REPLAN_TRIGGERED: {e}")
+
     return {
         "retry_count": retry_count,
         "plan": replan_steps,

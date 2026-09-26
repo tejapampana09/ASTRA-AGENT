@@ -1,12 +1,17 @@
-import { Task, ApprovalTicket } from '../types';
+import { Task, ApprovalTicket, AgentEvent } from '../types';
 
-const API_BASE = 'http://localhost:8000/api';
+export const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:8080/api';
 
-export async function createTask(goal: string, repository_path?: string): Promise<Task> {
+export async function createTask(
+  goal: string,
+  repository_path?: string,
+  model?: string,
+  mode?: string
+): Promise<Task> {
   const res = await fetch(`${API_BASE}/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ goal, repository_path }),
+    body: JSON.stringify({ goal, repository_path, model, mode }),
   });
   if (!res.ok) throw new Error(`Failed to create task: ${res.statusText}`);
   return res.json();
@@ -26,6 +31,15 @@ export async function listTasks(): Promise<Task[]> {
 
 export async function cancelTask(taskId: string): Promise<void> {
   await fetch(`${API_BASE}/tasks/${taskId}/cancel`, { method: 'POST' });
+}
+
+export async function getEventHistory(taskId: string, limit: number = 200): Promise<AgentEvent[]> {
+  const res = await fetch(`${API_BASE}/events/history/${taskId}?limit=${limit}`);
+  if (!res.ok) {
+    if (res.status === 404) return [];
+    throw new Error(`Failed to fetch event history: ${res.statusText}`);
+  }
+  return res.json();
 }
 
 export async function listApprovals(): Promise<ApprovalTicket[]> {
@@ -67,4 +81,3 @@ export async function getTaskAudit(taskId: string): Promise<any> {
   if (!res.ok) throw new Error(`Failed to fetch audit: ${res.statusText}`);
   return res.json();
 }
-

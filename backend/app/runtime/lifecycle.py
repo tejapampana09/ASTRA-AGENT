@@ -38,12 +38,16 @@ class TaskLifecycleManager:
         goal: str,
         repository_path: Optional[str] = None,
         timeout_seconds: Optional[int] = None,
+        model: Optional[str] = None,
+        mode: Optional[str] = "autonomous",
     ) -> Dict[str, Any]:
         task_info = self.job_manager.register_task(
             task_id=task_id,
             goal=goal,
             repository_path=repository_path,
             timeout_seconds=timeout_seconds,
+            model=model,
+            mode=mode,
         )
         self._tasks[task_id] = task_info
         logger.info(f"Task created and registered in job manager: {task_id}")
@@ -73,7 +77,13 @@ class TaskLifecycleManager:
         await event_broker.publish(TaskEvent(task_id=task_id, event_type="TASK_STARTED", message=f"Task {task_id} started."))
 
         # 1. Create isolated workspace
-        ws = self.workspace_mgr.create_workspace(task_id=task_id, source_repo_path=task_info.get("repository_path"))
+        raw_repo = (task_info.get("repository_path") or "").strip()
+        is_url = raw_repo.startswith("http://") or raw_repo.startswith("https://") or raw_repo.startswith("git@")
+        ws = self.workspace_mgr.create_workspace(
+            task_id=task_id,
+            source_repo_path=None if is_url else (raw_repo or None),
+            repo_url=raw_repo if is_url else None,
+        )
         task_info["workspace_path"] = str(ws.path)
         self.job_manager._update_task_state(task_id, workspace_path=str(ws.path))
 
@@ -82,6 +92,8 @@ class TaskLifecycleManager:
             "task_id": task_id,
             "repository_id": task_id,
             "user_goal": task_info["goal"],
+            "model": task_info.get("model"),
+            "mode": task_info.get("mode", "autonomous"),
             "workspace_path": str(ws.path),
             "iteration_count": 0,
             "retry_count": 0,
@@ -93,8 +105,8 @@ class TaskLifecycleManager:
             "files_changed": [],
             "errors": [],
             "verification_status": "pending",
-            "approval_required": False,
-            "approval_status": "not_requested",
+            "approval_required": task_info.get("mode") == "guided",
+            "approval_status": "pending" if task_info.get("mode") == "guided" else "not_requested",
         }
 
         async def _execution_routine():

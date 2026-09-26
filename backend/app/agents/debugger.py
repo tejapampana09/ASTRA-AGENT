@@ -245,6 +245,24 @@ def debug_failure(state: AstraAgentState) -> Dict[str, Any]:
         f"{location_explanation} -> Hypothesis: {fix_data['hypothesis']}"
     )
 
+    try:
+        from app.runtime.lifecycle import event_broker
+        from app.runtime.events import TaskEvent
+        event_broker.publish_sync(TaskEvent(
+            task_id=task_id,
+            event_type="DEBUG_STARTED",
+            message=f"Investigating verification failure ({category.value}): {fix_data.get('hypothesis', '')[:100]}",
+            payload={
+                "category": category.value,
+                "suspect_file": suspect_file,
+                "suspect_line": suspect_line,
+                "hypothesis": fix_data.get("hypothesis", ""),
+                "proposed_fix": fix_data.get("proposed_fix", ""),
+            }
+        ))
+    except Exception as e:
+        logger.debug(f"Failed to emit DEBUG_STARTED: {e}")
+
     observations = list(state.get("observations", []))
     observations.append(
         f"Debugger: Triaged failure #{len(failure_history)} as [{category.value.upper()}]. "

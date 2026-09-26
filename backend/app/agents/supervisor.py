@@ -10,7 +10,20 @@ from app.observability.logging import logger
 def understand_task(state: AstraAgentState) -> Dict[str, Any]:
     """Analyzes user goal, extract intent, criteria, and objectives."""
     goal = state.get("user_goal", "")
-    logger.info(f"[{state.get('task_id')}] Understanding task: {goal}")
+    task_id = state.get("task_id", "")
+    logger.info(f"[{task_id}] Understanding task: {goal}")
+
+    try:
+        from app.runtime.lifecycle import event_broker
+        from app.runtime.events import TaskEvent
+        event_broker.publish_sync(TaskEvent(
+            task_id=task_id,
+            event_type="UNDERSTAND",
+            message=f"Goal parsed: {goal[:100]}",
+            payload={"goal": goal}
+        ))
+    except Exception as e:
+        logger.debug(f"Failed to emit UNDERSTAND: {e}")
 
     messages = list(state.get("messages", []))
     messages.append({
@@ -119,6 +132,27 @@ def load_repository_context(state: AstraAgentState) -> Dict[str, Any]:
         f"{len(repo_context.get('symbols', []))} symbols, framework={repo_context.get('summary', {}).get('backend')}, "
         f"flow_chain={repo_context.get('flow_chain', {}).get('summary') if repo_context.get('flow_chain') else 'None'}"
     )
+
+    try:
+        from app.runtime.lifecycle import event_broker
+        from app.runtime.events import TaskEvent
+        files_cnt = len(repo_context.get("files", []))
+        langs_str = ", ".join(repo_context.get("languages", [])[:2]) or "Python"
+        fw = repo_context.get("test_framework") or "pytest"
+        event_broker.publish_sync(TaskEvent(
+            task_id=task_id,
+            event_type="REPOSITORY_CONTEXT",
+            message=f"Repository analyzed: {files_cnt} files • {langs_str} • {fw}",
+            payload={
+                "files_count": files_cnt,
+                "languages": repo_context.get("languages", []),
+                "test_framework": fw,
+                "symbols_count": len(repo_context.get("symbols", [])),
+                "has_git": repo_context.get("has_git", False),
+            }
+        ))
+    except Exception as e:
+        logger.debug(f"Failed to emit REPOSITORY_CONTEXT: {e}")
 
     return {
         "repository_context": repo_context

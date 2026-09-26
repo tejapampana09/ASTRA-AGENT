@@ -86,6 +86,8 @@ class PersistentJobManager:
         repository_path: Optional[str] = None,
         timeout_seconds: Optional[int] = None,
         workspace_path: Optional[str] = None,
+        model: Optional[str] = None,
+        mode: Optional[str] = "autonomous",
     ) -> Dict[str, Any]:
         """Registers a new task in memory and the persistent database."""
         effective_timeout = timeout_seconds or settings.MAX_RUNTIME_SECONDS
@@ -95,6 +97,8 @@ class PersistentJobManager:
             "task_id": task_id,
             "goal": goal,
             "repository_path": repository_path,
+            "model": model,
+            "mode": mode or "autonomous",
             "status": JobStatus.CREATED.value,
             "verification_status": "pending",
             "workspace_path": workspace_path,

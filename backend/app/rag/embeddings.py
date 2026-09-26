@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 from typing import List, Optional
 
@@ -20,8 +21,13 @@ class EmbeddingClient:
         self.dimension = dimension or settings.EMBEDDING_DIMENSION
 
     def _is_live_key_configured(self) -> bool:
-        key = settings.LLM_API_KEY
-        return bool(key and not key.startswith("test-") and not key.startswith("fake-") and len(key) > 5)
+        key = os.environ.get("OPENAI_API_KEY") or settings.LLM_API_KEY
+        if not key or key.startswith("test-") or key.startswith("fake-") or len(key) <= 5:
+            return False
+        # If OpenAI model is requested but key is Gemini key, skip to deterministic projection
+        if "text-embedding" in self.model and (key.startswith("AQ.") or key.startswith("AIza")):
+            return False
+        return True
 
     def get_embedding(self, text: str) -> List[float]:
         """Synchronously generates vector embedding for a single text."""

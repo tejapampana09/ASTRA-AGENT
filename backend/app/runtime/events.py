@@ -59,6 +59,9 @@ class AgentEvent:
         }
 
 
+TaskEvent = AgentEvent
+
+
 class CentralEventBus:
     """
     Production Unified Agent Event System for ASTRA 2.0 (Phase 4.3).
@@ -201,6 +204,35 @@ class CentralEventBus:
                     session.commit()
             except Exception as e:
                 logger.debug(f"Failed to persist legacy event: {e}")
+
+    def publish_sync(self, event: Any) -> None:
+        """Synchronous/threadsafe event emission for background worker threads."""
+        from app.safety.policies import SecurityPolicies
+
+        seq_id = getattr(event, "sequence_id", None) or self._next_sequence_id(event.task_id)
+        type_str = str(event.event_type)
+        msg = SecurityPolicies.sanitize_secrets(event.message)
+        payload = SecurityPolicies.sanitize_payload(getattr(event, "payload", {}))
+        source = getattr(event, "source", "system")
+
+        canonical_event = AgentEvent(
+            task_id=event.task_id,
+            sequence_id=seq_id,
+            event_type=type_str,
+            message=msg,
+            payload=payload,
+            source=source,
+            timestamp=getattr(event, "timestamp", datetime.now(timezone.utc).isoformat()),
+        )
+
+        self._event_history[event.task_id].append(canonical_event)
+
+        if event.task_id in self._subscribers:
+            for q in list(self._subscribers[event.task_id]):
+                try:
+                    q.put_nowait(canonical_event)
+                except Exception:
+                    pass
 
     def get_history(self, task_id: str, limit: int = 200) -> List[AgentEvent]:
         """Returns chronological list of events for a task."""

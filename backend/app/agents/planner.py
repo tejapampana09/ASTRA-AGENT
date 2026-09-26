@@ -213,6 +213,23 @@ def plan_task(state: AstraAgentState) -> Dict[str, Any]:
         )
     })
 
+    try:
+        from app.runtime.lifecycle import event_broker
+        from app.runtime.events import TaskEvent
+        event_broker.publish_sync(TaskEvent(
+            task_id=task_id,
+            event_type="PLAN_GENERATED",
+            message=f"Plan formulated: {len(plan_steps)} stages ({backend})",
+            payload={
+                "steps_count": len(plan_steps),
+                "plan": [s.get("description") for s in plan_steps],
+                "target_files": target_files,
+                "relevant_tests": relevant_tests,
+            }
+        ))
+    except Exception as e:
+        logger.debug(f"Failed to emit PLAN_GENERATED: {e}")
+
     return {
         "plan": plan_steps,
         "current_step": 1,

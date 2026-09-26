@@ -94,7 +94,7 @@ class SecurityPolicies:
         cleaned = command.strip()
         for pattern in cls.BLOCKED_COMMAND_PATTERNS:
             if pattern.search(cleaned):
-                msg = f"CRITICAL SECURITY VIOLATION: Command blocked by policy (pattern matched: {pattern.pattern})"
+                msg = f"CRITICAL SECURITY VIOLATION: Command blocked by ASTRA security policy (pattern matched: {pattern.pattern})"
                 logger.error(f"[SECURITY] Blocked dangerous command: {command} -> Reason: {msg}")
                 return False, msg
         return True, "Command allowed"

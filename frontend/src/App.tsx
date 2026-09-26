@@ -1,339 +1,444 @@
 import React, { useState, useEffect } from 'react';
-import { Bot, RefreshCw, StopCircle, RotateCcw, Heart, ShieldAlert, FileText, CheckCircle } from 'lucide-react';
+import {
+  Activity,
+  Terminal,
+  FileCode,
+  FlaskConical,
+  GitBranch,
+  StopCircle,
+  RefreshCw,
+  FolderGit2,
+  CheckCircle2,
+  Clock,
+  AlertTriangle,
+  Play,
+} from 'lucide-react';
 import { TaskInput } from './components/TaskInput';
-import { Timeline } from './components/Timeline';
-import { DiffViewer } from './components/DiffViewer';
-import { TestResults } from './components/TestResults';
+import { AgentHeader } from './components/AgentHeader';
+import { PhaseProgress } from './components/PhaseProgress';
+import { AgentConsole } from './components/AgentConsole';
+import { LiveTerminal } from './components/LiveTerminal';
+import { LiveFileChanges } from './components/LiveFileChanges';
+import { LiveVerification } from './components/LiveVerification';
+import { LiveGitPanel } from './components/LiveGitPanel';
+import { CompletedSummary } from './components/CompletedSummary';
 import { ApprovalModal } from './components/ApprovalModal';
-import { PullRequestCard } from './components/PullRequestCard';
-import { TerminalOutput } from './components/TerminalOutput';
+import { useAgentEvents } from './hooks/useAgentEvents';
 import {
   createTask,
-  getTask,
   listTasks,
   cancelTask,
-  recoverTask,
-  getTaskHealth,
-  getTaskAudit,
   listApprovals,
   approveTicket,
   rejectTicket,
 } from './services/api';
-import { Task, AgentEvent, ApprovalTicket } from './types';
+import { Task, ApprovalTicket } from './types';
 
 export const App: React.FC = () => {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activeTask, setActiveTask] = useState<Task | null>(null);
-  const [events, setEvents] = useState<AgentEvent[]>([]);
   const [approvals, setApprovals] = useState<ApprovalTicket[]>([]);
-  const [taskHealth, setTaskHealth] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'timeline' | 'diff' | 'terminal'>('timeline');
+  const [activeTab, setActiveTab] = useState<'timeline' | 'terminal' | 'diff' | 'tests' | 'git'>('timeline');
+
+  // Dedicated resilient event store hook for the active task
+  const {
+    events,
+    translatedActivities,
+    latestEvent,
+    connectionState,
+    currentPhase,
+    currentActivity,
+    changedFiles,
+    terminalCommands,
+    reconnect,
+  } = useAgentEvents(activeTask?.task_id);
 
   // Poll tasks & approvals
-  const refreshState = async () => {
+  const refreshTasksAndApprovals = async () => {
     try {
       const taskList = await listTasks();
       setTasks(taskList);
+
       if (taskList.length > 0 && !activeTask) {
         setActiveTask(taskList[0]);
-      }
-      const pendingApprovals = await listApprovals();
-      setApprovals(pendingApprovals);
-
-      if (activeTask) {
-        try {
-          const h = await getTaskHealth(activeTask.task_id);
-          setTaskHealth(h);
-        } catch {
-          // Ignore health fetch if task is brand new
+      } else if (activeTask) {
+        const fresh = taskList.find((t) => t.task_id === activeTask.task_id);
+        if (
+          fresh &&
+          (fresh.status !== activeTask.status ||
+            fresh.verification_status !== activeTask.verification_status ||
+            fresh.final_report !== activeTask.final_report)
+        ) {
+          setActiveTask(fresh);
         }
       }
+
+      const pendingApprovals = await listApprovals();
+      setApprovals(pendingApprovals);
     } catch (e) {
-      console.error('Error fetching state:', e);
+      console.error('Error fetching tasks/approvals:', e);
     }
   };
 
   useEffect(() => {
-    refreshState();
-    const interval = setInterval(refreshState, 3000);
+    refreshTasksAndApprovals();
+    const interval = setInterval(refreshTasksAndApprovals, 2500);
     return () => clearInterval(interval);
   }, [activeTask?.task_id]);
 
-  // Subscribe to SSE stream for active task
-  useEffect(() => {
-    if (!activeTask) return;
-
-    const eventSource = new EventSource(`http://localhost:8000/api/events/stream/${activeTask.task_id}`);
-
-    eventSource.onmessage = (e) => {
-      if (e.data && e.data.trim() !== '' && !e.data.startsWith(':')) {
-        try {
-          const parsed: AgentEvent = JSON.parse(e.data);
-          setEvents((prev) => [...prev, parsed]);
-          if (
-            parsed.event_type === 'TASK_COMPLETED' ||
-            parsed.event_type === 'TASK_FAILED' ||
-            parsed.event_type === 'TASK_CANCELLED' ||
-            parsed.event_type === 'TASK_TIMEOUT'
-          ) {
-            refreshState();
-            getTask(activeTask.task_id).then(setActiveTask);
-          }
-        } catch (err) {
-          console.warn('Failed to parse SSE event:', err);
-        }
-      }
-    };
-
-    return () => {
-      eventSource.close();
-    };
-  }, [activeTask?.task_id]);
-
-  const handleLaunchTask = async (goal: string, repoPath?: string) => {
+  const handleCreateTask = async (
+    goal: string,
+    repoPath?: string,
+    model?: string,
+    mode?: string
+  ) => {
     setIsLoading(true);
     try {
-      const newTask = await createTask(goal, repoPath);
+      const newTask = await createTask(goal, repoPath, model, mode);
+      setTasks((prev) => [newTask, ...prev]);
       setActiveTask(newTask);
-      setEvents([]);
-      await refreshState();
-    } catch (err) {
-      alert(`Error launching task: ${err}`);
+      setActiveTab('timeline');
+    } catch (e) {
+      console.error('Failed to create task:', e);
     } finally {
       setIsLoading(false);
     }
   };
 
+  const handleSelectTask = (task: Task) => {
+    if (activeTask?.task_id !== task.task_id) {
+      setActiveTask(task);
+      setActiveTab('timeline');
+    }
+  };
+
   const handleCancelTask = async () => {
     if (!activeTask) return;
-    if (confirm(`Cancel active task ${activeTask.task_id}?`)) {
-      await cancelTask(activeTask.task_id);
-      await refreshState();
-    }
-  };
-
-  const handleRecoverTask = async () => {
-    if (!activeTask) return;
     try {
-      const res = await recoverTask(activeTask.task_id);
-      alert(`Recovery initiated: ${res.message}`);
-      await refreshState();
-    } catch (err) {
-      alert(`Recovery failed: ${err}`);
+      await cancelTask(activeTask.task_id);
+      await refreshTasksAndApprovals();
+    } catch (e) {
+      console.error('Failed to cancel task:', e);
     }
   };
 
-  const handleApprove = async (id: string) => {
-    await approveTicket(id, 'Approved via dashboard');
-    await refreshState();
+  const handleApprove = async (ticketId: string) => {
+    try {
+      await approveTicket(ticketId, 'Approved via Antigravity console');
+      await refreshTasksAndApprovals();
+    } catch (e) {
+      console.error('Failed to approve ticket:', e);
+    }
   };
 
-  const handleReject = async (id: string) => {
-    await rejectTicket(id, 'Rejected via dashboard');
-    await refreshState();
+  const handleReject = async (ticketId: string) => {
+    try {
+      await rejectTicket(ticketId, 'Rejected by reviewer');
+      await refreshTasksAndApprovals();
+    } catch (e) {
+      console.error('Failed to reject ticket:', e);
+    }
   };
+
+  const isRunning =
+    activeTask?.status === 'running' ||
+    activeTask?.status === 'created' ||
+    connectionState === 'connecting' ||
+    connectionState === 'reconnecting';
+
+  const isCompleted = activeTask?.status === 'completed' || activeTask?.verification_status === 'verified';
+  const isFailed = activeTask?.status === 'failed' || activeTask?.status === 'cancelled';
+
+  // Find relevant approvals for the active task
+  const activeApproval = approvals.find((a) => a.task_id === activeTask?.task_id && a.status === 'pending');
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
-      {/* Header */}
-      <header className="border-b border-slate-800 bg-slate-900/60 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-40">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-600 selection:text-white">
+      {/* Top System Bar */}
+      <header className="border-b border-slate-900 bg-slate-950/80 backdrop-blur sticky top-0 z-40 px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="p-2 bg-indigo-600 rounded-lg shadow-md shadow-indigo-500/20">
-            <Bot className="w-5 h-5 text-white" />
+          <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-600/30">
+            <span className="font-bold text-white text-sm">A</span>
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-base font-bold text-white tracking-tight">ASTRA 2.0</h1>
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-mono">
-                Phase 4 Platform
+              <span className="font-bold text-sm tracking-tight text-white">ASTRA 2.0</span>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-900 text-indigo-400 border border-slate-800">
+                LIVE AUTONOMOUS AGENT CONSOLE
               </span>
             </div>
-            <p className="text-xs text-slate-400">Autonomous Software Engineering Agent Platform</p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          {activeTask && (
-            <div className="hidden md:flex items-center gap-2 text-xs bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800">
-              <Heart className={`w-3.5 h-3.5 ${taskHealth?.is_alive ? 'text-emerald-400 animate-pulse' : 'text-slate-600'}`} />
-              <span className="text-slate-400">Heartbeat:</span>
-              <span className="font-mono text-slate-200">
-                {taskHealth?.heartbeat_age_seconds !== null && taskHealth?.heartbeat_age_seconds !== undefined
-                  ? `${taskHealth.heartbeat_age_seconds}s ago`
-                  : 'N/A'}
-              </span>
-            </div>
-          )}
+
+        <div className="flex items-center gap-4 text-xs font-mono">
+          <div className="flex items-center gap-2">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                connectionState === 'connected'
+                  ? 'bg-emerald-400 animate-pulse'
+                  : connectionState === 'reconnecting'
+                  ? 'bg-amber-400 animate-ping'
+                  : 'bg-slate-600'
+              }`}
+            />
+            <span className="text-slate-400 uppercase text-[11px]">
+              {connectionState === 'connected'
+                ? 'CORE ONLINE'
+                : connectionState === 'reconnecting'
+                ? 'RECONNECTING...'
+                : 'IDLE'}
+            </span>
+          </div>
+
+          <div className="h-4 w-[1px] bg-slate-800" />
+
           <button
-            onClick={refreshState}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition cursor-pointer"
+            onClick={refreshTasksAndApprovals}
+            className="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 transition bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-800 cursor-pointer"
           >
             <RefreshCw className="w-3.5 h-3.5" />
-            Refresh
+            Sync
           </button>
         </div>
       </header>
 
-      {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column: Task Input & Task History */}
-        <div className="space-y-6">
-          <TaskInput onSubmit={handleLaunchTask} isLoading={isLoading} />
+      {/* Main Dual-Pane Studio Body */}
+      <main className="flex-1 p-4 md:p-6 max-w-[1720px] mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Left Column: Mission Control & Task Queue (4 cols) */}
+        <div className="lg:col-span-4 space-y-4">
+          <TaskInput onSubmit={handleCreateTask} isLoading={isLoading} />
 
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-white">Recent Tasks</h3>
-              <span className="text-xs text-slate-500 font-mono">{tasks.length} total</span>
+          {/* Task Queue Card */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-3">
+              <h3 className="text-xs font-mono font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                <FolderGit2 className="w-3.5 h-3.5 text-indigo-400" />
+                Active Engineering Tasks
+              </h3>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400">
+                {tasks.length} total
+              </span>
             </div>
-            <div className="space-y-2 max-h-[340px] overflow-y-auto pr-1">
+
+            <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
               {tasks.length === 0 ? (
-                <div className="text-xs text-slate-500 italic py-4 text-center">No tasks recorded yet.</div>
+                <div className="py-8 text-center text-xs font-mono text-slate-500">
+                  No tasks recorded yet.
+                </div>
               ) : (
-                tasks.map((t) => (
-                  <button
-                    key={t.task_id}
-                    onClick={() => {
-                      setActiveTask(t);
-                      setEvents([]);
-                    }}
-                    className={`w-full text-left p-3 rounded-lg border text-xs transition cursor-pointer ${
-                      activeTask?.task_id === t.task_id
-                        ? 'bg-indigo-950/40 border-indigo-500/50 text-white'
-                        : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-mono text-[10px] text-slate-500">{t.task_id}</span>
-                      <span
-                        className={`text-[10px] px-2 py-0.5 rounded-full font-medium uppercase ${
-                          t.status === 'completed'
-                            ? 'bg-emerald-500/10 text-emerald-400'
-                            : t.status === 'failed' || t.status === 'timed_out'
-                            ? 'bg-rose-500/10 text-rose-400'
-                            : t.status === 'cancelled'
-                            ? 'bg-slate-800 text-slate-400'
-                            : 'bg-amber-500/10 text-amber-400'
-                        }`}
-                      >
-                        {t.status}
-                      </span>
-                    </div>
-                    <p className="line-clamp-2">{t.goal}</p>
-                  </button>
-                ))
+                tasks.map((t) => {
+                  const isSelected = activeTask?.task_id === t.task_id;
+                  const isTaskRunning = t.status === 'running' || t.status === 'created';
+                  const isTaskVerified = t.status === 'completed' || t.verification_status === 'verified';
+
+                  return (
+                    <button
+                      key={t.task_id}
+                      onClick={() => handleSelectTask(t)}
+                      className={`w-full text-left p-3 rounded-xl border transition-all cursor-pointer font-mono ${
+                        isSelected
+                          ? 'bg-slate-950 border-indigo-500 shadow-md shadow-indigo-500/10'
+                          : 'bg-slate-950/60 border-slate-800/80 hover:bg-slate-900 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-[11px] font-bold text-indigo-300">
+                          {t.task_id}
+                        </span>
+
+                        {isTaskRunning ? (
+                          <span className="flex items-center gap-1 text-[10px] text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-full font-bold">
+                            <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping" />
+                            RUNNING
+                          </span>
+                        ) : isTaskVerified ? (
+                          <span className="flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full font-bold">
+                            <CheckCircle2 className="w-3 h-3" />
+                            VERIFIED
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-slate-500 uppercase">
+                            {t.status}
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="text-xs text-slate-300 line-clamp-2 font-sans font-normal">
+                        {t.goal}
+                      </p>
+
+                      <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-900 text-[10px] text-slate-500">
+                        <span>{t.model?.includes('ollama') ? '🦙 Ollama' : '⚡ Gemini'}</span>
+                        <span>{t.mode === 'guided' ? '🛡️ Guided' : '🚀 Auto'}</span>
+                      </div>
+                    </button>
+                  );
+                })
               )}
             </div>
           </div>
         </div>
 
-        {/* Center & Right Columns: Live Execution, Tests, PR, and Diffs */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Active Task Action Bar */}
-          {activeTask && (
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-lg flex items-center justify-between flex-wrap gap-3">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-xs text-indigo-400 font-semibold">{activeTask.task_id}</span>
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 uppercase font-medium">
-                    {activeTask.status}
-                  </span>
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 font-medium">
-                    {activeTask.verification_status}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-300 mt-1 line-clamp-1">{activeTask.goal}</p>
-              </div>
-
-              <div className="flex items-center gap-2">
-                {activeTask.status === 'running' && (
-                  <button
-                    onClick={handleCancelTask}
-                    className="flex items-center gap-1 px-2.5 py-1.5 bg-rose-900/40 hover:bg-rose-900/60 border border-rose-700/50 text-rose-300 rounded text-xs transition cursor-pointer"
-                  >
-                    <StopCircle className="w-3.5 h-3.5" />
-                    Cancel
-                  </button>
-                )}
-                {(activeTask.status === 'failed' || activeTask.status === 'stale' || activeTask.status === 'running') && (
-                  <button
-                    onClick={handleRecoverTask}
-                    className="flex items-center gap-1 px-2.5 py-1.5 bg-indigo-900/40 hover:bg-indigo-900/60 border border-indigo-700/50 text-indigo-300 rounded text-xs transition cursor-pointer"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    Recover & Resume
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Test Verification Evidence */}
-          <TestResults
-            evidence={activeTask?.final_report?.evidence}
-            status={activeTask?.verification_status}
+        {/* Right Column: Codex Agent Canvas & Execution Studio (8 cols) */}
+        <div className="lg:col-span-8 space-y-4">
+          {/* Active Task Live Header */}
+          <AgentHeader
+            task={activeTask}
+            connectionState={connectionState}
+            currentPhase={currentPhase}
+            currentActivity={currentActivity}
+            actionCount={events.length}
+            onRefresh={refreshTasksAndApprovals}
+            onCancel={isRunning ? handleCancelTask : undefined}
           />
 
-          {/* Pull Request & Git Summary Card (P4.1 & P4.4) */}
-          {activeTask?.final_report && (
-            <PullRequestCard
-              commit={activeTask.final_report.commit}
-              pullRequest={activeTask.final_report.pull_request}
-            />
+          {/* Visual Execution Phase Progress */}
+          <PhaseProgress
+            currentPhase={currentPhase}
+            events={events}
+            isCompleted={isCompleted}
+            isFailed={isFailed}
+          />
+
+          {/* Human Approval Required Alert Banner (Guided Mode) */}
+          {activeApproval && (
+            <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/40 flex items-center justify-between gap-4 font-mono text-xs">
+              <div className="flex items-center gap-3">
+                <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+                <div>
+                  <h4 className="font-bold text-amber-300">HUMAN APPROVAL GATE REQUIRED</h4>
+                  <p className="text-slate-300 text-[11px] mt-0.5">
+                    Agent requested execution of tool <strong className="text-white">{activeApproval.tool_name}</strong> (Risk:{' '}
+                    <span className="text-rose-400 font-bold">{activeApproval.risk_level}</span>)
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => handleReject(activeApproval.id)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition cursor-pointer"
+                >
+                  Reject
+                </button>
+                <button
+                  onClick={() => handleApprove(activeApproval.id)}
+                  className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold transition cursor-pointer shadow-lg shadow-emerald-600/30"
+                >
+                  Authorize Execution
+                </button>
+              </div>
+            </div>
           )}
 
-          {/* Tabbed Interactive Section: Timeline / Terminal / Diff */}
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
-              <button
-                onClick={() => setActiveTab('timeline')}
-                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition ${
-                  activeTab === 'timeline'
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-slate-900 text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Live Event Activity
-              </button>
-              <button
-                onClick={() => setActiveTab('terminal')}
-                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition ${
-                  activeTab === 'terminal'
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-slate-900 text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Terminal Output & Tools
-              </button>
-              <button
-                onClick={() => setActiveTab('diff')}
-                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition ${
-                  activeTab === 'diff'
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-slate-900 text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Git Diff Viewer
-              </button>
-            </div>
+          {/* Completed Task Summary Card (Only shown when verified) */}
+          {isCompleted && activeTask && (
+            <CompletedSummary task={activeTask} onViewTab={setActiveTab} />
+          )}
 
-            {activeTab === 'timeline' && <Timeline events={events} />}
+          {/* Canvas Tabs Navigation */}
+          <div className="flex items-center gap-1.5 border-b border-slate-800 pb-2 overflow-x-auto scrollbar-none font-mono text-xs">
+            <button
+              onClick={() => setActiveTab('timeline')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition cursor-pointer ${
+                activeTab === 'timeline'
+                  ? 'bg-indigo-600 text-white font-semibold shadow'
+                  : 'bg-slate-900 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Activity className="w-3.5 h-3.5" />
+              Live Codex Stream
+            </button>
+
+            <button
+              onClick={() => setActiveTab('terminal')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition cursor-pointer ${
+                activeTab === 'terminal'
+                  ? 'bg-indigo-600 text-white font-semibold shadow'
+                  : 'bg-slate-900 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Terminal className="w-3.5 h-3.5" />
+              Shell Terminal
+              {terminalCommands.length > 0 && (
+                <span className="text-[10px] px-1.5 rounded-full bg-slate-950 text-indigo-300">
+                  {terminalCommands.length}
+                </span>
+              )}
+            </button>
+
+            <button
+              onClick={() => setActiveTab('diff')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition cursor-pointer ${
+                activeTab === 'diff'
+                  ? 'bg-indigo-600 text-white font-semibold shadow'
+                  : 'bg-slate-900 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <FileCode className="w-3.5 h-3.5" />
+              Files & Diff
+              {changedFiles.length > 0 && (
+                <span className="text-[10px] px-1.5 rounded-full bg-slate-950 text-sky-300">
+                  {changedFiles.length}
+                </span>
+              )}
+            </button>
+
+            <button
+              onClick={() => setActiveTab('tests')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition cursor-pointer ${
+                activeTab === 'tests'
+                  ? 'bg-indigo-600 text-white font-semibold shadow'
+                  : 'bg-slate-900 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <FlaskConical className="w-3.5 h-3.5" />
+              Verification Suite
+            </button>
+
+            <button
+              onClick={() => setActiveTab('git')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition cursor-pointer ${
+                activeTab === 'git'
+                  ? 'bg-indigo-600 text-white font-semibold shadow'
+                  : 'bg-slate-900 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <GitBranch className="w-3.5 h-3.5" />
+              Git & PR
+            </button>
+          </div>
+
+          {/* Active Canvas Tab Content */}
+          <div>
+            {activeTab === 'timeline' && (
+              <AgentConsole activities={translatedActivities} isRunning={isRunning} />
+            )}
+
             {activeTab === 'terminal' && (
-              <TerminalOutput
-                commands={activeTask?.final_report?.tool_calls}
-                rawOutput={activeTask?.final_report?.evidence?.tests?.command}
+              <LiveTerminal commands={terminalCommands} isRunning={isRunning} />
+            )}
+
+            {activeTab === 'diff' && (
+              <LiveFileChanges
+                files={changedFiles}
+                liveDiff={activeTask?.final_report?.git_diff}
               />
             )}
-            {activeTab === 'diff' && (
-              <DiffViewer
-                diff={activeTask?.final_report?.git_diff}
-                filesChanged={activeTask?.final_report?.evidence?.files_changed}
-              />
+
+            {activeTab === 'tests' && (
+              <LiveVerification task={activeTask} isRunning={isRunning} />
+            )}
+
+            {activeTab === 'git' && (
+              <LiveGitPanel task={activeTask} isRunning={isRunning} />
             )}
           </div>
         </div>
       </main>
 
-      {/* Human Approval Modal */}
+      {/* Global Human Approval Modal (if approval exists) */}
       {approvals.length > 0 && (
         <ApprovalModal
           ticket={approvals[0]}

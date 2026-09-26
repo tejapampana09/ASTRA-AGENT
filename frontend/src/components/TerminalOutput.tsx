@@ -11,9 +11,10 @@ interface Props {
     duration_ms?: number;
   }>;
   rawOutput?: string;
+  isRunning?: boolean;
 }
 
-export const TerminalOutput: React.FC<Props> = ({ commands = [], rawOutput }) => {
+export const TerminalOutput: React.FC<Props> = ({ commands = [], rawOutput, isRunning }) => {
   const [copied, setCopied] = useState(false);
 
   const fullText = rawOutput || commands.map((c) => `$ ${c.command || c.tool_name}\n${c.result || c.error || ''}`).join('\n\n');
@@ -30,6 +31,12 @@ export const TerminalOutput: React.FC<Props> = ({ commands = [], rawOutput }) =>
         <h3 className="text-sm font-semibold text-white flex items-center gap-2">
           <Terminal className="w-4 h-4 text-emerald-400" />
           Execution Terminal Output
+          {isRunning && (
+            <span className="flex items-center gap-1.5 ml-2 text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full font-mono font-normal">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              SESSION ACTIVE
+            </span>
+          )}
         </h3>
         <button
           onClick={handleCopy}
@@ -42,9 +49,21 @@ export const TerminalOutput: React.FC<Props> = ({ commands = [], rawOutput }) =>
 
       <div className="flex-1 overflow-y-auto bg-slate-950 p-3 rounded-lg border border-slate-800/80 font-mono text-[11px] text-slate-300 space-y-2 whitespace-pre-wrap">
         {commands.length === 0 && !rawOutput ? (
-          <div className="text-slate-600 italic py-6 text-center">
-            No terminal commands or test outputs recorded yet.
-          </div>
+          isRunning ? (
+            <div className="py-8 text-center flex flex-col items-center justify-center gap-2 text-slate-400">
+              <div className="flex items-center gap-2 text-emerald-400 font-medium">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                Autonomous agent session active in sandbox...
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Inspecting repository files, analyzing logic, and preparing test runs.
+              </p>
+            </div>
+          ) : (
+            <div className="text-slate-600 italic py-6 text-center">
+              No terminal commands or test outputs recorded yet.
+            </div>
+          )
         ) : rawOutput ? (
           <div>{rawOutput}</div>
         ) : (

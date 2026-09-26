@@ -41,7 +41,8 @@ def execute_step(state: AstraAgentState) -> Dict[str, Any]:
     prompt_lines = [
         f"Task Goal: {goal}",
         "Execute the necessary modifications in the workspace.",
-        "Ensure tests are created or modified to verify your solution."
+        "Ensure tests are created or modified to verify your solution.",
+        "IMPORTANT: You are already in the repository root directory. Always use relative paths for all commands and file operations (e.g. `research/utils/io.py`, `tests/test_io.py`, `pytest tests/test_audit.py`). Avoid unquoted absolute paths containing spaces.",
     ]
 
     failure_history = state.get("failure_history", [])
@@ -65,7 +66,36 @@ def execute_step(state: AstraAgentState) -> Dict[str, Any]:
     else:
         runtime = AgentRuntime()
 
-    result = runtime.execute_task(workspace=workspace, prompt=prompt)
+    # Stream real-time events to event_broker so UI activity feed updates live
+    import asyncio
+    from app.runtime.lifecycle import event_broker
+    from app.runtime.events import TaskEvent
+
+    def on_agent_event(ev):
+        try:
+            event_broker.publish_sync(
+                TaskEvent(
+                    task_id=task_id,
+                    event_type=ev.event_type,
+                    message=ev.message,
+                    payload=ev.payload or {}
+                )
+            )
+        except Exception as err:
+            logger.warning(f"Failed to stream agent event: {err}")
+
+    task_model = state.get("model")
+    if task_model in ["ollama", "local", "qwen"]:
+        task_model = "ollama/qwen2.5-coder:3b"
+    elif task_model in ["gemini", "cloud"]:
+        task_model = "gemini/gemini-3.1-flash-lite"
+
+    result = runtime.execute_task(
+        workspace=workspace,
+        prompt=prompt,
+        on_event=on_agent_event,
+        model=task_model
+    )
 
     tool_calls_dict = [
         {"id": tc.id, "name": tc.name, "arguments": tc.arguments, "result": tc.result}

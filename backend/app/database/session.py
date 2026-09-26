@@ -32,12 +32,16 @@ except Exception as e:
 
 try:
     if settings.DATABASE_URL_SYNC:
-        sync_engine = create_engine(
+        _test_engine = create_engine(
             settings.DATABASE_URL_SYNC,
             echo=False,
             future=True,
-            pool_pre_ping=True
+            pool_pre_ping=True,
+            connect_args={"connect_timeout": 1}
         )
+        with _test_engine.connect() as conn:
+            pass
+        sync_engine = _test_engine
         SyncSessionLocal = sessionmaker(
             bind=sync_engine,
             autocommit=False,
@@ -45,7 +49,9 @@ try:
             expire_on_commit=False
         )
 except Exception as e:
-    logger.debug(f"Could not initialize sync database engine: {e}")
+    logger.info(f"PostgreSQL not reachable ({e}). Operating in resilient in-memory mode.")
+    sync_engine = None
+    SyncSessionLocal = None
 
 
 def get_sync_session_factory():

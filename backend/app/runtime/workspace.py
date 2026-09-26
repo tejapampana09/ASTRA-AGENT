@@ -274,6 +274,15 @@ class WorkspaceManager:
         is_git = False
         repo_name = "default_repo"
 
+        # Auto-detect if source_repo_path is a remote git URL
+        if not repo_url and source_repo_path and (
+            str(source_repo_path).strip().startswith("http://")
+            or str(source_repo_path).strip().startswith("https://")
+            or str(source_repo_path).strip().startswith("git@")
+        ):
+            repo_url = str(source_repo_path).strip()
+            source_repo_path = None
+
         # 1. Clone remote repo if requested
         if repo_url:
             repo_name = repo_url.rstrip("/").split("/")[-1].replace(".git", "")
@@ -334,6 +343,18 @@ class WorkspaceManager:
 
         ws = IsolatedWorkspace(task_id=task_id, path=workspace_dir, is_git_repo=is_git, metadata=meta)
         ws.save_metadata()
+
+        # Ensure internal metadata manifest is excluded from git tracking
+        if is_git:
+            try:
+                git_exclude = workspace_dir / ".git" / "info" / "exclude"
+                if git_exclude.parent.exists():
+                    existing = git_exclude.read_text(encoding="utf-8") if git_exclude.exists() else ""
+                    if ".astra_workspace.json" not in existing:
+                        git_exclude.write_text(existing + "\n.astra_workspace.json\n", encoding="utf-8")
+            except Exception:
+                pass
+
         logger.info(f"Created isolated workspace for task {task_id} at {workspace_dir}")
         return ws
 

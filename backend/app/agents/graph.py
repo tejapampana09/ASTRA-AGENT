@@ -54,6 +54,17 @@ def impact_analysis_node(state: AstraAgentState) -> Dict[str, Any]:
             f"ImpactAnalysis: Identified {len(impact_report.affected_files)} downstream files and "
             f"{len(impact_report.relevant_tests)} relevant tests (Risk: {impact_report.risk_level})."
         )
+        try:
+            from app.runtime.lifecycle import event_broker
+            from app.runtime.events import TaskEvent
+            event_broker.publish_sync(TaskEvent(
+                task_id=task_id,
+                event_type="IMPACT_ANALYSIS",
+                message=f"Impact analysis: {len(impact_report.affected_files)} affected files • {len(impact_report.relevant_tests)} tests • Risk: {impact_report.risk_level}",
+                payload=impact_report.to_dict()
+            ))
+        except Exception as e:
+            logger.debug(f"Failed to emit IMPACT_ANALYSIS: {e}")
 
     return {
         "plan_metadata": plan_metadata,
@@ -235,6 +246,42 @@ def finalize_task(state: AstraAgentState) -> Dict[str, Any]:
     final_report["commit"] = commit_info
     final_report["push"] = push_info
     final_report["pull_request"] = pr_info
+
+    if commit_info and commit_info.get("commit_sha"):
+        try:
+            from app.runtime.lifecycle import event_broker
+            from app.runtime.events import TaskEvent
+            event_broker.publish_sync(TaskEvent(
+                task_id=task_id,
+                event_type="COMMIT_CREATED",
+                message=f"Commit created: {commit_info['commit_sha'][:8]} • {commit_info.get('message', '').splitlines()[0]}",
+                payload={
+                    "sha": commit_info["commit_sha"],
+                    "branch": current_branch if 'current_branch' in locals() else "main",
+                    "message": commit_info.get("message", ""),
+                    "staged_files": commit_info.get("staged_files", []),
+                }
+            ))
+        except Exception as e:
+            logger.debug(f"Failed to emit COMMIT_CREATED: {e}")
+
+    if pr_info and pr_info.get("url"):
+        try:
+            from app.runtime.lifecycle import event_broker
+            from app.runtime.events import TaskEvent
+            event_broker.publish_sync(TaskEvent(
+                task_id=task_id,
+                event_type="PR_CREATED",
+                message=f"Pull request created: #{pr_info.get('number')} ({pr_info.get('url')})",
+                payload={
+                    "pr_number": pr_info.get("number"),
+                    "pr_url": pr_info.get("url"),
+                    "title": pr_info.get("title"),
+                    "simulated": pr_info.get("simulated", False),
+                }
+            ))
+        except Exception as e:
+            logger.debug(f"Failed to emit PR_CREATED: {e}")
 
     return {
         "final_result": final_report

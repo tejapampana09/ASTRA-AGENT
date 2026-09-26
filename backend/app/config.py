@@ -7,9 +7,16 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+from dotenv import load_dotenv
+
+# Ensure environment variables are loaded into os.environ
+load_dotenv(".env")
+load_dotenv("../.env")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(".env", "../.env"),
         env_file_encoding="utf-8",
         extra="ignore"
     )

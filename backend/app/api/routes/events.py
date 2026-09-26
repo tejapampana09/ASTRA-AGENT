@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 from fastapi import APIRouter, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
@@ -12,7 +12,7 @@ router = APIRouter(prefix="/events", tags=["events"])
 
 
 @router.get("/stream/{task_id}")
-async def stream_task_events(task_id: str, request: Request):
+async def stream_task_events(task_id: str, request: Request, from_sequence_id: Optional[int] = None):
     """
     Server-Sent Events (SSE) endpoint streaming real-time agent updates.
     """
@@ -26,6 +26,14 @@ async def stream_task_events(task_id: str, request: Request):
         try:
             # Yield initial connection confirmation
             yield json.dumps({"event_type": "CONNECTED", "task_id": task_id, "message": "Stream connected."})
+
+            # Replay historical events according to from_sequence_id if requested
+            past_events = event_broker.get_history(task_id, limit=300)
+            if from_sequence_id is not None:
+                past_events = [pe for pe in past_events if pe.sequence_id > from_sequence_id]
+
+            for pe in past_events:
+                yield json.dumps(pe.to_dict())
 
             while True:
                 if await request.is_disconnected():
