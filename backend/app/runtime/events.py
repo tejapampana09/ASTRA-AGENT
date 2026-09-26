@@ -42,7 +42,7 @@ class AgentEvent:
     task_id: str
     event_type: str
     message: str
-    sequence_id: int = 1
+    sequence_id: Optional[int] = None
     payload: Dict[str, Any] = field(default_factory=dict)
     source: str = "system"
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -50,7 +50,7 @@ class AgentEvent:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "task_id": self.task_id,
-            "sequence_id": self.sequence_id,
+            "sequence_id": self.sequence_id if self.sequence_id is not None else 1,
             "event_type": str(self.event_type),
             "message": self.message,
             "source": self.source,
@@ -157,18 +157,13 @@ class CentralEventBus:
         """Compatibility adapter for legacy TaskEvent objects."""
         from app.safety.policies import SecurityPolicies
 
-        if hasattr(event, "sequence_id"):
-            seq_id = event.sequence_id
-            type_str = str(event.event_type)
-            msg = event.message
-            payload = getattr(event, "payload", {})
-            source = getattr(event, "source", "system")
-        else:
+        seq_id = getattr(event, "sequence_id", None)
+        if seq_id is None:
             seq_id = self._next_sequence_id(event.task_id)
-            type_str = str(event.event_type)
-            msg = event.message
-            payload = getattr(event, "payload", {})
-            source = getattr(event, "source", "system")
+        type_str = str(event.event_type)
+        msg = event.message
+        payload = getattr(event, "payload", {})
+        source = getattr(event, "source", "system")
 
         clean_msg = SecurityPolicies.sanitize_secrets(msg)
         clean_payload = SecurityPolicies.sanitize_payload(payload)
@@ -209,7 +204,9 @@ class CentralEventBus:
         """Synchronous/threadsafe event emission for background worker threads."""
         from app.safety.policies import SecurityPolicies
 
-        seq_id = getattr(event, "sequence_id", None) or self._next_sequence_id(event.task_id)
+        seq_id = getattr(event, "sequence_id", None)
+        if seq_id is None:
+            seq_id = self._next_sequence_id(event.task_id)
         type_str = str(event.event_type)
         msg = SecurityPolicies.sanitize_secrets(event.message)
         payload = SecurityPolicies.sanitize_payload(getattr(event, "payload", {}))

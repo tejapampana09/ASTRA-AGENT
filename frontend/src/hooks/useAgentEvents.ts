@@ -35,31 +35,32 @@ export function useAgentEvents(taskId?: string | null): UseAgentEventsReturn {
   const isRecoveringRef = useRef<boolean>(false);
   const activeTaskIdRef = useRef<string | null>(null);
 
-  // Helper to merge and deduplicate events by sequence_id
+  // Helper to merge and deduplicate events by identity and sequence
   const mergeEvents = useCallback((existing: AgentEvent[], incoming: AgentEvent[]): AgentEvent[] => {
-    const seen = new Set<number>();
+    const seen = new Set<string>();
     const combined: AgentEvent[] = [];
+
+    const getEventKey = (ev: AgentEvent, idx: number) =>
+      `${ev.sequence_id || idx}-${ev.event_type}-${ev.timestamp || ''}-${(ev.message || '').slice(0, 40)}`;
 
     // Add existing
     for (const ev of existing) {
-      const seq = ev.sequence_id ?? 0;
-      if (!seen.has(seq)) {
-        seen.add(seq);
+      const key = getEventKey(ev, combined.length);
+      if (!seen.has(key)) {
+        seen.add(key);
         combined.push(ev);
       }
     }
 
     // Add incoming
     for (const ev of incoming) {
-      const seq = ev.sequence_id ?? 0;
-      if (!seen.has(seq)) {
-        seen.add(seq);
+      const key = getEventKey(ev, combined.length);
+      if (!seen.has(key)) {
+        seen.add(key);
         combined.push(ev);
       }
     }
 
-    // Sort strictly by sequence_id
-    combined.sort((a, b) => (a.sequence_id ?? 0) - (b.sequence_id ?? 0));
     return combined;
   }, []);
 
@@ -112,55 +113,68 @@ export function useAgentEvents(taskId?: string | null): UseAgentEventsReturn {
     es.onmessage = (msg) => {
       if (activeTaskIdRef.current !== currentTaskId) return;
 
+      if (!msg.data || typeof msg.data !== 'string') return;
+      const raw = msg.data.trim();
+      if (!raw || raw.startsWith(':') || raw === 'ping' || raw.startsWith('ping')) {
+        return;
+      }
+
+      let data: any;
       try {
-        const data = JSON.parse(msg.data);
-        if (!data || !data.event_type) return;
+        data = JSON.parse(raw);
+      } catch {
+        return;
+      }
 
-        // Skip internal connection ack
-        if (data.event_type === 'CONNECTED') return;
+      if (!data || !data.event_type) return;
 
-        const seq = Number(data.sequence_id ?? 0);
-        const lastSeq = lastSequenceIdRef.current;
+      // Skip internal connection ack and heartbeat ping
+      if (data.event_type === 'CONNECTED' || data.event_type === 'PING') return;
 
-        // Sequence deduplication guarantee:
-        if (seq > 0 && seq <= lastSeq) {
-          // Already have this event, ignore duplicate
-          return;
+      const seq = Number(data.sequence_id ?? 0);
+      const lastSeq = lastSequenceIdRef.current;
+
+      // Sequence deduplication guarantee:
+      if (seq > 0 && lastSeq > 0 && seq <= lastSeq) {
+        return;
+      }
+
+      // Sequence gap detection guarantee:
+      if (seq > 0 && lastSeq > 0 && seq > lastSeq + 1) {
+        recoverGap(currentTaskId);
+        return;
+      }
+
+      const validEvent: AgentEvent = {
+        task_id: data.task_id || currentTaskId,
+        sequence_id: seq > 0 ? seq : lastSeq + 1,
+        event_type: data.event_type,
+        message: data.message || '',
+        payload: data.payload || {},
+        source: data.source || 'system',
+        timestamp: data.timestamp || new Date().toISOString(),
+      };
+
+      lastSequenceIdRef.current = Math.max(lastSeq, validEvent.sequence_id);
+
+      setEvents((prev) => {
+        if (
+          prev.some(
+            (e) =>
+              e.sequence_id === validEvent.sequence_id &&
+              e.event_type === validEvent.event_type &&
+              e.message === validEvent.message
+          )
+        ) {
+          return prev;
         }
+        return [...prev, validEvent];
+      });
 
-        // Sequence gap detection guarantee:
-        if (seq > 0 && lastSeq > 0 && seq > lastSeq + 1) {
-          // Gap detected, fetch history
-          recoverGap(currentTaskId);
-          return;
-        }
-
-        const validEvent: AgentEvent = {
-          task_id: data.task_id || currentTaskId,
-          sequence_id: seq || lastSeq + 1,
-          event_type: data.event_type,
-          message: data.message || '',
-          payload: data.payload || {},
-          source: data.source || 'system',
-          timestamp: data.timestamp || new Date().toISOString(),
-        };
-
-        lastSequenceIdRef.current = validEvent.sequence_id;
-
-        setEvents((prev) => {
-          if (prev.some((e) => e.sequence_id === validEvent.sequence_id)) {
-            return prev;
-          }
-          return [...prev, validEvent];
-        });
-
-        // Check if task finished
-        if (['TASK_COMPLETED', 'TASK_FAILED', 'TASK_CANCELLED', 'TASK_TIMEOUT'].includes(validEvent.event_type)) {
-          setConnectionState('completed');
-          es.close();
-        }
-      } catch (err) {
-        console.warn('[useAgentEvents] Failed to parse SSE event:', err);
+      // Check if task finished
+      if (['TASK_COMPLETED', 'TASK_FAILED', 'TASK_CANCELLED', 'TASK_TIMEOUT'].includes(validEvent.event_type)) {
+        setConnectionState('completed');
+        es.close();
       }
     };
 

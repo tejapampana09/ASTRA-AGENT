@@ -44,8 +44,8 @@ async def stream_task_events(task_id: str, request: Request, from_sequence_id: O
                     if event.event_type in ["TASK_COMPLETED", "TASK_FAILED", "TASK_CANCELLED"]:
                         break
                 except asyncio.TimeoutError:
-                    # Keep-alive heartbeat comment
-                    yield ": ping\n\n"
+                    # Keep-alive heartbeat event
+                    yield json.dumps({"event_type": "PING", "task_id": task_id})
         finally:
             event_broker.unsubscribe(task_id, queue)
 
