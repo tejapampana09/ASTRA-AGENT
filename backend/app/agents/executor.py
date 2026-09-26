@@ -85,10 +85,10 @@ def execute_step(state: AstraAgentState) -> Dict[str, Any]:
             logger.warning(f"Failed to stream agent event: {err}")
 
     task_model = state.get("model")
-    if task_model in ["ollama", "local", "qwen"]:
+    if not task_model or task_model in ["gemini", "cloud", "flash"]:
+        task_model = "gemini/gemini-3.8-flash"
+    elif task_model in ["ollama", "local", "qwen"]:
         task_model = "ollama/qwen2.5-coder:3b"
-    elif task_model in ["gemini", "cloud"]:
-        task_model = "gemini/gemini-3.1-flash-lite"
 
     result = runtime.execute_task(
         workspace=workspace,

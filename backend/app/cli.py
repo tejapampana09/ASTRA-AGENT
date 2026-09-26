@@ -9,6 +9,10 @@ import uuid
 import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from dotenv import load_dotenv
+
+# Load local environment variables (.env)
+load_dotenv()
 
 # Suppress python runtime warnings and thread noise
 warnings.filterwarnings("ignore")
@@ -103,12 +107,12 @@ class AstraCLI:
         # Auto-detect best model: default to Gemini if API key present, else Ollama
         has_gemini = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("LLM_API_KEY"))
         if model:
-            if "gemini" in model.lower() or "cloud" in model.lower():
-                self.model = "gemini/gemini-2.5-flash"
+            if "gemini" in model.lower() or "cloud" in model.lower() or "flash" in model.lower():
+                self.model = "gemini/gemini-3.8-flash"
             else:
                 self.model = "ollama/qwen2.5-coder:3b"
         else:
-            self.model = "gemini/gemini-2.5-flash" if has_gemini else "ollama/qwen2.5-coder:3b"
+            self.model = "gemini/gemini-3.8-flash" if has_gemini else "ollama/qwen2.5-coder:3b"
 
         self.mode = mode
         self.repo_path = repo_path or str(Path.cwd().resolve())
@@ -125,7 +129,7 @@ class AstraCLI:
         )
 
     def print_header(self):
-        model_display = "⚡ Gemini Flash (gemini-2.5-flash)" if "gemini" in self.model else "🦙 Ollama Local (qwen2.5-coder:3b)"
+        model_display = "⚡ Gemini 3.8 Flash (gemini-3.8-flash)" if "gemini" in self.model else "🦙 Ollama Local (qwen2.5-coder:3b)"
         repo_name = Path(self.repo_path).name or self.repo_path
 
         console.print("\n[bold cyan]✦ ASTRA 2.0[/bold cyan] [dim]— Autonomous Coding Agent[/dim]")
@@ -314,8 +318,8 @@ class AstraCLI:
                         self.model = "ollama/qwen2.5-coder:3b"
                         console.print("[green]Switched model to:[/green] 🦙 Ollama Local (qwen2.5-coder:3b)\n")
                     elif len(parts) > 1 and parts[1].lower() in ["gemini", "cloud", "flash"]:
-                        self.model = "gemini/gemini-2.5-flash"
-                        console.print("[green]Switched model to:[/green] ⚡ Gemini Flash (gemini-2.5-flash)\n")
+                        self.model = "gemini/gemini-3.8-flash"
+                        console.print("[green]Switched model to:[/green] ⚡ Gemini 3.8 Flash (gemini-3.8-flash)\n")
                     else:
                         console.print(f"[dim]Active: {self.model}. Usage: /model [gemini|ollama][/dim]\n")
                     continue
@@ -406,20 +410,26 @@ class AstraCLI:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="ASTRA 2.0 Autonomous Software Engineer CLI")
-    parser.add_argument("goal", nargs="?", help="Direct goal to execute (optional)")
-    parser.add_argument("--model", "-m", default=None, choices=["ollama", "gemini", "qwen", "cloud", "flash"], help="LLM provider: gemini or ollama")
-    parser.add_argument("--mode", default="autonomous", choices=["autonomous", "guided"], help="Execution mode")
-    parser.add_argument("--repo", "-r", default=None, help="Target repository path or Git URL")
+    try:
+        parser = argparse.ArgumentParser(description="ASTRA 2.0 Autonomous Software Engineer CLI")
+        parser.add_argument("goal", nargs="?", help="Direct goal to execute (optional)")
+        parser.add_argument("--model", "-m", default=None, choices=["ollama", "gemini", "qwen", "cloud", "flash"], help="LLM provider: gemini or ollama")
+        parser.add_argument("--mode", default="autonomous", choices=["autonomous", "guided"], help="Execution mode")
+        parser.add_argument("--repo", "-r", default=None, help="Target repository path or Git URL")
 
-    args = parser.parse_args()
+        args = parser.parse_args()
 
-    cli = AstraCLI(model=args.model, mode=args.mode, repo_path=args.repo)
+        cli = AstraCLI(model=args.model, mode=args.mode, repo_path=args.repo)
 
-    if args.goal:
-        asyncio.run(cli.execute_goal(args.goal))
-    else:
-        asyncio.run(cli.run_repl())
+        if args.goal:
+            asyncio.run(cli.execute_goal(args.goal))
+        else:
+            asyncio.run(cli.run_repl())
+    except KeyboardInterrupt:
+        console.print("\n[dim]✦ Exiting ASTRA. Bye![/dim]\n")
+        sys.exit(0)
+    except SystemExit:
+        pass
 
 
 if __name__ == "__main__":
