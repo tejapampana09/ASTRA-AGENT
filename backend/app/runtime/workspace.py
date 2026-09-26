@@ -239,6 +239,143 @@ class IsolatedWorkspace:
                 logger.error(f"Error during workspace cleanup: {e}")
 
 
+@dataclass
+class LocalExecutionWorkspace:
+    """
+    LOCAL EXECUTION WORKSPACE (Phase 2):
+    Operates directly on the user's actual local repository without copying,
+    without cloning into ASTRA/workspaces, and without modifying or replacing existing .git metadata.
+    """
+    task_id: str
+    path: Path
+    is_git_repo: bool = False
+    metadata: Optional[WorkspaceMetadata] = None
+
+    def __post_init__(self):
+        self.path = Path(self.path).resolve()
+        self.is_git_repo = (self.path / ".git").is_dir()
+        if self.metadata is None:
+            self.metadata = WorkspaceMetadata(
+                task_id=self.task_id,
+                repo_name=self.path.name,
+                is_git_repo=self.is_git_repo
+            )
+
+    def validate_path(self, relative_or_absolute_path: str | Path) -> Path:
+        """
+        Validates that a path stays inside the selected local repository.
+        Prevents directory traversal attacks (../../) and symlink escapes.
+        Normal files like src/app.py, tests/test_app.py are permitted.
+        """
+        target = Path(relative_or_absolute_path)
+        if not target.is_absolute():
+            target = (self.path / target).resolve()
+        else:
+            target = target.resolve()
+
+        resolved_root = self.path.resolve()
+        try:
+            target.relative_to(resolved_root)
+        except ValueError:
+            raise WorkspaceSecurityError(
+                f"Security violation: path '{relative_or_absolute_path}' is outside repository '{self.path}'"
+            )
+
+        if target.is_symlink():
+            real_target = target.resolve()
+            try:
+                real_target.relative_to(resolved_root)
+            except ValueError:
+                raise WorkspaceSecurityError(
+                    f"Security violation: symlink '{target}' points outside repository"
+                )
+
+        return target
+
+    def is_dirty(self) -> bool:
+        if not self.is_git_repo:
+            return False
+        try:
+            res = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=self.path,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            return len(res.stdout.strip()) > 0
+        except Exception:
+            return False
+
+    def get_modified_files(self) -> List[str]:
+        if not self.is_git_repo:
+            return []
+        try:
+            res = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=self.path,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            files = []
+            for line in res.stdout.splitlines():
+                if not line.strip():
+                    continue
+                file_part = line[2:].strip()
+                if " -> " in file_part:
+                    file_part = file_part.split(" -> ")[1].strip()
+                file_part = file_part.strip('"\'')
+                files.append(file_part.replace("\\", "/"))
+            return sorted(files)
+        except Exception as e:
+            logger.warning(f"Failed to get modified files from git: {e}")
+            return []
+
+    def get_git_diff(self) -> str:
+        if not self.is_git_repo:
+            return ""
+        try:
+            subprocess.run(["git", "add", "-N", "."], cwd=self.path, capture_output=True, check=False)
+            res = subprocess.run(
+                ["git", "diff", "HEAD"],
+                cwd=self.path,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            if not res.stdout.strip():
+                res_unstaged = subprocess.run(
+                    ["git", "diff"],
+                    cwd=self.path,
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                return res_unstaged.stdout
+            return res.stdout
+        except Exception as e:
+            logger.warning(f"Failed to get git diff: {e}")
+            return ""
+
+    def list_files(self, relative_dir: str = ".") -> List[str]:
+        start_dir = self.validate_path(relative_dir)
+        files = []
+        for root, dirs, filenames in os.walk(start_dir):
+            dirs[:] = [d for d in dirs if d not in {".git", "__pycache__", "node_modules", ".venv"}]
+            for fname in filenames:
+                if fname == ".astra_workspace.json":
+                    continue
+                full_path = Path(root) / fname
+                rel_path = full_path.relative_to(self.path)
+                files.append(str(rel_path).replace("\\", "/"))
+        return sorted(files)
+
+    def cleanup(self) -> None:
+        """Never delete user repository in LOCAL mode."""
+        pass
+
+
 class WorkspaceManager:
     """
     ENTERPRISE WORKSPACE & MULTI-REPO MANAGER (P4.9):
@@ -366,6 +503,17 @@ class WorkspaceManager:
 
         logger.info(f"Created isolated workspace for task {task_id} at {workspace_dir}")
         return ws
+
+    def get_local_workspace(self, task_id: str, repo_path: str | Path) -> LocalExecutionWorkspace:
+        """
+        Binds a LocalExecutionWorkspace targeting the user's actual repository.
+        Does not copy or clone files; does not modify or reinitialize .git.
+        """
+        path = Path(repo_path).resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"Local repository path does not exist: {path}")
+        logger.info(f"Binding LOCAL workspace for task {task_id} at {path}")
+        return LocalExecutionWorkspace(task_id=task_id, path=path)
 
     def get_workspace(self, task_id: str) -> Optional[IsolatedWorkspace]:
         """Retrieve existing workspace if it exists on disk."""

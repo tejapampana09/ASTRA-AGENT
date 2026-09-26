@@ -76,16 +76,31 @@ class TaskLifecycleManager:
 
         await event_broker.publish(TaskEvent(task_id=task_id, event_type="TASK_STARTED", message=f"Task {task_id} started."))
 
-        # 1. Create isolated workspace
+        # 1. Determine execution workspace: LOCAL vs SANDBOX
         raw_repo = (task_info.get("repository_path") or "").strip()
         is_url = raw_repo.startswith("http://") or raw_repo.startswith("https://") or raw_repo.startswith("git@")
-        ws = self.workspace_mgr.create_workspace(
-            task_id=task_id,
-            source_repo_path=None if is_url else (raw_repo or None),
-            repo_url=raw_repo if is_url else None,
-        )
+
+        # In CLI/Desktop mode or when valid local path is specified without URL, default to LOCAL execution mode
+        exec_mode = task_info.get("execution_mode")
+        if not exec_mode:
+            exec_mode = "LOCAL" if (not is_url and raw_repo and Path(raw_repo).exists()) else "SANDBOX"
+
+        if exec_mode == "LOCAL" and not is_url and raw_repo and Path(raw_repo).exists():
+            ws = self.workspace_mgr.get_local_workspace(task_id=task_id, repo_path=raw_repo)
+            logger.info(f"ASTRA EXECUTION MODE: LOCAL")
+            logger.info(f"ASTRA WORKSPACE: {ws.path}")
+        else:
+            ws = self.workspace_mgr.create_workspace(
+                task_id=task_id,
+                source_repo_path=None if is_url else (raw_repo or None),
+                repo_url=raw_repo if is_url else None,
+            )
+            logger.info(f"ASTRA EXECUTION MODE: SANDBOX")
+            logger.info(f"ASTRA WORKSPACE: {ws.path}")
+
         task_info["workspace_path"] = str(ws.path)
-        self.job_manager._update_task_state(task_id, workspace_path=str(ws.path))
+        task_info["execution_mode"] = exec_mode
+        self.job_manager._update_task_state(task_id, workspace_path=str(ws.path), execution_mode=exec_mode)
 
         # 2. Prepare initial state
         initial_state: AstraAgentState = {
@@ -94,6 +109,7 @@ class TaskLifecycleManager:
             "user_goal": task_info["goal"],
             "model": task_info.get("model"),
             "mode": task_info.get("mode", "autonomous"),
+            "execution_mode": exec_mode,
             "workspace_path": str(ws.path),
             "iteration_count": 0,
             "retry_count": 0,

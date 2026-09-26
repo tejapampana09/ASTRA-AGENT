@@ -35,7 +35,12 @@ def execute_step(state: AstraAgentState) -> Dict[str, Any]:
         }
 
     ws_path = Path(workspace_path_str)
-    workspace = IsolatedWorkspace(task_id=task_id, path=ws_path, is_git_repo=(ws_path / ".git").exists())
+    from app.runtime.workspace import IsolatedWorkspace, LocalExecutionWorkspace
+    exec_mode = (state.get("execution_mode") or "LOCAL").upper()
+    if exec_mode == "LOCAL" or not ("workspaces" in str(ws_path) and task_id in str(ws_path)):
+        workspace = LocalExecutionWorkspace(task_id=task_id, path=ws_path)
+    else:
+        workspace = IsolatedWorkspace(task_id=task_id, path=ws_path, is_git_repo=(ws_path / ".git").exists())
 
     # Build prompt combining goal and failure feedback if replanning
     prompt_lines = [
@@ -84,11 +89,10 @@ def execute_step(state: AstraAgentState) -> Dict[str, Any]:
         except Exception as err:
             logger.warning(f"Failed to stream agent event: {err}")
 
-    task_model = state.get("model")
-    if not task_model or task_model in ["gemini", "cloud", "flash"]:
-        task_model = "gemini/gemini-3.8-flash"
-    elif task_model in ["ollama", "local", "qwen"]:
-        task_model = "ollama/qwen2.5-coder:3b"
+    # Canonical unified model resolution (Phase 7)
+    from app.llm.resolver import resolve_model
+    resolved = resolve_model(requested_model=state.get("model"))
+    task_model = resolved.model
 
     result = runtime.execute_task(
         workspace=workspace,

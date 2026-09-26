@@ -11,7 +11,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 from app.config import settings
 from app.observability.logging import logger
-from app.runtime.workspace import IsolatedWorkspace
+from app.runtime.workspace import IsolatedWorkspace, LocalExecutionWorkspace
+from app.llm.resolver import resolve_model, ResolvedModel
 
 
 @dataclass
@@ -102,83 +103,26 @@ class AgentRuntime:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None
     ) -> Any:
-        """Configures the OpenHands LLM client."""
+        """Configures the OpenHands LLM client using canonical resolve_model."""
         from openhands.sdk import LLM
         from pydantic import SecretStr
 
-        selected_model = model or os.environ.get("LLM_MODEL")
-        key = api_key or os.environ.get("LLM_API_KEY") or os.environ.get("GEMINI_API_KEY")
-        detected_base_url = base_url or os.environ.get("LLM_BASE_URL")
-
-        # Explicit model prioritization
-        if model and ("ollama" in model.lower() or "qwen" in model.lower()):
-            selected_model = "ollama/qwen2.5-coder:3b"
-            detected_base_url = "http://localhost:11434"
-            key = "ollama-local"
-        elif model and "gemini" in model.lower():
-            selected_model = model if "/" in model else f"gemini/{model}"
-            key = key or os.environ.get("GEMINI_API_KEY")
-
-        # Detect Gemini key prefix (AQ. or AIza)
-        if not ("ollama" in str(selected_model).lower()) and key and (str(key).startswith("AQ.") or str(key).startswith("AIza")):
-            os.environ["GEMINI_API_KEY"] = str(key)
-            if not model and (not selected_model or "claude" in selected_model):
-                selected_model = os.environ.get("LLM_MODEL") or "gemini/gemini-3.1-flash-lite"
-
-        # Auto-detect standard provider environment variables and match model prefix
-        if not model:
-            if not key:
-                if os.environ.get("OPENROUTER_API_KEY") or (key and str(key).startswith("sk-or-v1")):
-                    key = os.environ.get("OPENROUTER_API_KEY") or key
-                    detected_base_url = detected_base_url or "https://openrouter.ai/api/v1"
-                    if not selected_model or "claude" in selected_model:
-                        selected_model = "openrouter/anthropic/claude-3.5-sonnet"
-                elif os.environ.get("GEMINI_API_KEY"):
-                    key = os.environ.get("GEMINI_API_KEY")
-                    if not selected_model or "claude" in selected_model:
-                        selected_model = "gemini/gemini-2.5-flash"
-                elif os.environ.get("ANTHROPIC_API_KEY"):
-                    key = os.environ.get("ANTHROPIC_API_KEY")
-                    if not selected_model:
-                        selected_model = "anthropic/claude-sonnet-4-5-20250929"
-                elif os.environ.get("OPENAI_API_KEY"):
-                    key = os.environ.get("OPENAI_API_KEY")
-                    if not selected_model:
-                        selected_model = "openai/gpt-4o"
-
-            # Respect explicitly configured LLM_MODEL from environment if present
-            env_model = os.environ.get("LLM_MODEL")
-            if env_model:
-                selected_model = env_model
-            elif key and str(key).startswith("sk-or-v1-"):
-                detected_base_url = detected_base_url or "https://openrouter.ai/api/v1"
-                if not selected_model:
-                    selected_model = "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
-
-        selected_model = selected_model or self.settings.LLM_MODEL
-
-        effective_base_url = detected_base_url or self.settings.LLM_BASE_URL
-        if str(selected_model).startswith("gemini/"):
-            effective_base_url = None
+        resolved = resolve_model(requested_model=model, api_key=api_key, base_url=base_url)
 
         llm_kwargs: Dict[str, Any] = {
-            "model": selected_model,
-            "timeout": self.settings.LLM_TIMEOUT_SECONDS,
-            "temperature": self.settings.LLM_TEMPERATURE,
+            "model": resolved.model,
+            "timeout": resolved.timeout,
+            "temperature": resolved.temperature,
+            "drop_params": resolved.drop_params,
         }
-        if key:
-            llm_kwargs["api_key"] = SecretStr(key)
-        if effective_base_url:
-            llm_kwargs["base_url"] = effective_base_url
+        if resolved.api_key:
+            llm_kwargs["api_key"] = SecretStr(resolved.api_key)
+        if resolved.base_url:
+            llm_kwargs["base_url"] = resolved.base_url
 
-        is_ollama = "ollama" in str(selected_model).lower() or "qwen" in str(selected_model).lower()
-        if is_ollama:
+        if resolved.provider == "ollama":
             llm_kwargs["extended_thinking_budget"] = None
             llm_kwargs["reasoning_effort"] = None
-            llm_kwargs["drop_params"] = True
-            llm_kwargs["timeout"] = max(300, self.settings.LLM_TIMEOUT_SECONDS)
-        else:
-            llm_kwargs["drop_params"] = True
 
         return LLM(**llm_kwargs)
 
@@ -344,7 +288,7 @@ class AgentRuntime:
 
     def execute_task(
         self,
-        workspace: IsolatedWorkspace,
+        workspace: IsolatedWorkspace | LocalExecutionWorkspace,
         prompt: str,
         on_event: Optional[Callable[[AstraAgentEvent], None]] = None,
         max_iterations: Optional[int] = None,
@@ -352,7 +296,7 @@ class AgentRuntime:
         api_key: Optional[str] = None,
     ) -> AstraExecutionResult:
         """
-        Executes a coding task within an isolated workspace using the OpenHands SDK.
+        Executes a coding task within an execution workspace (Local or Isolated) using the OpenHands SDK.
         Streams events, tracks tool calls, and returns a structured AstraExecutionResult.
         """
         start_time = datetime.now(timezone.utc)
@@ -360,6 +304,12 @@ class AgentRuntime:
         tool_calls: List[AstraToolCall] = []
         captured_messages: List[str] = []
         error_msg: Optional[str] = None
+
+        # Phase 5 Requirement: Log execution mode and workspace path
+        is_local = isinstance(workspace, LocalExecutionWorkspace) or not ("workspaces" in str(workspace.path) and workspace.task_id in str(workspace.path))
+        exec_mode = "LOCAL" if is_local else "SANDBOX"
+        logger.info(f"ASTRA EXECUTION MODE: {exec_mode}")
+        logger.info(f"ASTRA WORKSPACE: {workspace.path.resolve()}")
 
         def emit(event_type: str, message: str, payload: Optional[Dict[str, Any]] = None):
             ev = AstraAgentEvent(event_type=event_type, message=message, payload=payload or {})
@@ -374,6 +324,18 @@ class AgentRuntime:
         try:
             from openhands.sdk import Agent, Conversation, LocalWorkspace
             from openhands.sdk.event.base import Event
+
+            try:
+                from openhands.sdk.conversation.visualizer import ConversationVisualizerBase
+                class SilentVisualizer(ConversationVisualizerBase):
+                    def on_event(self, event):
+                        pass
+                    def close(self):
+                        pass
+            except Exception:
+                class SilentVisualizer:
+                    def __getattr__(self, name):
+                        return lambda *args, **kwargs: None
 
             llm = self._configure_llm(model=model, api_key=api_key)
             tools = self._configure_tools()
@@ -405,6 +367,7 @@ class AgentRuntime:
                 callbacks=[openhands_event_listener],
                 max_iteration_per_run=max_iterations or self.settings.MAX_ITERATIONS,
                 delete_on_close=False,
+                visualizer=SilentVisualizer(),
             )
 
             with self._lock:

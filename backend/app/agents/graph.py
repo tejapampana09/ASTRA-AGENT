@@ -195,14 +195,18 @@ def finalize_task(state: AstraAgentState) -> Dict[str, Any]:
     except Exception as mem_err:
         logger.warning(f"Error persisting task memory in finalize_task: {mem_err}")
 
-    # Autonomous Git Commit and PR Creation (Phase 4.1)
+    # Autonomous Git Commit and PR Creation (Phase 4.1 & Phase 11)
     workspace_path = state.get("workspace_path")
     commit_info = None
     push_info = None
     pr_info = None
+    exec_mode = (state.get("execution_mode") or "LOCAL").upper()
+    auto_push = state.get("auto_push", False)
+    auto_commit = state.get("auto_commit", False) or exec_mode != "LOCAL"
+
     if workspace_path and verification_status in ["verified", "VERIFIED"]:
         ws_p = Path(workspace_path)
-        if ws_p.exists():
+        if ws_p.exists() and (ws_p / ".git").is_dir():
             try:
                 from app.git.commit import CommitManager
                 from app.git.pr import PullRequestManager
@@ -210,38 +214,42 @@ def finalize_task(state: AstraAgentState) -> Dict[str, Any]:
 
                 current_branch = BranchManager.get_current_branch(ws_p)
                 test_summary = f"{test_results.get('passed', 0)} passed, {test_results.get('failed', 0)} failed"
-                commit_info = CommitManager.create_commit(
-                    workspace_path=ws_p,
-                    task_id=task_id,
-                    goal=state.get("user_goal", ""),
-                    files_changed=files_changed,
-                    verification_status=verification_status,
-                    test_summary=test_summary
-                )
 
-                push_info = PullRequestManager.push_branch(
-                    workspace_path=ws_p,
-                    remote="origin",
-                    branch_name=current_branch
-                )
+                if auto_commit:
+                    commit_info = CommitManager.create_commit(
+                        workspace_path=ws_p,
+                        task_id=task_id,
+                        goal=state.get("user_goal", ""),
+                        files_changed=files_changed,
+                        verification_status=verification_status,
+                        test_summary=test_summary
+                    )
 
-                pr_desc = PullRequestManager.generate_pr_description(
-                    task_id=task_id,
-                    goal=state.get("user_goal", ""),
-                    files_changed=files_changed,
-                    verification_evidence=verification_evidence,
-                    failure_history=failure_history
-                )
+                # In LOCAL mode, do not automatically push or create PR without explicit authorization
+                if auto_push and exec_mode != "LOCAL":
+                    push_info = PullRequestManager.push_branch(
+                        workspace_path=ws_p,
+                        remote="origin",
+                        branch_name=current_branch
+                    )
 
-                pr_info = PullRequestManager.create_pull_request(
-                    repo=repo_id,
-                    head_branch=current_branch,
-                    base_branch="main",
-                    title=f"ASTRA: {state.get('user_goal', '')[:60]}",
-                    body=pr_desc
-                )
+                    pr_desc = PullRequestManager.generate_pr_description(
+                        task_id=task_id,
+                        goal=state.get("user_goal", ""),
+                        files_changed=files_changed,
+                        verification_evidence=verification_evidence,
+                        failure_history=failure_history
+                    )
+
+                    pr_info = PullRequestManager.create_pull_request(
+                        repo=repo_id,
+                        head_branch=current_branch,
+                        base_branch="main",
+                        title=f"ASTRA: {state.get('user_goal', '')[:60]}",
+                        body=pr_desc
+                    )
             except Exception as git_err:
-                logger.warning(f"Git/PR creation in finalize_task: {git_err}")
+                logger.warning(f"Git operations in finalize_task: {git_err}")
 
     final_report["commit"] = commit_info
     final_report["push"] = push_info

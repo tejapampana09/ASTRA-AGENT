@@ -99,20 +99,12 @@ class AstraCLI:
     def __init__(
         self,
         model: Optional[str] = None,
-        mode: str = "autonomous",
+        mode: str = "chat",
         repo_path: Optional[str] = None,
     ):
-        silence_background_logging()
-
-        # Auto-detect best model: default to Gemini if API key present, else Ollama
-        has_gemini = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("LLM_API_KEY"))
-        if model:
-            if "gemini" in model.lower() or "cloud" in model.lower() or "flash" in model.lower():
-                self.model = "gemini/gemini-3.8-flash"
-            else:
-                self.model = "ollama/qwen2.5-coder:3b"
-        else:
-            self.model = "gemini/gemini-3.8-flash" if has_gemini else "ollama/qwen2.5-coder:3b"
+        from app.llm.resolver import resolve_model
+        resolved = resolve_model(requested_model=model)
+        self.model = resolved.model
 
         self.mode = mode
         self.repo_path = repo_path or str(Path.cwd().resolve())
@@ -129,25 +121,15 @@ class AstraCLI:
         )
 
     def print_header(self):
-        banner = """[bold cyan]
-    █████╗ ███████╗████████╗██████╗  █████╗ 
-   ██╔══██╗██╔════╝╚══██╔══╝██╔══██╗██╔══██╗
-   ███████║███████╗   ██║   ██████╔╝███████║
-   ██╔══██║╚════██║   ██║   ██╔══██╗██╔══██║
-   ██║  ██║███████║   ██║   ██║  ██║██║  ██║
-   ╚═╝  ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝
-[/bold cyan][dim]2.0 — Autonomous Software Engineer (Terminal Edition)[/dim]
-"""
-        console.print(banner)
-        model_display = "⚡ Gemini 3.8 Flash (gemini-3.8-flash)" if "gemini" in self.model else "🦙 Ollama Local (qwen2.5-coder:3b)"
-        mode_display = "🚀 Autonomous (auto-correct & push)" if self.mode == "autonomous" else "🛡️ Guided (human approvals)"
-
-        console.print(f"Model:      {model_display}")
-        console.print(f"Mode:       {mode_display}")
-        console.print(f"Repository: [cyan]{self.repo_path}[/cyan]\n")
+        console.print("[bold cyan]ASTRA[/bold cyan]")
+        console.print("[dim]────────────────────────[/dim]\n")
+        console.print(f"[bold]Repository:[/bold]\n{self.repo_path}\n")
+        console.print("[bold]Mode:[/bold]\nLOCAL\n")
+        console.print(f"[bold]Model:[/bold]\n{self.model}\n")
+        console.print("[bold]Agent:[/bold]\n[green]Ready[/green]\n")
 
     async def execute_goal(self, goal: str) -> None:
-        """Executes a goal cleanly with live terminal activity indicators like Gemini CLI / Claude Code."""
+        """Executes a goal cleanly with live terminal activity indicators."""
         # Check for simple conversational messages first
         normalized = goal.strip().lower()
         if normalized in CONVERSATIONAL_PROMPTS:
@@ -161,7 +143,7 @@ class AstraCLI:
         contextual_goal = self._conversation_manager.build_contextual_prompt(self.session.id, goal)
 
         console.print(f"\n[bold green]You:[/bold green] {goal}")
-        console.print(f"[dim]● Task [bold]{task_id}[/bold] initiated[/dim]")
+        console.print(f"[dim]● Task [bold]{task_id}[/bold] initiated[/dim]\n")
 
         task_info = self.lifecycle.create_task(
             task_id=task_id,
@@ -171,8 +153,7 @@ class AstraCLI:
             mode=self.mode,
         )
 
-        if self.session.workspace_path:
-            task_info["workspace_path"] = self.session.workspace_path
+        task_info["execution_mode"] = "LOCAL"
 
         from app.runtime.events import central_event_bus
         event_queue = central_event_bus.subscribe(task_id)
@@ -190,63 +171,69 @@ class AstraCLI:
                     msg = event.message
                     payload = event.payload or {}
 
-                    if ev_type in ["PLANNING_STARTED", "PLANNING"]:
-                        status.update("[bold magenta]Investigating codebase architecture & planning...[/bold magenta]")
+                    if ev_type in ["UNDERSTAND", "PLANNING"]:
+                        status.update("[cyan]Analyzing repository architecture...[/cyan]")
+
+                    elif ev_type in ["PLANNING_STARTED"]:
+                        status.stop()
+                        console.print("  [bold green]✓[/bold green] Repository analyzed")
+                        status.start()
 
                     elif ev_type in ["PLAN_GENERATED"]:
                         status.stop()
                         steps = payload.get("steps", [])
-                        console.print("\n[bold magenta]📋 Plan:[/bold magenta]")
+                        console.print("  [bold green]✓[/bold green] Plan generated\n")
                         for idx, step in enumerate(steps, 1):
-                            console.print(f"   [cyan]{idx}.[/cyan] {step}")
+                            console.print(f"    [dim]{idx}.[/dim] {step}")
                         console.print()
                         status.start()
-                        status.update("[bold sky_blue1]Executing planned actions...[/bold sky_blue1]")
+                        status.update("[cyan]Executing planned actions...[/cyan]")
 
                     elif ev_type in ["TOOL_CALL_STARTED"]:
+                        status.stop()
                         tool = payload.get("tool", "")
                         cmd = payload.get("command", "") or msg
-                        cmd_display = cmd.replace("\n", " ").strip()
-                        if len(cmd_display) > 80:
-                            cmd_display = cmd_display[:77] + "..."
-                        status.update(f"[bold yellow]Running:[/bold yellow] [dim]{tool}[/dim] {cmd_display}")
-
-                    elif ev_type in ["FILE_CHANGED"]:
-                        status.stop()
                         path = payload.get("path", "")
-                        op = payload.get("operation", "modified")
-                        console.print(f"  [bold green]✓[/bold green] [green]{op.capitalize()}:[/green] [bold cyan]{path}[/bold cyan]")
+                        if "read" in tool.lower() or "view" in str(cmd).lower():
+                            console.print(f"  [cyan]→[/cyan] Reading [bold]{path or cmd}[/bold]")
+                        elif "edit" in tool.lower() or "create" in tool.lower() or "file" in tool.lower():
+                            console.print(f"  [green]→[/green] Editing [bold]{path or cmd}[/bold]")
+                        else:
+                            cmd_disp = cmd.replace("\n", " ").strip()
+                            if len(cmd_disp) > 70:
+                                cmd_disp = cmd_disp[:67] + "..."
+                            console.print(f"  [yellow]→[/yellow] Running [bold]{cmd_disp}[/bold]")
                         status.start()
 
                     elif ev_type in ["TEST_STARTED"]:
+                        status.stop()
                         cmd = payload.get("command", "pytest")
-                        status.update(f"[bold yellow]Running test verification ({cmd})...[/bold yellow]")
+                        console.print(f"  [yellow]→[/yellow] Running [bold]{cmd}[/bold]")
+                        status.start()
 
                     elif ev_type in ["TEST_COMPLETED"]:
                         status.stop()
                         passed = payload.get("passed", 0)
                         failed = payload.get("failed", 0)
                         if failed > 0:
-                            console.print(f"  [bold red]✗ Tests:[/bold red] [red]{failed} failed[/red], [green]{passed} passed[/green]")
+                            console.print(f"  [bold red]✗[/bold red] [red]{failed} tests failed[/red]")
                         else:
-                            console.print(f"  [bold green]✓ Tests:[/bold green] [green]All {passed} passed clean[/green]")
+                            console.print(f"  [bold green]✓[/bold green] [green]{passed} tests passed[/green]")
                         status.start()
 
-                    elif ev_type in ["DEBUG_STARTED", "HYPOTHESIS_FORMULATED", "REPLAN_TRIGGERED"]:
-                        status.update(f"[bold orange3]Self-correcting:[/bold orange3] {msg[:60]}...")
-
-                    elif ev_type in ["AUDIT_COMPLETED"]:
-                        status.update(f"[bold cyan]Auditing changes...[/bold cyan]")
-
-                    elif ev_type in ["COMMIT_CREATED"]:
+                    elif ev_type in ["DEBUG_STARTED", "HYPOTHESIS_FORMULATED"]:
                         status.stop()
-                        sha = payload.get("sha", "")[:7]
-                        console.print(f"  [bold green]📦 Commit:[/bold green] [cyan]{sha}[/cyan] • {msg}")
+                        console.print("  [orange3]→[/orange3] Diagnosing failure")
                         status.start()
 
-                    elif ev_type in ["PUSH_COMPLETED", "PR_CREATED"]:
+                    elif ev_type in ["REPLAN_TRIGGERED"]:
                         status.stop()
-                        console.print(f"  [bold blue]🚀 Git:[/bold blue] {msg}")
+                        console.print("  [orange3]→[/orange3] Fixing code & reapplying plan")
+                        status.start()
+
+                    elif ev_type in ["AUDIT_COMPLETED", "DIFF_INSPECTED"]:
+                        status.stop()
+                        console.print("  [bold green]✓[/bold green] Diff verified")
                         status.start()
 
                     elif ev_type in ["APPROVAL_REQUIRED"]:
@@ -264,19 +251,19 @@ class AstraCLI:
 
                     elif ev_type in ["TASK_COMPLETED"]:
                         status.stop()
-                        console.print(f"\n[bold green]✦ Task Completed Successfully[/bold green]\n")
+                        console.print("\n[bold green]Task completed.[/bold green]\n")
                         status.start()
 
                     elif ev_type in ["TASK_FAILED"]:
                         status.stop()
-                        console.print(f"\n[bold red]✗ Task Incomplete[/bold red]: {msg}\n")
+                        console.print(f"\n[bold red]Task incomplete:[/bold red] {msg}\n")
                         status.start()
 
                 await agent_task
 
             except asyncio.CancelledError:
                 self.lifecycle.cancel_task(task_id)
-                console.print("\n[yellow]Task cancelled.[/yellow]")
+                console.print("\n[yellow]Task cancelled.[/yellow]\n")
             finally:
                 central_event_bus.unsubscribe(task_id, event_queue)
 
@@ -322,35 +309,52 @@ class AstraCLI:
 
                 elif user_input.startswith("/model"):
                     parts = user_input.split()
-                    if len(parts) > 1 and parts[1].lower() in ["ollama", "qwen", "local"]:
-                        self.model = "ollama/qwen2.5-coder:3b"
-                        console.print("[green]Switched model to:[/green] 🦙 Ollama Local (qwen2.5-coder:3b)\n")
-                    elif len(parts) > 1 and parts[1].lower() in ["gemini", "cloud", "flash"]:
-                        self.model = "gemini/gemini-3.8-flash"
-                        console.print("[green]Switched model to:[/green] ⚡ Gemini 3.8 Flash (gemini-3.8-flash)\n")
+                    if len(parts) > 1:
+                        from app.llm.resolver import resolve_model
+                        resolved = resolve_model(requested_model=parts[1].lower())
+                        self.model = resolved.model
+                        console.print(f"[green]Switched model to:[/green] {self.model}\n")
                     else:
-                        console.print(f"[dim]Active: {self.model}. Usage: /model [gemini|ollama][/dim]\n")
+                        console.print(f"[dim]Active: {self.model}. Usage: /model [ollama|gemini][/dim]\n")
                     continue
 
                 elif user_input.startswith("/mode"):
                     parts = user_input.split()
-                    if len(parts) > 1 and parts[1].lower() in ["auto", "autonomous"]:
-                        self.mode = "autonomous"
-                        console.print("[green]Switched mode to:[/green] 🚀 Autonomous\n")
-                    elif len(parts) > 1 and parts[1].lower() in ["guided", "gate"]:
+                    if len(parts) > 1 and parts[1].lower() in ["guided", "gate"]:
                         self.mode = "guided"
                         console.print("[green]Switched mode to:[/green] 🛡️ Guided (human approvals)\n")
                     else:
-                        console.print(f"[dim]Active: {self.mode}. Usage: /mode [auto|guided][/dim]\n")
+                        self.mode = "autonomous"
+                        console.print("[green]Switched mode to:[/green] 🚀 Autonomous\n")
                     continue
 
                 elif user_input.startswith("/repo"):
                     parts = user_input.split(maxsplit=1)
                     if len(parts) > 1:
-                        self.repo_path = parts[1].strip()
-                        console.print(f"[green]Workspace target updated to:[/green] {self.repo_path}\n")
+                        raw_target = parts[1].strip().strip('"\'')
+                        target_dir = Path(raw_target).resolve()
+                        if not target_dir.exists():
+                            console.print(f"[bold red]Error:[/bold red] Target directory does not exist: {target_dir}\n")
+                            continue
+                        if not target_dir.is_dir():
+                            console.print(f"[bold red]Error:[/bold red] Target path is not a directory: {target_dir}\n")
+                            continue
+
+                        # Completely reset repository and session context (Phase 3)
+                        self.repo_path = str(target_dir)
+
+                        # Recreate session object to clear all stale context from previous repo
+                        self.session = self._conversation_manager.create_session(
+                            repository_path=self.repo_path,
+                            model=self.model,
+                            mode=self.mode,
+                            initial_title=f"Session for {target_dir.name}",
+                        )
+                        self.session.workspace_path = str(target_dir)
+
+                        self.print_header()
                     else:
-                        console.print(f"[dim]Active repo: {self.repo_path}. Usage: /repo <path>[/dim]\n")
+                        console.print(f"[dim]Active repository: {self.repo_path}. Usage: /repo <path>[/dim]\n")
                     continue
 
                 elif user_input in ["/new", "/clear"]:
@@ -370,7 +374,7 @@ class AstraCLI:
                     self.show_diff()
                     continue
 
-                # Execute natural language goal
+                # Execute natural language goal via LangGraph + OpenHands directly on target repository
                 await self.execute_goal(user_input)
 
             except (KeyboardInterrupt, EOFError):
@@ -382,12 +386,12 @@ class AstraCLI:
         table = Table(box=None, padding=(0, 2))
         table.add_column("Command", style="bold cyan")
         table.add_column("Description")
-        table.add_row("<goal>", "State your goal in plain text (e.g. 'Add greeting test and run pytest')")
-        table.add_row("/model [gemini|ollama]", "Switch between ⚡ Gemini Flash and 🦙 Ollama Local")
+        table.add_row("<goal>", "State your goal in plain text (e.g. 'Fix the failing tests in this repository')")
+        table.add_row("/repo <path>", "Switch target workspace repository (completely resets context)")
+        table.add_row("/model [ollama|gemini]", "Switch between 🦙 Ollama Local and ⚡ Gemini Flash")
         table.add_row("/mode [auto|guided]", "Toggle Autonomous mode or Guided approval gates")
-        table.add_row("/diff", "View git diff of modified files in active workspace")
+        table.add_row("/diff", "View git diff of modified files in active repository")
         table.add_row("/history", "View session message history")
-        table.add_row("/repo <path>", "Switch target workspace repository")
         table.add_row("/new", "Start a fresh session")
         table.add_row("/exit", "Exit ASTRA")
         console.print("\n[bold]ASTRA Commands:[/bold]")
@@ -402,15 +406,21 @@ class AstraCLI:
         console.print()
 
     def show_diff(self):
-        if not self.session.workspace_path:
-            console.print("\n[dim]No workspace changes recorded yet.[/dim]\n")
+        target = self.session.workspace_path or self.repo_path
+        if not target:
+            console.print("\n[dim]No repository path selected.[/dim]\n")
             return
-        ws_p = Path(self.session.workspace_path)
+        ws_p = Path(target)
         try:
             import subprocess
-            res = subprocess.run(["git", "diff"], cwd=ws_p, capture_output=True, text=True)
-            if res.stdout:
-                console.print(Panel(res.stdout, title="Git Diff", border_style="green"))
+            subprocess.run(["git", "add", "-N", "."], cwd=ws_p, capture_output=True, check=False)
+            res = subprocess.run(["git", "diff", "HEAD"], cwd=ws_p, capture_output=True, text=True, check=False)
+            diff_text = res.stdout
+            if not diff_text.strip():
+                res2 = subprocess.run(["git", "diff"], cwd=ws_p, capture_output=True, text=True, check=False)
+                diff_text = res2.stdout
+            if diff_text.strip():
+                console.print(Panel(diff_text, title="Git Diff", border_style="green"))
             else:
                 console.print("\n[dim]Working tree clean. No uncommitted diffs.[/dim]\n")
         except Exception as e:
@@ -421,8 +431,8 @@ def main():
     try:
         parser = argparse.ArgumentParser(description="ASTRA 2.0 Autonomous Software Engineer CLI")
         parser.add_argument("goal", nargs="?", help="Direct goal to execute (optional)")
-        parser.add_argument("--model", "-m", default=None, choices=["ollama", "gemini", "qwen", "cloud", "flash"], help="LLM provider: gemini or ollama")
-        parser.add_argument("--mode", default="autonomous", choices=["autonomous", "guided"], help="Execution mode")
+        parser.add_argument("--model", "-m", default=None, help="LLM model or provider (e.g. ollama, gemini, qwen2.5-coder:3b)")
+        parser.add_argument("--mode", default="chat", choices=["chat", "autonomous", "guided"], help="Execution mode")
         parser.add_argument("--repo", "-r", default=None, help="Target repository path or Git URL")
 
         args = parser.parse_args()
