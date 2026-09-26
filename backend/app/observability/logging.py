@@ -33,7 +33,14 @@ def setup_logger(name: str = "astra", level: str = "INFO", json_format: bool = F
     logger.setLevel(getattr(logging, level.upper(), logging.INFO))
 
     if not logger.handlers:
-        handler = logging.StreamHandler(sys.stdout)
+        import os
+        from pathlib import Path
+        if os.environ.get("ASTRA_CLI_MODE") == "1":
+            log_file = Path.cwd() / "astra_agent.log"
+            handler = logging.FileHandler(str(log_file), encoding="utf-8")
+        else:
+            handler = logging.StreamHandler(sys.stdout)
+
         if json_format:
             handler.setFormatter(StructuredJsonFormatter())
         else:

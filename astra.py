@@ -7,8 +7,23 @@ Usage:
     python astra.py "Fix authentication bug and push it"
     python astra.py --model gemini
 """
+import os
 import sys
 from pathlib import Path
+
+# Configure UTF-8 encoding for Windows terminals
+os.environ["PYTHONIOENCODING"] = "utf-8"
+os.environ["PYTHONUTF8"] = "1"
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+# Silence raw server logs in CLI mode
+os.environ["ASTRA_CLI_MODE"] = "1"
+os.environ["LITELLM_LOG"] = "ERROR"
 
 # Add backend to sys.path
 backend_dir = Path(__file__).resolve().parent / "backend"
