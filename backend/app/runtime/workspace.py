@@ -306,12 +306,21 @@ class WorkspaceManager:
             if src.exists() and src.is_dir():
                 repo_name = src.name
                 logger.info(f"Copying source repo {src} into workspace {workspace_dir}")
+                ignored_top_level = {
+                    ".venv", "venv", "__pycache__", ".git", ".pytest_cache",
+                    ".mypy_cache", "node_modules", "workspaces", "temp_workspaces",
+                    "sandbox_data", ".idea", ".vscode", "dist", "build"
+                }
+                ignore_func = shutil.ignore_patterns(
+                    ".git*", "__pycache__", "*.pyc", ".venv", "venv",
+                    "node_modules", "workspaces", ".pytest_cache", "*.db", "*.log"
+                )
                 for item in src.iterdir():
-                    if item.name in {".venv", "__pycache__", ".git"}:
+                    if item.name in ignored_top_level or item.name.endswith(".db") or item.name.endswith(".log"):
                         continue
                     dest = workspace_dir / item.name
                     if item.is_dir():
-                        shutil.copytree(item, dest)
+                        shutil.copytree(item, dest, ignore=ignore_func)
                     else:
                         shutil.copy2(item, dest)
 

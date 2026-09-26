@@ -58,6 +58,8 @@ htmlcov/
 
 # Docker / Temporary Workspaces
 workspaces/
+backend/workspaces/
 temp_workspaces/
 sandbox_data/
 *.log
+*.db

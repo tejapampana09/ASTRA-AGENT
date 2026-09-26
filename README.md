@@ -4,20 +4,36 @@ ASTRA 2.0 is a production-grade autonomous software engineering agent system. It
 
 ## Architecture
 
-- **Orchestration**: LangGraph StateGraph workflow with explicit cycle limits, risk assessment, debugging, and human approval gates.
+- **Terminal CLI**: Rich interactive console REPL and direct single-shot autonomous execution (like Gemini CLI / Claude Code).
+- **Orchestration**: LangGraph StateGraph workflow with explicit cycle limits, risk assessment, automated debugging, and replanning loops.
 - **Agent Runtime**: OpenHands Software Agent SDK integration adapter providing isolated workspace execution, file editing, and terminal sandboxing.
-- **Backend**: FastAPI with async background task management, Server-Sent Events (SSE) for live streaming, and REST APIs.
-- **Database & Memory**: PostgreSQL with pgvector for project & semantic memory, Redis for task queueing & cache.
-- **Frontend**: React + TypeScript engineering dashboard with real-time diff viewer, timeline, terminal streams, and approval modals.
+- **Models**: Supports local Ollama (`qwen2.5-coder`) and Cloud Gemini (`gemini-2.5-flash` / `gemini-1.5-pro`).
+- **Database & Persistence**: Instant local SQLite fallback or PostgreSQL for full persistence and audit history.
 
-## Quickstart
+## Quickstart (Terminal CLI)
 
-1. Copy `.env.example` to `.env` and configure your LLM API keys:
-   ```bash
-   cp .env.example .env
-   ```
-2. Start the services with Docker Compose:
-   ```bash
-   docker-compose up --build
-   ```
-3. Open the dashboard at `http://localhost:3000` or interact with the API at `http://localhost:8000/docs`.
+### 1. Interactive Mode (REPL)
+Launch ASTRA interactively:
+```bash
+python astra.py
+# or on Windows:
+.\astra.bat
+```
+
+Inside the REPL, type your natural language goal or use slash commands:
+- `/help` - Show available commands
+- `/model [ollama|gemini]` - Switch active LLM
+- `/mode [auto|guided]` - Switch between fully autonomous and human-in-the-loop modes
+- `/diff` - Inspect modified files and git diffs
+- `/history` - View recent events and reasoning steps
+- `/repo <path>` - Set target repository workspace
+- `/new` - Start a fresh session
+- `/exit` - Exit ASTRA
+
+### 2. Single-shot Autonomous Execution
+Pass your goal directly from the command line:
+```bash
+python astra.py "Fix authentication error in auth.py and run pytest" --model ollama
+# or using Gemini:
+python astra.py "Implement user profile API endpoint with unit tests" --model gemini
+```

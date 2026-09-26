@@ -81,17 +81,6 @@ services:
       redis:
         condition: service_healthy
 
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: astra-frontend
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    depends_on:
-      - backend
-
 volumes:
   postgres_data:
   redis_data:
