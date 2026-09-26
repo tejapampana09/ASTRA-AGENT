@@ -481,6 +481,7 @@ class AgentRuntime:
             with self._lock:
                 self._active_conversation = conversation
 
+            emit("TASK_STARTED", f"Task execution started for {workspace.task_id}", {"task_id": workspace.task_id})
             emit("AGENT_RUNNING", f"Agent dispatched task prompt to OpenHands: {prompt[:100]}...")
             conversation.send_message(prompt)
 

@@ -21,7 +21,7 @@ def test_agent_runtime_tools_and_llm_configuration():
     assert "terminal" in tool_names
 
     llm = runtime._configure_llm(model="gpt-4o", api_key="test-api-key")
-    assert llm.model == "gpt-4o"
+    assert llm.model == "openai/gpt-4o"
     assert llm.timeout == runtime.settings.LLM_TIMEOUT_SECONDS
 
 
@@ -37,9 +37,12 @@ def test_agent_runtime_event_emission():
             received_events.append(ev)
 
         # Mock conversation.run to avoid hitting remote LLM APIs in tests
-        with patch("openhands.sdk.Conversation") as mock_conv_cls:
+        with patch("openhands.sdk.Conversation") as mock_conv_cls, \
+             patch("openhands.sdk.Agent") as mock_agent_cls:
             mock_conv = MagicMock()
             mock_conv_cls.return_value = mock_conv
+            mock_agent = MagicMock()
+            mock_agent_cls.return_value = mock_agent
 
             res = runtime.execute_task(
                 workspace=ws,
