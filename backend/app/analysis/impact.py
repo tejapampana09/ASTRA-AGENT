@@ -76,7 +76,7 @@ class ChangeImpactAnalyzer:
         else:
             all_py_files = [
                 p for p in self.workspace_path.rglob("*.py")
-                if not any(part.startswith(".") or part in ["venv", ".venv", "site-packages", "node_modules"] for part in p.parts)
+                if not any(part.startswith(".") or part in ["venv", ".venv", "site-packages", "node_modules", "workspaces", "temp_workspaces", "sandbox_data"] for part in p.parts)
             ]
 
         # 2. Extract defined symbols and module names from target files

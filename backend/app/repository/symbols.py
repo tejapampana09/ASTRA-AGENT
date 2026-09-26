@@ -77,8 +77,9 @@ class SymbolExtractor:
     @classmethod
     def index_workspace_symbols(cls, workspace_path: Path) -> List[CodeSymbol]:
         all_symbols: List[CodeSymbol] = []
+        ignored_parts = {".git", "__pycache__", "node_modules", ".venv", "venv", "workspaces", "temp_workspaces", "sandbox_data", ".pytest_cache", "dist", "build"}
         for p in workspace_path.rglob("*.py"):
-            if not any(part in {".git", "__pycache__", "node_modules", ".venv"} for part in p.parts):
+            if not any(part in ignored_parts for part in p.parts):
                 rel = p.relative_to(workspace_path).as_posix()
                 intel = cls.extract_from_python_file(p, rel)
                 all_symbols.extend(intel.symbols)

@@ -91,8 +91,9 @@ def load_repository_context(state: AstraAgentState) -> Dict[str, Any]:
 
             # 4. List relative files
             all_files = []
+            ignored_parts = {".git", "__pycache__", "node_modules", ".venv", "venv", "workspaces", "temp_workspaces", "sandbox_data", ".pytest_cache", "dist", "build"}
             for p in ws_path.rglob("*"):
-                if p.is_file() and not any(part in {".git", "__pycache__", "node_modules", ".venv"} for part in p.parts):
+                if p.is_file() and not any(part in ignored_parts for part in p.parts):
                     rel = p.relative_to(ws_path).as_posix()
                     all_files.append(rel)
             repo_context["files"] = all_files[:100]

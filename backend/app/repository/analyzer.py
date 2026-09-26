@@ -16,8 +16,9 @@ class RepositoryAnalyzer:
         external_imports: Set[str] = set()
         file_imports_map: Dict[str, List[str]] = {}
 
+        ignored_parts = {".git", "__pycache__", "node_modules", ".venv", "venv", "workspaces", "temp_workspaces", "sandbox_data", ".pytest_cache", "dist", "build"}
         for p in repo_path.rglob("*.py"):
-            if any(part in {".git", "__pycache__", "node_modules", ".venv"} for part in p.parts):
+            if any(part in ignored_parts for part in p.parts):
                 continue
             rel = p.relative_to(repo_path).as_posix()
             mod_name = rel.replace("/", ".").replace(".py", "")
