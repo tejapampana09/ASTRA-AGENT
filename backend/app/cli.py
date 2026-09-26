@@ -95,11 +95,23 @@ CONVERSATIONAL_PROMPTS = {
 }
 
 
+BANNER = """
+    █████╗ ███████╗████████╗██████╗  █████╗ 
+   ██╔══██╗██╔════╝╚══██╔══╝██╔══██╗██╔══██╗
+   ███████║███████╗   ██║   ██████╔╝███████║
+   ██╔══██║╚════██║   ██║   ██╔══██╗██╔══██║
+   ██║  ██║███████║   ██║   ██║  ██║██║  ██║
+   ╚═╝  ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝
+
+2.0 — Autonomous Software Engineer (Terminal Edition)
+"""
+
+
 class AstraCLI:
     def __init__(
         self,
         model: Optional[str] = None,
-        mode: str = "chat",
+        mode: str = "autonomous",
         repo_path: Optional[str] = None,
     ):
         from app.llm.resolver import resolve_model
@@ -121,12 +133,27 @@ class AstraCLI:
         )
 
     def print_header(self):
-        console.print("[bold cyan]ASTRA[/bold cyan]")
-        console.print("[dim]────────────────────────[/dim]\n")
-        console.print(f"[bold]Repository:[/bold]\n{self.repo_path}\n")
-        console.print("[bold]Mode:[/bold]\nLOCAL\n")
-        console.print(f"[bold]Model:[/bold]\n{self.model}\n")
-        console.print("[bold]Agent:[/bold]\n[green]Ready[/green]\n")
+        console.print(BANNER)
+        model_str = (self.model or "").lower()
+        if "gemini" in model_str:
+            model_display = "⚡ Gemini 3.8 Flash (gemini-3.8-flash)"
+        elif "claude" in model_str or "anthropic" in model_str:
+            model_display = "🧠 Anthropic Claude (claude-3-7-sonnet)"
+        elif "gpt" in model_str or "openai" in model_str:
+            model_display = "🤖 OpenAI (gpt-4o)"
+        elif "qwen" in model_str or "ollama" in model_str:
+            model_display = "🦙 Ollama Local (qwen2.5-coder:3b)"
+        else:
+            model_display = f"🤖 {self.model}"
+
+        if self.mode == "guided":
+            mode_display = "🛡️ Guided (human approvals)"
+        else:
+            mode_display = "🚀 Autonomous (auto-correct & push)"
+
+        console.print(f"Model:      {model_display}")
+        console.print(f"Mode:       {mode_display}")
+        console.print(f"Repository: {self.repo_path}\n")
 
     async def execute_goal(self, goal: str) -> None:
         """Executes a goal cleanly with live terminal activity indicators."""
@@ -293,7 +320,7 @@ class AstraCLI:
 
         while True:
             try:
-                console.print("[bold cyan]astra > [/bold cyan]", end="")
+                console.print("astra > ", end="")
                 user_input = input().strip()
 
                 if not user_input:
@@ -432,7 +459,7 @@ def main():
         parser = argparse.ArgumentParser(description="ASTRA 2.0 Autonomous Software Engineer CLI")
         parser.add_argument("goal", nargs="?", help="Direct goal to execute (optional)")
         parser.add_argument("--model", "-m", default=None, help="LLM model or provider (e.g. ollama, gemini, qwen2.5-coder:3b)")
-        parser.add_argument("--mode", default="chat", choices=["chat", "autonomous", "guided"], help="Execution mode")
+        parser.add_argument("--mode", default="autonomous", choices=["autonomous", "guided"], help="Execution mode")
         parser.add_argument("--repo", "-r", default=None, help="Target repository path or Git URL")
 
         args = parser.parse_args()
