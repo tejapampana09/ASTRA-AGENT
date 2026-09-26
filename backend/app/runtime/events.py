@@ -231,8 +231,28 @@ class CentralEventBus:
                 except Exception:
                     pass
 
+        # 3. Durable persistence to SQL database if session factory is available
+        if self._session_factory:
+            try:
+                with self._session_factory() as session:
+                    rec = AgentEventRecord(
+                        task_id=canonical_event.task_id,
+                        sequence_id=canonical_event.sequence_id,
+                        event_type=canonical_event.event_type,
+                        source=canonical_event.source,
+                        message=canonical_event.message,
+                        payload=canonical_event.payload,
+                    )
+                    session.add(rec)
+                    session.commit()
+            except Exception as e:
+                logger.debug(f"Failed to persist event in publish_sync: {e}")
+
     def get_history(self, task_id: str, limit: int = 200) -> List[AgentEvent]:
-        """Returns chronological list of events for a task."""
+        """Returns chronological list of events for a task, unifying durable DB and in-memory cache."""
+        events_by_seq: Dict[int, AgentEvent] = {}
+
+        # 1. Fetch from database if available
         if self._session_factory:
             try:
                 with self._session_factory() as session:
@@ -240,26 +260,29 @@ class CentralEventBus:
                         session.query(AgentEventRecord)
                         .filter_by(task_id=task_id)
                         .order_by(AgentEventRecord.sequence_id.asc())
-                        .limit(limit)
                         .all()
                     )
-                    if records:
-                        return [
-                            AgentEvent(
-                                task_id=r.task_id,
-                                sequence_id=r.sequence_id or 1,
-                                event_type=r.event_type,
-                                message=r.message,
-                                source=r.source or "system",
-                                payload=r.payload or {},
-                                timestamp=r.created_at.isoformat() if r.created_at else "",
-                            )
-                            for r in records
-                        ]
+                    for r in records:
+                        seq = r.sequence_id or len(events_by_seq) + 1
+                        events_by_seq[seq] = AgentEvent(
+                            task_id=r.task_id,
+                            sequence_id=seq,
+                            event_type=r.event_type,
+                            message=r.message,
+                            source=r.source or "system",
+                            payload=r.payload or {},
+                            timestamp=r.created_at.isoformat() if r.created_at else "",
+                        )
             except Exception as e:
                 logger.debug(f"Error querying event history from DB: {e}")
 
-        return list(self._event_history.get(task_id, []))[:limit]
+        # 2. Merge in-memory events (takes precedence for live updates and non-persisted events)
+        for ev in self._event_history.get(task_id, []):
+            seq = ev.sequence_id or len(events_by_seq) + 1
+            events_by_seq[seq] = ev
+
+        sorted_events = sorted(events_by_seq.values(), key=lambda e: e.sequence_id or 0)
+        return sorted_events[:limit]
 
 
 # Global unified event bus singleton

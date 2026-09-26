@@ -113,14 +113,14 @@ class AgentRuntime:
         # Explicit model prioritization
         if model and ("ollama" in model.lower() or "qwen" in model.lower()):
             selected_model = "ollama/qwen2.5-coder:3b"
-            detected_base_url = detected_base_url or "http://localhost:11434"
-            key = key or "ollama-local"
+            detected_base_url = "http://localhost:11434"
+            key = "ollama-local"
         elif model and "gemini" in model.lower():
             selected_model = model if "/" in model else f"gemini/{model}"
             key = key or os.environ.get("GEMINI_API_KEY")
 
         # Detect Gemini key prefix (AQ. or AIza)
-        if key and (str(key).startswith("AQ.") or str(key).startswith("AIza")):
+        if not ("ollama" in str(selected_model).lower()) and key and (str(key).startswith("AQ.") or str(key).startswith("AIza")):
             os.environ["GEMINI_API_KEY"] = str(key)
             if not model and (not selected_model or "claude" in selected_model):
                 selected_model = os.environ.get("LLM_MODEL") or "gemini/gemini-3.1-flash-lite"
@@ -157,6 +157,10 @@ class AgentRuntime:
 
         selected_model = selected_model or self.settings.LLM_MODEL
 
+        effective_base_url = detected_base_url or self.settings.LLM_BASE_URL
+        if str(selected_model).startswith("gemini/"):
+            effective_base_url = None
+
         llm_kwargs: Dict[str, Any] = {
             "model": selected_model,
             "timeout": self.settings.LLM_TIMEOUT_SECONDS,
@@ -164,11 +168,17 @@ class AgentRuntime:
         }
         if key:
             llm_kwargs["api_key"] = SecretStr(key)
-        effective_base_url = detected_base_url or self.settings.LLM_BASE_URL
-        if str(selected_model).startswith("gemini/"):
-            effective_base_url = None
         if effective_base_url:
             llm_kwargs["base_url"] = effective_base_url
+
+        is_ollama = "ollama" in str(selected_model).lower() or "qwen" in str(selected_model).lower()
+        if is_ollama:
+            llm_kwargs["extended_thinking_budget"] = None
+            llm_kwargs["reasoning_effort"] = None
+            llm_kwargs["drop_params"] = True
+            llm_kwargs["timeout"] = max(300, self.settings.LLM_TIMEOUT_SECONDS)
+        else:
+            llm_kwargs["drop_params"] = True
 
         return LLM(**llm_kwargs)
 
@@ -368,10 +378,19 @@ class AgentRuntime:
             llm = self._configure_llm(model=model, api_key=api_key)
             tools = self._configure_tools()
 
-            agent = Agent(
-                llm=llm,
-                tools=tools,
-            )
+            is_ollama = "ollama" in str(getattr(llm, "model", "")).lower() or "qwen" in str(getattr(llm, "model", "")).lower()
+            agent_kwargs: Dict[str, Any] = {
+                "llm": llm,
+                "tools": tools,
+            }
+            if is_ollama:
+                agent_kwargs["system_prompt"] = (
+                    "You are an expert autonomous software engineer. "
+                    "Your task is to inspect, edit, and verify code using the provided tools. "
+                    "Always execute tool actions directly to solve the user's task."
+                )
+
+            agent = Agent(**agent_kwargs)
 
             openhands_event_listener = self.create_openhands_listener(
                 emit_fn=emit,

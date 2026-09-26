@@ -81,3 +81,68 @@ export async function getTaskAudit(taskId: string): Promise<any> {
   if (!res.ok) throw new Error(`Failed to fetch audit: ${res.statusText}`);
   return res.json();
 }
+
+export interface SessionData {
+  id: string;
+  title: string;
+  repository_path?: string;
+  workspace_path?: string;
+  active_branch: string;
+  model: string;
+  mode: string;
+  messages: Array<{
+    id: string;
+    role: string;
+    content: string;
+    task_id?: string;
+    files_changed?: string[];
+    timestamp: string;
+  }>;
+  tasks: string[];
+  context_summary: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function createSession(
+  repository_path?: string,
+  model?: string,
+  mode?: string,
+  title?: string
+): Promise<SessionData> {
+  const res = await fetch(`${API_BASE}/sessions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ repository_path, model, mode, title }),
+  });
+  if (!res.ok) throw new Error(`Failed to create session: ${res.statusText}`);
+  return res.json();
+}
+
+export async function listSessions(): Promise<SessionData[]> {
+  const res = await fetch(`${API_BASE}/sessions`);
+  if (!res.ok) throw new Error(`Failed to list sessions: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getSession(sessionId: string): Promise<SessionData> {
+  const res = await fetch(`${API_BASE}/sessions/${sessionId}`);
+  if (!res.ok) throw new Error(`Failed to fetch session: ${res.statusText}`);
+  return res.json();
+}
+
+export async function sendSessionMessage(
+  sessionId: string,
+  message: string,
+  repository_path?: string,
+  model?: string,
+  mode?: string
+): Promise<{ session: SessionData; task_id: string; status: string; goal: string }> {
+  const res = await fetch(`${API_BASE}/sessions/${sessionId}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, repository_path, model, mode }),
+  });
+  if (!res.ok) throw new Error(`Failed to send session message: ${res.statusText}`);
+  return res.json();
+}

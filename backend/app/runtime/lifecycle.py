@@ -143,6 +143,21 @@ class TaskLifecycleManager:
             event_type = "TASK_COMPLETED" if status in ["VERIFIED", "verified", "partially_verified"] else "TASK_FAILED"
             await event_broker.publish(TaskEvent(task_id=task_id, event_type=event_type, message=f"Task finished with status: {status}", payload=final_report))
 
+            # Record completion in conversation session if linked
+            try:
+                from app.runtime.session import conversation_manager
+                summary_text = f"Status: {status}."
+                if final_report.get("commit"):
+                    summary_text += f" Commit: {final_report['commit'].get('commit_sha', '')[:7]}."
+                files = final_report.get("evidence", {}).get("files_changed", [])
+                conversation_manager.record_agent_completion(
+                    task_id=task_id,
+                    summary=summary_text,
+                    files_changed=files
+                )
+            except Exception as se_err:
+                logger.debug(f"Failed to record session completion: {se_err}")
+
         except TimeoutError as te:
             task_info["status"] = "timed_out"
             task_info["verification_status"] = "timed_out"
