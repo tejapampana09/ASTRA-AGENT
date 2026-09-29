@@ -42,6 +42,8 @@ def get_model_badge(model_name: Optional[str]) -> str:
     m = (model_name or "").lower()
     if "teja" in m or "colab" in m:
         return "[bold red]🔥 TejaAI Gemma-4[/bold red] [dim](Cloud GPU)[/dim]"
+    elif "lite" in m:
+        return "[bold blue]⚡ Google Gemini[/bold blue] [dim](3.5 Flash-Lite)[/dim]"
     elif "gemini" in m:
         return "[bold blue]⚡ Google Gemini[/bold blue] [dim](3.5 Flash)[/dim]"
     elif "claude" in m or "anthropic" in m:

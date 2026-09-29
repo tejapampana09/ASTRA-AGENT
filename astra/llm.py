@@ -149,13 +149,13 @@ class LLMClient:
 
             client = genai.Client(api_key=api_key)
             model_id = "gemini-3.5-flash"
-            if self.model_name and self.model_name != "gemini":
+            if "lite" in self.model_name:
+                model_id = "gemini-3.5-flash-lite"
+            elif self.model_name and self.model_name != "gemini":
                 if "3.8" in self.model_name:
                     model_id = "gemini-3.8-flash"
                 elif "pro" in self.model_name:
                     model_id = "gemini-3.5-pro"
-                elif "flash-lite" in self.model_name:
-                    model_id = "gemini-3.5-flash-lite"
                 elif "gemini" in self.model_name:
                     model_id = self.model_name
 
