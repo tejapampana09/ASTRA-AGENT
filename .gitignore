@@ -1,0 +1,31 @@
+# Sensitive API keys & secrets
+.env
+
+# Python Caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Model weights & binaries (Stored on Hugging Face Hub)
+models/
+hf_space/
+*.safetensors
+*.zip
+*.bin
+*.pt
+*.pth
+
+# Virtual Environments
+venv/
+.venv/
+env/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
