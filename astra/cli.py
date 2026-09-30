@@ -42,6 +42,10 @@ def get_model_badge(model_name: Optional[str]) -> str:
     m = (model_name or "").lower()
     if "teja" in m or "colab" in m:
         return "[bold red]🔥 TejaAI Gemma-4[/bold red] [dim](Cloud GPU)[/dim]"
+    elif "groq" in m or "llama" in m:
+        return "[bold green]⚡ Groq Llama 3.3 70B[/bold green] [dim](14.4k req/day)[/dim]"
+    elif "openrouter" in m:
+        return "[bold cyan]🌐 OpenRouter[/bold cyan]"
     elif "lite" in m:
         return "[bold blue]⚡ Google Gemini[/bold blue] [dim](3.5 Flash-Lite)[/dim]"
     elif "gemini" in m:
@@ -57,6 +61,14 @@ def get_model_badge(model_name: Optional[str]) -> str:
 
 class TerminalCallback(AgentCallback):
     """Prints agent actions and thoughts live with stylish formatting."""
+
+    def on_phase_change(self, phase: str, details: str = "") -> None:
+        if phase == "VERIFY":
+            console.print(f"  [bold magenta]🔍 Verifying:[/bold magenta] [white]{details}[/white]")
+        elif phase == "FIX":
+            console.print(f"  [bold red]🩹 Self-Healing:[/bold red] [yellow]{details}[/yellow]")
+        elif phase == "DONE":
+            console.print(f"  [bold green]✓ Phase Complete:[/bold green] [dim]{details}[/dim]")
 
     def on_thought(self, thought: str) -> None:
         md = Markdown(thought, code_theme="monokai")
@@ -75,6 +87,12 @@ class TerminalCallback(AgentCallback):
 
     def on_file_changed(self, file_path: str) -> None:
         console.print(f"  [bold green]📝 Modified File:[/bold green] [cyan]{file_path}[/cyan]")
+
+    def on_verification(self, passed: bool, summary: str, details: str = "") -> None:
+        if passed:
+            console.print(f"  [bold green]✅ Independent Verification Passed:[/bold green] [dim]{summary}[/dim]")
+        else:
+            console.print(f"  [bold red]❌ Independent Verification Failed:[/bold red] [yellow]{summary}[/yellow]")
 
 
 class AstraCLI:
@@ -106,7 +124,7 @@ class AstraCLI:
         table.add_column("Description")
 
         table.add_row("<your goal>", "Execute any coding task (e.g. 'Fix login test in test_auth.py')")
-        table.add_row("/model [name]", "Switch or view active LLM (e.g. 'gemini', 'ollama', 'teja-gemma')")
+        table.add_row("/model [name]", "Switch or view LLM (e.g. 'groq', 'gemini', 'teja-gemma', 'ollama')")
         table.add_row("/status, /git", "Check git status and modified files in workspace")
         table.add_row("/diff", "Show colorized git diff of changes")
         table.add_row("/files, /ls", "List files in the active workspace")
@@ -313,7 +331,7 @@ class AstraCLI:
                         console.print(f"[green]✓ Switched model to:[/green] {get_model_badge(self.model)}\n")
                     else:
                         console.print(f"Active Model: {get_model_badge(self.model)}")
-                        console.print("[dim]Usage: /model [gemini | ollama | teja-gemma | claude | gpt-4o][/dim]\n")
+                        console.print("[dim]Usage: /model [groq | gemini | teja-gemma | ollama | claude | gpt-4o][/dim]\n")
                     continue
 
                 if user_input.startswith("/repo"):

@@ -77,3 +77,80 @@ def test_tool_definitions_valid():
     assert "list_dir" in names
     assert "search_code" in names
     assert "run_command" in names
+    assert "web_search" in names
+
+
+def test_independent_verifier_valid_syntax(temp_workspace):
+    from astra.verifier import IndependentVerifier
+    verifier = IndependentVerifier(temp_workspace)
+    
+    # Create valid python file
+    p = temp_workspace / "valid.py"
+    p.write_text("def hello():\n    return 'world'\n", encoding="utf-8")
+    
+    result = verifier.verify(["valid.py"])
+    assert result.passed is True
+    assert result.phase == "verified"
+
+
+def test_independent_verifier_catches_syntax_error(temp_workspace):
+    from astra.verifier import IndependentVerifier
+    verifier = IndependentVerifier(temp_workspace)
+    
+    # Create invalid python file
+    p = temp_workspace / "broken.py"
+    p.write_text("def broken_syntax(\n    return 42\n", encoding="utf-8")
+    
+    result = verifier.verify(["broken.py"])
+    assert result.passed is False
+    assert result.phase == "syntax_check"
+    assert "SyntaxError" in result.details
+
+
+def test_parse_gemma_tool_calls():
+    from astra.llm import parse_gemma_tool_calls
+
+    # Markdown JSON block
+    sample_text = (
+        "I will now create the requested function.\n"
+        "```json\n"
+        '{"name": "write_file", "arguments": {"file_path": "math_utils.py", "content": "def add(x, y): return x + y"}}\n'
+        "```\n"
+        "After creating it, I will verify it."
+    )
+    thought, calls = parse_gemma_tool_calls(sample_text)
+    assert len(calls) == 1
+    assert calls[0]["function"]["name"] == "write_file"
+    assert calls[0]["function"]["arguments"]["file_path"] == "math_utils.py"
+
+    # Gemma native special token syntax
+    token_text = 'Let me inspect the file: <|tool_call>call:read_file{"file_path": "main.py"}<tool_call|>'
+    thought2, calls2 = parse_gemma_tool_calls(token_text)
+    assert len(calls2) == 1
+    assert calls2[0]["function"]["name"] == "read_file"
+    assert calls2[0]["function"]["arguments"]["file_path"] == "main.py"
+
+
+def test_agent_context_compression(temp_workspace):
+    from astra.agent import AstraAgent
+    agent = AstraAgent(workspace_path=temp_workspace)
+
+    messages = [
+        {"role": "system", "content": "You are ASTRA."},
+        {"role": "user", "content": "Goal"},
+        {"role": "assistant", "content": "Let me read the file"},
+        {"role": "tool", "name": "read_file", "content": "X" * 1000},
+        {"role": "assistant", "content": "Now editing"},
+        {"role": "tool", "name": "edit_file", "content": "Y" * 1000},
+        {"role": "assistant", "content": "Almost done"},
+        {"role": "tool", "name": "run_command", "content": "short"},
+    ]
+
+    compressed = agent._compress_messages(messages)
+    assert len(compressed) == len(messages)
+    # The older tool outputs should be trimmed
+    assert len(compressed[3]["content"]) < 1000
+    assert "Output trimmed for context" in compressed[3]["content"]
+    # The recent tool output should stay intact
+    assert compressed[7]["content"] == "short"
+
