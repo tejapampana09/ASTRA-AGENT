@@ -277,11 +277,14 @@ class LLMClient:
                 "GROQ_API_KEY is not set in .env. Get your free key with 14,400 req/day at https://console.groq.com"
             )
 
-        model_id = "llama-3.3-70b-versatile"
-        if "8b" in self.model_name:
-            model_id = "llama-3.1-8b-instant"
-        elif "mixtral" in self.model_name:
-            model_id = "mixtral-8x7b-32768"
+        model_id = "openai/gpt-oss-120b"
+        m_lower = (self.model_name or "").lower()
+        if "20b" in m_lower or "fast" in m_lower:
+            model_id = "openai/gpt-oss-20b"
+        elif "qwen" in m_lower:
+            model_id = "qwen/qwen3.8-27b"
+        elif m_lower and m_lower not in ("groq", "default"):
+            model_id = self.model_name
 
         # Format messages for OpenAI standard
         formatted_messages = []
@@ -291,7 +294,20 @@ class LLMClient:
             msg_dict: Dict[str, Any] = {"role": role, "content": content}
 
             if role == "assistant" and m.get("tool_calls"):
-                msg_dict["tool_calls"] = m["tool_calls"]
+                serialized_calls = []
+                for tc in m["tool_calls"]:
+                    fn = tc.get("function", {})
+                    args = fn.get("arguments", {})
+                    args_str = json.dumps(args) if isinstance(args, dict) else str(args)
+                    serialized_calls.append({
+                        "id": tc.get("id") or f"call_{fn.get('name')}",
+                        "type": "function",
+                        "function": {
+                            "name": fn.get("name"),
+                            "arguments": args_str,
+                        },
+                    })
+                msg_dict["tool_calls"] = serialized_calls
             elif role == "tool":
                 msg_dict["tool_call_id"] = m.get("tool_call_id") or f"call_{m.get('name', 'tool')}"
                 msg_dict["name"] = m.get("name", "tool")
