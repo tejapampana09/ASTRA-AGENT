@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Sparkles, Cpu, Check, HardDrive } from 'lucide-react';
+import { X, Cpu } from 'lucide-react';
 import { ModelsResponse } from '../types';
 
 interface ModelCatalogModalProps {
@@ -13,7 +13,6 @@ export const ModelCatalogModal: React.FC<ModelCatalogModalProps> = ({
   onClose,
   selectedModel,
   onSelectModel,
-  modelsData,
 }) => {
   const [filter, setFilter] = useState<'All' | 'Reasoning' | 'Coding' | 'Research' | 'Speed' | 'Writing'>('All');
 
@@ -84,18 +83,18 @@ export const ModelCatalogModal: React.FC<ModelCatalogModalProps> = ({
   });
 
   return (
-    <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-50 p-4 select-none">
-      <div className="bg-[#16171d] border border-[#2b2d39] rounded-2xl max-w-3xl w-full p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in duration-150">
+    <div className="fixed inset-0 bg-slate-900/30 backdrop-blur-xs flex items-center justify-center z-50 p-4 select-none">
+      <div className="bg-white border border-slate-200 rounded-2xl max-w-3xl w-full p-6 shadow-xl space-y-5 animate-in fade-in zoom-in duration-150">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-[#242630] pb-4">
+        <div className="flex items-center justify-between border-b border-slate-200 pb-4">
           <div>
-            <h2 className="text-base font-bold text-white flex items-center space-x-2">
-              <Cpu className="w-5 h-5 text-violet-400" />
+            <h2 className="text-base font-bold text-slate-900 flex items-center space-x-2">
+              <Cpu className="w-5 h-5 text-slate-800" />
               <span>Model Catalog</span>
             </h2>
-            <p className="text-xs text-zinc-400 mt-0.5">Explore leading AI models, enhanced by ASTRA AI</p>
+            <p className="text-xs text-slate-500 mt-0.5">Explore leading AI models, enhanced by ASTRA AI</p>
           </div>
-          <button onClick={onClose} className="p-1 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-white">
+          <button onClick={onClose} className="p-1 rounded-md hover:bg-slate-100 text-slate-500 hover:text-slate-800">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -108,8 +107,8 @@ export const ModelCatalogModal: React.FC<ModelCatalogModalProps> = ({
               onClick={() => setFilter(tab)}
               className={`px-3 py-1.5 rounded-full font-medium transition-colors ${
                 filter === tab
-                  ? 'bg-[#292c3a] text-white border border-purple-500/40 shadow-sm'
-                  : 'bg-[#1c1d25] text-zinc-400 hover:text-zinc-200 border border-transparent'
+                  ? 'bg-slate-900 text-white shadow-xs'
+                  : 'bg-slate-100 text-slate-600 hover:text-slate-900'
               }`}
             >
               {tab}
@@ -130,23 +129,23 @@ export const ModelCatalogModal: React.FC<ModelCatalogModalProps> = ({
                 }}
                 className={`p-3.5 rounded-xl cursor-pointer border transition-all ${
                   isSelected
-                    ? 'bg-[#22232e] border-violet-500/60 shadow-lg shadow-purple-500/10'
-                    : 'bg-[#1b1c23] border-[#292b36] hover:border-zinc-600'
+                    ? 'bg-slate-50 border-slate-900 shadow-xs'
+                    : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
                 }`}
               >
                 <div className="flex items-center justify-between mb-1.5">
                   <div className="flex items-center space-x-2">
-                    <span className="w-3.5 h-3.5 rounded bg-gradient-to-tr from-violet-500 to-fuchsia-400 flex items-center justify-center text-white text-[9px] font-bold">
+                    <span className="w-4 h-4 rounded-md bg-slate-900 flex items-center justify-center text-white text-[9px] font-bold">
                       ✦
                     </span>
-                    <span className="font-semibold text-white text-xs">{m.name}</span>
+                    <span className="font-semibold text-slate-900 text-xs">{m.name}</span>
                   </div>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-mono border border-slate-200">
                     {m.badge}
                   </span>
                 </div>
-                <p className="text-zinc-400 text-[11px] line-clamp-2 leading-relaxed">{m.desc}</p>
-                <div className="mt-2 text-[10px] text-zinc-500 font-mono">{m.provider}</div>
+                <p className="text-slate-600 text-[11px] line-clamp-2 leading-relaxed">{m.desc}</p>
+                <div className="mt-2 text-[10px] text-slate-400 font-mono">{m.provider}</div>
               </div>
             );
           })}

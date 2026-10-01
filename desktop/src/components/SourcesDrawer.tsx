@@ -13,19 +13,19 @@ export const SourcesDrawer: React.FC<SourcesDrawerProps> = ({ events, onClose })
   );
 
   return (
-    <div className="w-80 bg-[#16171d] border-l border-[#242630] flex flex-col h-full select-none text-zinc-300 z-40">
+    <div className="w-80 bg-white border-l border-slate-200 flex flex-col h-full select-none text-slate-700 z-40 shadow-md">
       {/* Header */}
-      <div className="p-4 border-b border-[#242630] flex items-center justify-between">
+      <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
         <div className="flex items-center space-x-2">
-          <Layers className="w-4 h-4 text-cyan-400" />
-          <h3 className="font-semibold text-sm text-white">Sources & Tools</h3>
-          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-zinc-800 text-zinc-400 font-mono">
+          <Layers className="w-4 h-4 text-slate-700" />
+          <h3 className="font-semibold text-sm text-slate-900">Sources & Tools</h3>
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-200 text-slate-700 font-mono">
             {toolEvents.length}
           </span>
         </div>
         <button
           onClick={onClose}
-          className="p-1 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors"
+          className="p-1 rounded-md hover:bg-slate-200 text-slate-500 hover:text-slate-800 transition-colors"
         >
           <X className="w-4 h-4" />
         </button>
@@ -34,28 +34,28 @@ export const SourcesDrawer: React.FC<SourcesDrawerProps> = ({ events, onClose })
       {/* List */}
       <div className="flex-1 overflow-y-auto p-3 space-y-2.5">
         {toolEvents.length === 0 ? (
-          <div className="p-4 text-center text-xs text-zinc-500 italic">No tool calls recorded yet.</div>
+          <div className="p-4 text-center text-xs text-slate-400 italic">No tool calls recorded yet.</div>
         ) : (
           toolEvents.map((ev, i) => (
             <div
               key={i}
-              className="p-3 rounded-xl bg-[#1c1d25] border border-[#2b2d39] text-xs space-y-1.5 hover:border-zinc-700 transition-colors"
+              className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1.5 hover:border-slate-300 transition-colors"
             >
               <div className="flex items-center space-x-2">
                 {ev.event_type === 'file_changed' ? (
-                  <FileCode className="w-3.5 h-3.5 text-emerald-400" />
+                  <FileCode className="w-3.5 h-3.5 text-blue-600" />
                 ) : ev.event_type === 'command_started' ? (
-                  <Terminal className="w-3.5 h-3.5 text-purple-400" />
+                  <Terminal className="w-3.5 h-3.5 text-slate-700" />
                 ) : ev.event_type === 'verification_passed' ? (
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                 ) : (
-                  <Wrench className="w-3.5 h-3.5 text-amber-400" />
+                  <Wrench className="w-3.5 h-3.5 text-amber-600" />
                 )}
-                <span className="font-semibold text-white text-[11px] truncate">
+                <span className="font-semibold text-slate-900 text-[11px] truncate">
                   {ev.data.name || ev.data.command || ev.event_type}
                 </span>
               </div>
-              <p className="text-zinc-400 text-[10px] font-mono line-clamp-2">
+              <p className="text-slate-600 text-[10px] font-mono line-clamp-2">
                 {ev.data.output || ev.data.file_path || ev.data.summary || JSON.stringify(ev.data)}
               </p>
             </div>

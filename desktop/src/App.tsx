@@ -657,7 +657,7 @@ export const App: React.FC = () => {
   ).length;
 
   return (
-    <div className="flex h-screen w-screen bg-[#121316] text-[#c9d1d9] overflow-hidden font-sans select-none ambient-glow">
+    <div className="flex h-screen w-screen bg-white text-slate-800 overflow-hidden font-sans select-none">
       {/* Left Sidebar (Echo AI Style) */}
       <Sidebar
         sessions={sessions}
@@ -675,16 +675,16 @@ export const App: React.FC = () => {
       />
 
       {/* Main Center Area */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden relative">
+      <main className="flex-1 flex flex-col h-full overflow-hidden relative bg-white">
         {/* Top Minimal Bar */}
-        <div className="h-12 px-6 flex items-center justify-between border-b border-[#1c1d24]">
+        <div className="h-12 px-6 flex items-center justify-between border-b border-slate-200 bg-white">
           <div className="flex items-center space-x-2 text-xs">
-            <span className="text-zinc-500 font-medium">Workspace:</span>
-            <span className="text-zinc-300 font-mono font-medium max-w-sm truncate">
+            <span className="text-slate-400 font-medium">Workspace:</span>
+            <span className="text-slate-700 font-mono font-medium max-w-sm truncate">
               {metadata?.workspace_path || 'No workspace selected'}
             </span>
             {metadata?.project_type && metadata.project_type !== 'unknown' && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono uppercase">
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 font-mono uppercase">
                 {metadata.project_type}
               </span>
             )}
@@ -695,10 +695,10 @@ export const App: React.FC = () => {
             <div
               className={`px-2.5 py-1 rounded-full font-mono text-[10px] uppercase font-semibold border ${
                 isRunning
-                  ? 'bg-purple-950/60 text-purple-300 border-purple-700/60 animate-pulse'
+                  ? 'bg-blue-50 text-blue-700 border-blue-200 animate-pulse'
                   : agentState === 'COMPLETED'
-                  ? 'bg-emerald-950/60 text-emerald-300 border-emerald-700/60'
-                  : 'bg-zinc-900 text-zinc-500 border-zinc-800'
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : 'bg-slate-50 text-slate-500 border-slate-200'
               }`}
             >
               ● {agentState}
@@ -707,7 +707,7 @@ export const App: React.FC = () => {
             {/* Sources / Tool Calls Toggle */}
             <button
               onClick={() => setShowSourcesDrawer(!showSourcesDrawer)}
-              className="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-[#1a1b22] hover:bg-[#22242e] border border-[#2b2d39] text-zinc-300 transition-colors"
+              className="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 transition-colors"
             >
               <span>Tool Calls ({toolCallsCount})</span>
             </button>
@@ -715,19 +715,19 @@ export const App: React.FC = () => {
         </div>
 
         {/* Conversation / Welcome Screen Scroll Area */}
-        <div className="flex-1 overflow-y-auto px-6 py-4">
+        <div className="flex-1 overflow-y-auto px-6 py-4 bg-white">
           {messages.length === 0 ? (
-            /* Welcome / Empty Screen (Image 1 & 2) */
+            /* Welcome / Empty Screen */
             <div className="h-full flex flex-col items-center justify-center text-center px-4 max-w-2xl mx-auto space-y-6 -mt-8">
-              {/* Glowing Center Logo */}
-              <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-purple-600 to-violet-400 flex items-center justify-center text-white orb-glow shadow-2xl">
-                <Sparkles className="w-8 h-8" />
+              {/* Minimalist Antigravity Logo */}
+              <div className="w-14 h-14 rounded-2xl bg-slate-900 flex items-center justify-center text-white shadow-sm">
+                <Sparkles className="w-7 h-7 text-white" />
               </div>
 
               <div>
-                <p className="text-zinc-400 text-sm font-medium tracking-wide">Welcome to ASTRA AI</p>
-                <h1 className="text-3xl font-semibold text-white tracking-tight mt-1.5">
-                  How Can I Assist You?
+                <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider">Antigravity Agent Engine</p>
+                <h1 className="text-2xl font-bold text-slate-900 tracking-tight mt-1.5">
+                  How can I assist you today?
                 </h1>
               </div>
 
@@ -750,12 +750,12 @@ export const App: React.FC = () => {
                   <div
                     key={idx}
                     onClick={() => handleSendMessage(item.title)}
-                    className="p-4 rounded-2xl bg-[#171820] hover:bg-[#1f202a] border border-[#282a35] hover:border-purple-500/40 cursor-pointer transition-all duration-200 shadow-md group"
+                    className="p-4 rounded-xl bg-slate-50 hover:bg-white border border-slate-200 hover:border-slate-300 hover:shadow-sm cursor-pointer transition-all duration-150 group"
                   >
-                    <h3 className="font-medium text-zinc-200 text-xs group-hover:text-white line-clamp-2">
+                    <h3 className="font-semibold text-slate-800 text-xs group-hover:text-slate-900 line-clamp-2">
                       {item.title}
                     </h3>
-                    <p className="text-[11px] text-zinc-500 mt-2 line-clamp-3 leading-relaxed">
+                    <p className="text-[11px] text-slate-500 mt-1.5 line-clamp-3 leading-relaxed">
                       {item.desc}
                     </p>
                   </div>
@@ -763,7 +763,7 @@ export const App: React.FC = () => {
               </div>
             </div>
           ) : (
-            /* Active Chat Messages (Image 3 & 4) */
+            /* Active Chat Messages */
             <div className="max-w-3xl mx-auto space-y-4">
               {messages.map((m) => (
                 <ChatMessageView
@@ -776,23 +776,23 @@ export const App: React.FC = () => {
 
               {/* Live Autonomous Working Indicator */}
               {isRunning && (
-                <div className="p-3 rounded-xl bg-[#12131d] border border-purple-500/40 text-xs shadow-lg shadow-purple-950/30 max-w-lg transition-all">
+                <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs shadow-sm max-w-lg transition-all">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-2.5">
                       <span className="relative flex h-2.5 w-2.5">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-purple-500"></span>
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-600"></span>
                       </span>
-                      <span className="font-semibold text-zinc-100 tracking-wide text-xs">ASTRA is executing</span>
-                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-purple-950/70 border border-purple-700/50 text-purple-300">
+                      <span className="font-semibold text-slate-900 tracking-wide text-xs">ASTRA is executing</span>
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-blue-50 border border-blue-200 text-blue-700">
                         {agentState}
                       </span>
                     </div>
-                    <span className="text-[10px] font-mono text-zinc-500 animate-pulse">Running autonomous cycle...</span>
+                    <span className="text-[10px] font-mono text-slate-500">Working...</span>
                   </div>
                   {currentAction && (
-                    <div className="mt-2 text-zinc-300 font-mono text-[11px] pl-5 flex items-center gap-1.5 border-t border-purple-950/40 pt-2 truncate">
-                      <Terminal className="w-3 h-3 text-cyan-400 shrink-0" />
+                    <div className="mt-2 text-slate-700 font-mono text-[11px] pl-5 flex items-center gap-1.5 border-t border-slate-200 pt-2 truncate">
+                      <Terminal className="w-3 h-3 text-slate-600 shrink-0" />
                       <span className="truncate">{currentAction}</span>
                     </div>
                   )}

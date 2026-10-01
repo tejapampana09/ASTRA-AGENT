@@ -4,30 +4,24 @@
 
 @layer base {
   body {
-    @apply bg-[#121316] text-[#c9d1d9] font-sans antialiased overflow-hidden select-none;
+    @apply bg-[#ffffff] text-[#0f172a] font-sans antialiased overflow-hidden select-none;
   }
 }
 
-/* Background Ambient Radial Purple Glow (like Echo AI / Image 1 & 2) */
-.ambient-glow {
-  background: radial-gradient(circle at 90% 10%, rgba(168, 85, 247, 0.18) 0%, rgba(139, 92, 246, 0.08) 35%, rgba(18, 19, 22, 0) 70%);
+/* Antigravity Minimalist Light Style */
+.antigravity-bg {
+  background-color: #ffffff;
 }
 
-/* Glowing Input Pill Border */
-.input-pill-glow {
-  box-shadow: 0 0 25px -5px rgba(168, 85, 247, 0.25), inset 0 0 15px -8px rgba(168, 85, 247, 0.2);
-  border: 1px solid rgba(168, 85, 247, 0.45);
+/* Subtle clean input shadow */
+.antigravity-input-shadow {
+  box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.08), 0 0 1px 1px rgba(15, 23, 42, 0.05);
 }
 
-/* Center Orb Glow */
-.orb-glow {
-  box-shadow: 0 0 45px 10px rgba(192, 132, 252, 0.35);
-}
-
-/* Custom Scrollbars */
+/* Custom Scrollbars for light theme */
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -35,10 +29,10 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2a2b32;
+  background: #cbd5e1;
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3e404b;
+  background: #94a3b8;
 }
