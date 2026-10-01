@@ -23,6 +23,97 @@ import {
 } from './types';
 import { Sparkles, Terminal, FileCode, CheckCircle2, RotateCcw } from 'lucide-react';
 
+const getRelativePath = (p: string, wsPath?: string): string => {
+  if (!p) return '';
+  let clean = p.replace(/\\/g, '/');
+  if (wsPath) {
+    const wsClean = wsPath.replace(/\\/g, '/').replace(/\/$/, '');
+    if (clean.toLowerCase().startsWith(wsClean.toLowerCase())) {
+      clean = clean.slice(wsClean.length).replace(/^\//, '');
+    }
+  }
+  const parts = clean.split('/');
+  return parts.length > 2 && clean.includes(':') ? parts.slice(-2).join('/') : clean;
+};
+
+const formatToolAction = (name: string, args: Record<string, any>, wsPath?: string) => {
+  const relPath = getRelativePath(args?.file_path || '', wsPath);
+  switch (name) {
+    case 'create_file':
+      return {
+        type: 'file' as const,
+        title: `Create ${relPath}`,
+        detail: args.content ? `${args.content.split('\n').length} lines` : 'new file',
+      };
+    case 'write_file':
+      return {
+        type: 'file' as const,
+        title: `Write ${relPath}`,
+        detail: args.content ? `${args.content.split('\n').length} lines` : 'overwrite',
+      };
+    case 'edit_file':
+      return {
+        type: 'file' as const,
+        title: `Edit ${relPath}`,
+        detail: 'surgical edit',
+      };
+    case 'read_file':
+      return {
+        type: 'file' as const,
+        title: `Read ${relPath}`,
+        detail: args.start_line ? `lines ${args.start_line}-${args.end_line || ''}` : '',
+      };
+    case 'delete_file':
+      return {
+        type: 'file' as const,
+        title: `Delete ${relPath}`,
+        detail: '',
+      };
+    case 'run_command':
+      return {
+        type: 'command' as const,
+        title: `$ ${args.command || 'command'}`,
+        detail: '',
+      };
+    case 'list_dir':
+      return {
+        type: 'tool' as const,
+        title: `List ${getRelativePath(args.dir_path || '.', wsPath)}`,
+        detail: '',
+      };
+    case 'search_code':
+      return {
+        type: 'tool' as const,
+        title: `Search "${args.query}"`,
+        detail: args.search_dir ? `in ${getRelativePath(args.search_dir, wsPath)}` : '',
+      };
+    case 'git_status':
+      return {
+        type: 'tool' as const,
+        title: 'Git Status',
+        detail: '',
+      };
+    case 'git_diff':
+      return {
+        type: 'tool' as const,
+        title: 'Git Diff',
+        detail: '',
+      };
+    case 'web_search':
+      return {
+        type: 'tool' as const,
+        title: `Web Search: ${args.query}`,
+        detail: '',
+      };
+    default:
+      return {
+        type: 'tool' as const,
+        title: name,
+        detail: '',
+      };
+  }
+};
+
 export const App: React.FC = () => {
   // System & Backend Data
   const [health, setHealth] = useState<SystemHealth>();
@@ -189,32 +280,40 @@ export const App: React.FC = () => {
         setCurrentAction('Exploring repository architecture...');
         break;
 
-      case 'tool_started':
+      case 'tool_started': {
         const toolArgs = data.arguments || data.args || {};
-        setCurrentAction(`Running ${data.name}...`);
+        const formatted = formatToolAction(data.name, toolArgs, metadata?.workspace_path);
+        setCurrentAction(`Running ${formatted.title}...`);
         updateAssistantMessage((msg) => {
           const acts = msg.actions || [];
-          const title = data.name === 'run_command' ? `$ ${toolArgs?.command || 'command'}` : `tool: ${data.name}`;
-          if (acts.some((a) => a.title === title && a.status === 'running')) {
-            return msg;
+          const existingIdx = acts.findIndex((a) => a.title === formatted.title);
+          if (existingIdx >= 0) {
+            const updated = [...acts];
+            updated[existingIdx] = {
+              ...updated[existingIdx],
+              status: 'running',
+              detail: formatted.detail || updated[existingIdx].detail,
+            };
+            return { ...msg, actions: updated };
           }
           return {
             ...msg,
             actions: [
               ...acts,
               {
-                id: `tool_${Date.now()}`,
-                type: data.name === 'run_command' ? 'command' : 'tool',
-                title,
-                detail: data.name !== 'run_command' && Object.keys(toolArgs).length > 0 ? JSON.stringify(toolArgs) : undefined,
+                id: `tool_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+                type: formatted.type,
+                title: formatted.title,
+                detail: formatted.detail,
                 status: 'running',
               },
             ],
           };
         });
         break;
+      }
 
-      case 'tool_completed':
+      case 'tool_completed': {
         setCurrentAction('');
         if (data.name === 'run_command') {
           setTerminalLogs((prev) => [...prev, data.output || '']);
@@ -223,13 +322,18 @@ export const App: React.FC = () => {
           const acts = [...(msg.actions || [])];
           for (let i = acts.length - 1; i >= 0; i--) {
             if (acts[i].status === 'running') {
-              acts[i] = { ...acts[i], status: 'completed', output: data.output || '(completed)' };
+              acts[i] = {
+                ...acts[i],
+                status: data.success === false ? 'failed' : 'completed',
+                output: data.output || '(completed)',
+              };
               break;
             }
           }
           return { ...msg, actions: acts };
         });
         break;
+      }
 
       case 'command_started':
         setTerminalLogs((prev) => [...prev, `$ ${data.command}`]);
@@ -249,52 +353,81 @@ export const App: React.FC = () => {
         });
         break;
 
-      case 'file_changed':
+      case 'file_changed': {
         const isCreated = data.action === 'created';
+        const relPath = getRelativePath(data.file_path, metadata?.workspace_path);
         if (isCreated) {
-          setFilesCreated((prev) => Array.from(new Set([...prev, data.file_path])));
+          setFilesCreated((prev) => Array.from(new Set([...prev, relPath])));
         } else {
-          setFilesModified((prev) => Array.from(new Set([...prev, data.file_path])));
+          setFilesModified((prev) => Array.from(new Set([...prev, relPath])));
         }
-        updateAssistantMessage((msg) => ({
-          ...msg,
-          actions: [
-            ...(msg.actions || []),
-            {
-              id: `file_${Date.now()}`,
-              type: 'file',
-              title: isCreated ? `Created: ${data.file_path}` : `Modified: ${data.file_path}`,
-              detail: `${data.lines_changed || 0} lines changed`,
-              status: 'completed',
-            },
-          ],
-        }));
+        updateAssistantMessage((msg) => {
+          const acts = msg.actions || [];
+          const existing = acts.find((a) => a.title.includes(relPath));
+          if (existing) {
+            return msg; // Card already exists from tool_started, avoid duplicate pill
+          }
+          return {
+            ...msg,
+            actions: [
+              ...acts,
+              {
+                id: `file_${Date.now()}`,
+                type: 'file',
+                title: isCreated ? `Create ${relPath}` : `Modify ${relPath}`,
+                detail: `${data.lines_changed || 0} lines changed`,
+                status: 'completed',
+              },
+            ],
+          };
+        });
         api.getWorkspaceDiff().then(setDiffResult).catch(() => {});
         break;
+      }
 
-      case 'verification_started':
+      case 'verification_started': {
         setCurrentAction('Running independent verification (AST & Test suite)...');
-        updateAssistantMessage((msg) => ({
-          ...msg,
-          actions: [
-            ...(msg.actions || []),
-            {
-              id: `verify_${Date.now()}`,
-              type: 'verification',
-              title: 'Independent Verification Check',
-              detail: 'Testing AST, syntax, and automated test runners...',
+        updateAssistantMessage((msg) => {
+          const acts = msg.actions || [];
+          const existingIdx = acts.findIndex((a) => a.type === 'verification');
+          if (existingIdx >= 0) {
+            const updated = [...acts];
+            updated[existingIdx] = {
+              ...updated[existingIdx],
               status: 'running',
-            },
-          ],
-        }));
+              detail: 'Testing AST, syntax, and automated test runners...',
+            };
+            return { ...msg, actions: updated };
+          }
+          return {
+            ...msg,
+            actions: [
+              ...acts,
+              {
+                id: `verify_${Date.now()}`,
+                type: 'verification',
+                title: 'Independent Verification Check',
+                detail: 'Testing AST, syntax, and automated test runners...',
+                status: 'running',
+              },
+            ],
+          };
+        });
         break;
+      }
 
-      case 'verification_passed':
+      case 'verification_passed': {
         setCurrentAction('');
         updateAssistantMessage((msg) => {
           const acts = (msg.actions || []).map((a) =>
-            a.type === 'verification' && a.status === 'running'
-              ? { ...a, status: 'completed' as const, output: `Passed: ${data.summary}\n${data.details || ''}` }
+            a.type === 'verification'
+              ? {
+                  ...a,
+                  status: 'completed' as const,
+                  title: 'Independent Verification: PASSED',
+                  detail: data.summary,
+                  output: `Passed: ${data.summary}\n${data.details || ''}`,
+                }
               : a
           );
           return {
@@ -309,13 +442,20 @@ export const App: React.FC = () => {
         });
         api.getWorkspaceDiff().then(setDiffResult).catch(() => {});
         break;
+      }
 
-      case 'verification_failed':
+      case 'verification_failed': {
         setCurrentAction('Diagnosing failure for autonomous self-healing fix...');
         updateAssistantMessage((msg) => {
           const acts = (msg.actions || []).map((a) =>
-            a.type === 'verification' && a.status === 'running'
-              ? { ...a, status: 'failed' as const, output: `Failed: ${data.summary}\n${data.details || ''}` }
+            a.type === 'verification'
+              ? {
+                  ...a,
+                  status: 'failed' as const,
+                  title: 'Independent Verification: FAILED',
+                  detail: data.summary,
+                  output: `Failed: ${data.summary}\n${data.details || ''}`,
+                }
               : a
           );
           return {
@@ -329,6 +469,7 @@ export const App: React.FC = () => {
           };
         });
         break;
+      }
 
       case 'fix_started':
         setCurrentAction(`Self-healing attempt ${data.attempt}: Diagnosing and fixing code...`);

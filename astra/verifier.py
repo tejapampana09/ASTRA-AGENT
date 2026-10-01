@@ -228,7 +228,9 @@ class IndependentVerifier:
             if not has_tests:
                 return None, "No automated test suite detected in workspace. Syntax verified.", None
 
-            cmd = ["python", "-m", "pytest", "-q", "--tb=short"]
+            cmd = ["python", "-m", "pytest", "-q", "--tb=short", "-o", "pythonpath=."]
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(self.workspace_path) + (os.pathsep + env["PYTHONPATH"] if "PYTHONPATH" in env else "")
             try:
                 res = subprocess.run(
                     cmd,
@@ -239,6 +241,7 @@ class IndependentVerifier:
                     errors="replace",
                     timeout=60,
                     check=False,
+                    env=env,
                 )
                 output = (res.stdout + "\n" + res.stderr).strip()
                 if res.returncode != 0:

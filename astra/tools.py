@@ -364,12 +364,32 @@ class ToolExecutor:
         except Exception as exc:
             return f"Error searching code: {exc}"
 
+    def _kill_process_tree(self, proc: subprocess.Popen) -> None:
+        """Safely terminate the entire process tree to prevent orphan background processes."""
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            else:
+                import signal
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
     def run_command(
         self,
         command: str,
         timeout: int = 45,
         on_output: Optional[Callable[[str], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
+        allow_dangerous: bool = False,
     ) -> str:
         """Run shell command in workspace with timeout, streaming, and cancellation."""
         cmd = command.strip()
@@ -377,33 +397,33 @@ class ToolExecutor:
             return "Error: Command cannot be empty."
 
         perm = self.security.classify_command(cmd)
-        if perm == PermissionLevel.DANGEROUS:
+        if perm == PermissionLevel.DANGEROUS and not allow_dangerous:
             return f"Error: Command '{cmd}' classified as DANGEROUS and was blocked."
 
         start_time = time.time()
         try:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=str(self.workspace_path),
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
+            popen_kwargs: Dict[str, Any] = {
+                "cwd": str(self.workspace_path),
+                "shell": True,
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.PIPE,
+                "text": True,
+                "encoding": "utf-8",
+                "errors": "replace",
+            }
+            if os.name != "nt":
+                popen_kwargs["start_new_session"] = True
 
-            stdout_lines = []
-            stderr_lines = []
+            proc = subprocess.Popen(cmd, **popen_kwargs)
 
             # Non-blocking poll with timeout & cancellation
             while True:
                 if cancel_check and cancel_check():
-                    proc.kill()
+                    self._kill_process_tree(proc)
                     return "Error: Command execution cancelled by user."
 
                 if time.time() - start_time > timeout:
-                    proc.kill()
+                    self._kill_process_tree(proc)
                     return f"Error: Command timed out after {timeout} seconds."
 
                 ret = proc.poll()
@@ -422,6 +442,7 @@ class ToolExecutor:
             out_str = "\n".join(output) if output else "(No output)"
             return f"[Exit code {proc.returncode}]\n{out_str}"
         except subprocess.TimeoutExpired:
+            self._kill_process_tree(proc)
             return f"Error: Command timed out after {timeout} seconds."
         except Exception as exc:
             return f"Error executing command '{cmd}': {exc}"
@@ -500,29 +521,151 @@ class ToolExecutor:
         except Exception as exc:
             return f"Git log error: {exc}"
 
-    def web_search(self, query: str, max_results: int = 4) -> str:
-        """Search the web using DuckDuckGo or Wikipedia."""
+    def web_search(self, query: str, max_results: int = 8) -> str:
+        """Search the web using a multi-tier approach for best coverage and quality.
+
+        Tier 1: System clock fast-path for time/date/day queries.
+        Tier 2: DuckDuckGo Instant Answer API + Wikipedia REST API summary.
+        Tier 3: DuckDuckGo full-text search (backend='lite', fallback 'html', fallback 'api').
+        """
+        import urllib.request
+        import urllib.parse
+        import datetime as _dt
+
         query = (query or "").strip()
         if not query:
             return "Error: Empty search query."
 
-        results = []
+        sections: list[str] = []
+
+        # ── Tier 1: System datetime fast-path ──────────────────────────────────────
+        _time_keywords = (
+            "current time", "what time", "what's the time", "local time",
+            "today's date", "what date", "what day", "current date",
+            "time now", "date today", "day today",
+        )
+        q_lower = query.lower()
+        if any(kw in q_lower for kw in _time_keywords):
+            now = _dt.datetime.now()
+            sections.append(
+                f"## Current Date & Time\n"
+                f"- **Date**: {now.strftime('%A, %B %d, %Y')}\n"
+                f"- **Time**: {now.strftime('%I:%M:%S %p')}\n"
+                f"- **24h**: {now.strftime('%H:%M:%S')}\n"
+                f"- **Timezone**: Local system time"
+            )
+            return "\n\n".join(sections)
+
+        # ── Tier 2a: DuckDuckGo Instant Answer API ─────────────────────────────────
         try:
-            try:
-                from ddgs import DDGS
-            except ImportError:
-                from duckduckgo_search import DDGS
-            ddgs = DDGS()
-            raw = list(ddgs.text(query, max_results=max_results))
-            for item in raw:
-                title = item.get("title", "")
-                snippet = item.get("body", "")
-                link = item.get("href", "")
-                results.append(f"### {title}\n{snippet}\nURL: {link}")
-            if results:
-                return f"Web Search Results for '{query}':\n\n" + "\n\n".join(results)
+            ddg_ia_url = (
+                "https://api.duckduckgo.com/?q="
+                + urllib.parse.quote_plus(query)
+                + "&format=json&no_redirect=1&no_html=1&skip_disambig=1"
+            )
+            with urllib.request.urlopen(ddg_ia_url, timeout=5) as resp:
+                ia = json.loads(resp.read().decode("utf-8", errors="replace"))
+
+            abstract = (ia.get("Abstract") or "").strip()
+            abstract_src = (ia.get("AbstractSource") or "").strip()
+            abstract_url = (ia.get("AbstractURL") or "").strip()
+            answer = (ia.get("Answer") or "").strip()
+            definition = (ia.get("Definition") or "").strip()
+            infobox = ia.get("Infobox") or {}
+
+            if answer:
+                sections.append(f"## Instant Answer\n{answer}")
+
+            if abstract:
+                src_line = f"\n*Source: [{abstract_src}]({abstract_url})*" if abstract_src else ""
+                sections.append(f"## Summary\n{abstract}{src_line}")
+
+            if definition:
+                def_src = (ia.get("DefinitionSource") or "").strip()
+                sections.append(f"## Definition\n{definition}" + (f" *(via {def_src})*" if def_src else ""))
+
+            # Infobox key facts
+            if infobox and infobox.get("content"):
+                facts = []
+                for item in infobox["content"][:12]:
+                    lbl = item.get("label", "").strip()
+                    val = item.get("value", "").strip()
+                    if lbl and val:
+                        facts.append(f"- **{lbl}**: {val}")
+                if facts:
+                    sections.append("## Key Facts\n" + "\n".join(facts))
+
+            # Related topics
+            related = ia.get("RelatedTopics") or []
+            rel_lines = []
+            for rt in related[:5]:
+                if isinstance(rt, dict) and rt.get("Text") and rt.get("FirstURL"):
+                    rel_lines.append(f"- [{rt['Text'][:120]}]({rt['FirstURL']})")
+            if rel_lines:
+                sections.append("## Related Topics\n" + "\n".join(rel_lines))
+
         except Exception:
-            pass
+            pass  # fall through to Wikipedia and DDG text
+
+        # ── Tier 2b: Wikipedia REST summary API ────────────────────────────────────
+        # Only fetch if we don't already have a good abstract from DDG IA
+        if not any("Summary" in s or "Definition" in s for s in sections):
+            try:
+                # Extract candidate topic from query (strip question words)
+                topic_raw = re.sub(
+                    r"^(who is|what is|tell me about|explain|about|define)\s+",
+                    "",
+                    query,
+                    flags=re.IGNORECASE,
+                ).strip()
+                topic_enc = urllib.parse.quote(topic_raw.replace(" ", "_"))
+                wiki_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{topic_enc}"
+                with urllib.request.urlopen(wiki_url, timeout=5) as resp:
+                    wdata = json.loads(resp.read().decode("utf-8", errors="replace"))
+                extract = (wdata.get("extract") or "").strip()
+                wiki_title = (wdata.get("title") or "").strip()
+                wiki_desc = (wdata.get("description") or "").strip()
+                wiki_page_url = (wdata.get("content_urls", {}).get("desktop", {}).get("page") or "").strip()
+                if extract and wdata.get("type") not in ("disambiguation",):
+                    desc_line = f"\n*{wiki_desc}*" if wiki_desc else ""
+                    src_line = f"\n[Wikipedia]({wiki_page_url})" if wiki_page_url else ""
+                    sections.append(f"## Wikipedia: {wiki_title}{desc_line}\n{extract}{src_line}")
+            except Exception:
+                pass
+
+        # ── Tier 3: DuckDuckGo full-text search ────────────────────────────────────
+        search_results: list[str] = []
+        backends = ["lite", "html", "api"]
+        for backend in backends:
+            try:
+                try:
+                    from ddgs import DDGS
+                except ImportError:
+                    from duckduckgo_search import DDGS
+                ddgs = DDGS()
+                kwargs: dict = {"max_results": max_results}
+                if backend != "api":
+                    kwargs["backend"] = backend
+                raw = list(ddgs.text(query, **kwargs))
+                if raw:
+                    for item in raw:
+                        title = (item.get("title") or "").strip()
+                        snippet = (item.get("body") or "").strip()
+                        link = (item.get("href") or "").strip()
+                        if title or snippet:
+                            search_results.append(
+                                f"**{title}**\n{snippet}\n<{link}>"
+                            )
+                    break  # success — stop trying backends
+            except Exception:
+                continue
+
+        if search_results:
+            sections.append("## Web Search Results\n" + "\n\n".join(search_results))
+
+        if sections:
+            header = f"# Search: {query}\n"
+            return header + "\n\n".join(sections)
 
         return f"No web search results available for '{query}'."
 
@@ -682,6 +825,7 @@ class ToolRegistry:
         args: Dict[str, Any],
         approval_callback: Optional[Callable[[str, str, Dict[str, Any]], bool]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
+        session_id: Optional[str] = None,
     ) -> ToolResult:
         """Central executor with validation, permission check, approval, and execution."""
         start_time = time.time()
@@ -705,10 +849,24 @@ class ToolRegistry:
                 permission = PermissionLevel.DANGEROUS
 
         # If DANGEROUS, require explicit approval
+        approved = False
         if permission == PermissionLevel.DANGEROUS:
-            approved = False
             if approval_callback:
                 approved = approval_callback(name, f"Tool '{name}' requested with args: {args}", args)
+            else:
+                try:
+                    from astra.approval import approval_manager
+                    appr_req = approval_manager.create_request(
+                        session_id=session_id or "default",
+                        tool_name=name,
+                        arguments=args,
+                        description=f"Tool '{name}' requires user confirmation before proceeding.",
+                        command=args.get("command") if name == "run_command" else None,
+                    )
+                    approved = approval_manager.wait_for_decision(appr_req)
+                except Exception:
+                    approved = False
+
             if not approved:
                 return ToolResult(
                     success=False,
@@ -757,6 +915,7 @@ class ToolRegistry:
                     command=args.get("command", ""),
                     timeout=args.get("timeout", 45),
                     cancel_check=cancel_check,
+                    allow_dangerous=approved or (permission != PermissionLevel.DANGEROUS),
                 )
             elif name == "git_status":
                 out = self.executor.git_status()

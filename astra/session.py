@@ -83,6 +83,13 @@ class SessionManager:
                 created_at REAL NOT NULL,
                 FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS task_states (
+                session_id TEXT PRIMARY KEY,
+                state_data TEXT NOT NULL,
+                updated_at REAL NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );
             """)
             conn.commit()
 
@@ -246,6 +253,36 @@ class SessionManager:
                 (session_id, 1 if passed else 0, summary, details, phase, time.time()),
             )
             conn.commit()
+
+    def save_task_state(self, state_dict: Dict[str, Any]) -> None:
+        session_id = state_dict.get("session_id")
+        if not session_id:
+            return
+        now = time.time()
+        data_json = json.dumps(state_dict)
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO task_states (session_id, state_data, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    state_data = excluded.state_data,
+                    updated_at = excluded.updated_at
+                """,
+                (session_id, data_json, now),
+            )
+            conn.commit()
+
+    def get_task_state(self, session_id: str) -> Optional[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cur = conn.execute("SELECT state_data FROM task_states WHERE session_id = ?", (session_id,))
+            row = cur.fetchone()
+            if row and row["state_data"]:
+                try:
+                    return json.loads(row["state_data"])
+                except Exception:
+                    return None
+        return None
 
 
 # Global default session manager

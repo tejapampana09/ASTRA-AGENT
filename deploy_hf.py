@@ -5,7 +5,11 @@ Deploy Fine-Tuned Gemma 4 E2B Server to Hugging Face Spaces (1-Click Automated S
 import os
 import sys
 import getpass
+from dotenv import load_dotenv
 from huggingface_hub import HfApi, login
+
+# Load .env
+load_dotenv(override=True)
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -19,7 +23,9 @@ def main():
     
     # 1. Check for token
     token = os.environ.get("HF_TOKEN")
-    if not token and len(sys.argv) > 1 and sys.argv[1].startswith("hf_"):
+    if token:
+        print(f"🔑 Found HF_TOKEN in .env ({token[:8]}...)")
+    elif len(sys.argv) > 1 and sys.argv[1].startswith("hf_"):
         token = sys.argv[1]
 
     if not token:

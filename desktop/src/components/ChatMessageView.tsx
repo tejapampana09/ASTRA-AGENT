@@ -29,21 +29,56 @@ interface ChatMessageViewProps {
 
 const ActionStepCard: React.FC<{ action: AgentAction }> = ({ action }) => {
   const [expanded, setExpanded] = useState<boolean>(action.status === 'running' || !!action.output);
+  const [copied, setCopied] = useState<boolean>(false);
+
+  const handleCopyOutput = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (action.output) {
+      navigator.clipboard.writeText(action.output);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
+  };
 
   return (
-    <div className="rounded-xl bg-[#16171f] border border-[#2b2d3a] overflow-hidden my-2 shadow-sm text-xs">
+    <div className="rounded-xl bg-[#12131b] border border-[#232536] hover:border-[#2e3146] overflow-hidden my-1.5 shadow-sm text-xs transition-colors">
       <div
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center justify-between px-3.5 py-2.5 bg-[#1b1c25] hover:bg-[#20222d] cursor-pointer transition-colors"
+        className="flex items-center justify-between px-3.5 py-2 bg-[#171822] hover:bg-[#1c1e2b] cursor-pointer transition-colors"
       >
         <div className="flex items-center space-x-2.5 truncate max-w-[80%]">
-          {action.type === 'command' && <Terminal className="w-4 h-4 text-cyan-400 shrink-0" />}
-          {action.type === 'file' && <FileCode className="w-4 h-4 text-emerald-400 shrink-0" />}
-          {action.type === 'tool' && <Wrench className="w-4 h-4 text-purple-400 shrink-0" />}
-          {action.type === 'thought' && <Brain className="w-4 h-4 text-violet-400 shrink-0" />}
-          {action.type === 'verification' && <Shield className="w-4 h-4 text-amber-400 shrink-0" />}
+          {action.type === 'command' && (
+            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-cyan-950/80 border border-cyan-700/50 text-cyan-300 font-mono text-[10px] font-semibold">
+              <Terminal className="w-3 h-3 shrink-0" />
+              <span>CMD</span>
+            </span>
+          )}
+          {action.type === 'file' && (
+            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-700/50 text-emerald-300 font-mono text-[10px] font-semibold">
+              <FileCode className="w-3 h-3 shrink-0" />
+              <span>FILE</span>
+            </span>
+          )}
+          {action.type === 'tool' && (
+            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-purple-950/80 border border-purple-700/50 text-purple-300 font-mono text-[10px] font-semibold">
+              <Wrench className="w-3 h-3 shrink-0" />
+              <span>TOOL</span>
+            </span>
+          )}
+          {action.type === 'thought' && (
+            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-violet-950/80 border border-violet-700/50 text-violet-300 font-mono text-[10px] font-semibold">
+              <Brain className="w-3 h-3 shrink-0" />
+              <span>PLAN</span>
+            </span>
+          )}
+          {action.type === 'verification' && (
+            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-950/80 border border-amber-700/50 text-amber-300 font-mono text-[10px] font-semibold">
+              <Shield className="w-3 h-3 shrink-0" />
+              <span>VERIFY</span>
+            </span>
+          )}
 
-          <span className="font-mono font-medium text-zinc-200 truncate">{action.title}</span>
+          <span className="font-mono font-medium text-zinc-100 truncate text-[12px]">{action.title}</span>
           {action.detail && (
             <span className="text-zinc-500 font-mono text-[11px] truncate">{action.detail}</span>
           )}
@@ -51,15 +86,16 @@ const ActionStepCard: React.FC<{ action: AgentAction }> = ({ action }) => {
 
         <div className="flex items-center space-x-2 shrink-0">
           <span
-            className={`text-[10px] font-mono px-2 py-0.5 rounded-full ${
+            className={`text-[10px] font-mono px-2 py-0.5 rounded-full flex items-center gap-1 ${
               action.status === 'running'
-                ? 'bg-purple-950 text-purple-300 border border-purple-700/60 animate-pulse'
+                ? 'bg-purple-950/90 text-purple-300 border border-purple-600/60 animate-pulse'
                 : action.status === 'completed'
-                ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/60'
-                : 'bg-rose-950 text-rose-400 border border-rose-800/60'
+                ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-700/60'
+                : 'bg-rose-950/80 text-rose-300 border border-rose-700/60'
             }`}
           >
-            {action.status}
+            {action.status === 'completed' && <Check className="w-2.5 h-2.5" />}
+            <span>{action.status}</span>
           </span>
           {expanded ? (
             <ChevronDown className="w-3.5 h-3.5 text-zinc-500" />
@@ -70,9 +106,22 @@ const ActionStepCard: React.FC<{ action: AgentAction }> = ({ action }) => {
       </div>
 
       {expanded && action.output && (
-        <pre className="p-3.5 bg-[#0f1015] border-t border-[#232530] font-mono text-[11px] text-zinc-300 overflow-x-auto max-h-64 leading-relaxed whitespace-pre-wrap select-text">
-          {action.output}
-        </pre>
+        <div className="relative bg-[#0d0e14] border-t border-[#202230]">
+          <div className="flex items-center justify-between px-3 py-1 bg-[#13141d] border-b border-[#202230] text-[10px] text-zinc-500">
+            <span>Output</span>
+            <button
+              onClick={handleCopyOutput}
+              className="hover:text-zinc-300 flex items-center gap-1 transition-colors"
+              title="Copy output"
+            >
+              {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+              <span>{copied ? 'Copied' : 'Copy'}</span>
+            </button>
+          </div>
+          <pre className="p-3 font-mono text-[11px] text-zinc-300 overflow-x-auto max-h-64 leading-relaxed whitespace-pre-wrap select-text">
+            {action.output}
+          </pre>
+        </div>
       )}
     </div>
   );
@@ -140,6 +189,23 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({
 
   const parts = parseCodeBlocks(message.content);
 
+  // Extra safety: Deduplicate actions so identical title/target is never shown twice
+  const deduplicatedActions = React.useMemo(() => {
+    if (!message.actions) return [];
+    const list: AgentAction[] = [];
+    for (const act of message.actions) {
+      const existingIdx = list.findIndex((a) => a.title === act.title);
+      if (existingIdx >= 0) {
+        list[existingIdx] = act; // Keep latest state
+      } else {
+        list.push(act);
+      }
+    }
+    return list;
+  }, [message.actions]);
+
+  const hasVerificationAction = deduplicatedActions.some((a) => a.type === 'verification');
+
   return (
     <div className="flex flex-col space-y-3 my-4 max-w-[90%] select-text">
       {/* Model / Agent Header */}
@@ -151,9 +217,9 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({
       </div>
 
       {/* Cline-Style Execution Steps (Tool Calls, Shell Commands, Verifications) */}
-      {message.actions && message.actions.length > 0 && (
+      {deduplicatedActions.length > 0 && (
         <div className="space-y-1">
-          {message.actions.map((act) => (
+          {deduplicatedActions.map((act) => (
             <ActionStepCard key={act.id} action={act} />
           ))}
         </div>
@@ -193,8 +259,8 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({
         </div>
       )}
 
-      {/* Verification Outcome Card if Present */}
-      {message.verification && (
+      {/* Verification Outcome Card if Present and not already rendered in action steps */}
+      {message.verification && !hasVerificationAction && (
         <div
           className={`rounded-xl p-3.5 border text-xs ${
             message.verification.passed

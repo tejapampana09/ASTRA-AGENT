@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from astra import __version__
 from astra.agent import AstraAgent
+from astra.approval import approval_manager
 from astra.config import settings
 from astra.events import AgentEvent, AgentState, EventType, event_bus
 from astra.llm import LLMRouter
@@ -44,6 +45,7 @@ pending_approvals: Dict[str, Dict[str, Any]] = {}
 
 # Active WebSocket connections
 connected_websockets: Set[WebSocket] = set()
+session_websockets: Dict[str, Set[WebSocket]] = {}
 main_event_loop: Optional[asyncio.AbstractEventLoop] = None
 
 router = LLMRouter()
@@ -62,6 +64,7 @@ def broadcast_event(event: AgentEvent) -> None:
     loop = main_event_loop
     if loop and loop.is_running():
         dead = set()
+        # Broadcast to global listeners
         for ws in set(connected_websockets):
             try:
                 asyncio.run_coroutine_threadsafe(ws.send_text(data_json), loop)
@@ -69,6 +72,18 @@ def broadcast_event(event: AgentEvent) -> None:
                 dead.add(ws)
         if dead:
             connected_websockets.difference_update(dead)
+
+        # Broadcast to session-scoped listeners
+        sess_id = event.session_id
+        if sess_id and sess_id in session_websockets:
+            sess_dead = set()
+            for ws in set(session_websockets[sess_id]):
+                try:
+                    asyncio.run_coroutine_threadsafe(ws.send_text(data_json), loop)
+                except Exception:
+                    sess_dead.add(ws)
+            if sess_dead:
+                session_websockets[sess_id].difference_update(sess_dead)
 
 
 event_bus.subscribe(broadcast_event)
@@ -217,7 +232,8 @@ def start_task(req: StartTaskRequest):
         try:
             agent.run(req.goal)
         except Exception as exc:
-            pass
+            agent._set_state(AgentState.FAILED, {"error": str(exc)})
+            agent._emit_event(EventType.AGENT_FAILED, {"error": str(exc)})
 
     t = threading.Thread(target=_run_worker, daemon=True)
     agent_threads[session_id] = t
@@ -236,28 +252,92 @@ def stop_task(session_id: str):
     return {"status": "cancelling", "session_id": session_id}
 
 
+@app.post("/api/tasks/{session_id}/resume")
+def resume_task(session_id: str):
+    """Resume an interrupted or stopped task from saved TaskState."""
+    saved = session_manager.get_task_state(session_id)
+    if not saved:
+        sess = session_manager.get_session(session_id)
+        if not sess:
+            raise HTTPException(status_code=404, detail="Session not found.")
+        ws_path = Path(sess.get("workspace_path") or current_workspace.workspace_path)
+        model = sess.get("model") or settings.default_model
+    else:
+        ws_path = Path(saved.get("workspace_path") or current_workspace.workspace_path)
+        model = saved.get("model_name") or settings.default_model
+
+    agent = AstraAgent(
+        workspace_path=ws_path,
+        model_name=model,
+        session_id=session_id,
+        max_iterations=settings.max_iterations,
+    )
+    active_agents[session_id] = agent
+
+    def _run_resume():
+        try:
+            agent.resume()
+        except Exception as exc:
+            agent._set_state(AgentState.FAILED, {"error": str(exc)})
+            agent._emit_event(EventType.AGENT_FAILED, {"error": str(exc)})
+
+    t = threading.Thread(target=_run_resume, daemon=True)
+    agent_threads[session_id] = t
+    t.start()
+    return {"status": "resumed", "session_id": session_id}
+
+
+@app.post("/api/tasks/{session_id}/rollback")
+def rollback_task(session_id: str, checkpoint_id: Optional[str] = None):
+    """Revert changes back to a specific checkpoint safely."""
+    agent = active_agents.get(session_id)
+    if not agent:
+        sess = session_manager.get_session(session_id)
+        if not sess:
+            raise HTTPException(status_code=404, detail="Session not found.")
+        ws = Path(sess.get("workspace_path") or current_workspace.workspace_path)
+        agent = AstraAgent(workspace_path=ws, session_id=session_id)
+    res = agent.checkpoint_manager.rollback(checkpoint_id)
+    return res
+
+
+@app.get("/api/approvals/pending")
+def list_pending_approvals(session_id: Optional[str] = None):
+    """List all pending approval requests."""
+    return [r.to_dict() for r in approval_manager.list_pending(session_id)]
+
+
 @app.post("/api/approvals/{approval_id}")
 def handle_approval(approval_id: str, req: ApprovalResponseRequest):
     """Approve or reject a pending dangerous command."""
-    if approval_id not in pending_approvals:
+    ok = approval_manager.respond(approval_id, req.approved)
+    if not ok:
+        if approval_id in pending_approvals:
+            appr = pending_approvals[approval_id]
+            appr["approved"] = req.approved
+            appr["event"].set()
+            return {"approval_id": approval_id, "approved": req.approved}
         raise HTTPException(status_code=404, detail="Approval request not found or expired.")
-    appr = pending_approvals[approval_id]
-    appr["approved"] = req.approved
-    appr["event"].set()
     return {"approval_id": approval_id, "approved": req.approved}
 
 
 # WebSocket for Live Events
 @app.websocket("/ws/events")
-async def websocket_events(websocket: WebSocket):
+async def websocket_events(websocket: WebSocket, session_id: Optional[str] = None):
     await websocket.accept()
-    connected_websockets.add(websocket)
+    if session_id:
+        if session_id not in session_websockets:
+            session_websockets[session_id] = set()
+        session_websockets[session_id].add(websocket)
+    else:
+        connected_websockets.add(websocket)
     try:
         # Send initial status
         meta = current_workspace.scan()
         initial_event = AgentEvent(
             event_type="connection_established",
             state=AgentState.IDLE,
+            session_id=session_id or "default",
             data={
                 "message": "Connected to ASTRA V4 runtime engine",
                 "workspace": str(current_workspace.workspace_path),
@@ -268,14 +348,17 @@ async def websocket_events(websocket: WebSocket):
         await websocket.send_text(initial_event.to_json())
 
         while True:
-            # Keep alive & listen for client messages
             msg = await websocket.receive_text()
             if msg == "ping":
                 await websocket.send_text("pong")
     except (WebSocketDisconnect, Exception):
         connected_websockets.discard(websocket)
+        if session_id and session_id in session_websockets:
+            session_websockets[session_id].discard(websocket)
     finally:
         connected_websockets.discard(websocket)
+        if session_id and session_id in session_websockets:
+            session_websockets[session_id].discard(websocket)
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8765):

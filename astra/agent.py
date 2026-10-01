@@ -14,55 +14,49 @@ from __future__ import annotations
 
 import json
 import time
+import datetime as _dt
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 
+from astra.approval import approval_manager
+from astra.checkpoints import CheckpointManager
 from astra.config import settings
 from astra.events import AgentEvent, AgentState, EventType, event_bus
 from astra.llm import LLMClient, LLMResponse, parse_tool_calls_from_text
 from astra.session import session_manager
+from astra.state import ActionRecord, StagnationAndLoopDetector, StepStatus, TaskPlan, TaskState, TaskStep
 from astra.tools import PermissionLevel, ToolExecutor, ToolRegistry, ToolResult
 from astra.verifier import IndependentVerifier, VerificationResult
 from astra.workspace import WorkspaceManager
 
-SYSTEM_PROMPT = """You are ASTRA V4, an elite Staff Autonomous Software Engineer and Repository Architect.
-Your objective is to solve software engineering tasks, explore codebases, implement features, fix bugs, and independently verify solutions in the target repository.
+SYSTEM_PROMPT = """You are ASTRA, an autonomous senior software engineering assistant (like Cline).
+You help developers explore repositories, understand codebases, implement features, fix bugs, and verify solutions.
 
-You have access to powerful tools to explore, edit, and test the project:
-- read_file(file_path, start_line, end_line): Inspect file contents
-- write_file(file_path, content): Overwrite or create files
-- edit_file(file_path, target_snippet, replacement_snippet): Perform surgical edits
+HOW TO ACT & COMMUNICATE:
+1. Speak naturally, directly, and concisely like an expert engineer pair-programming with the user.
+2. NEVER lecture or talk down to the user. When a file is created or code is written, do NOT explain how the user can write a test themselves. You are an autonomous agent: DO the work yourself and give a concise summary when finished.
+3. Take ONE action at a time. After taking an action, observe the tool result before deciding the next action.
+4. When writing or editing code:
+   - Make clean, surgical edits.
+   - Run tests to verify your changes before finishing.
+   - Once all required changes are implemented and verified, conclude with a brief summary of what was accomplished.
+5. When researching, answering questions, or summarizing topics (e.g. web search, explaining a person, concept, or codebase):
+   - Provide a thorough, well-structured, and comprehensive answer using all gathered details.
+   - Organize with clear headings, bullet points, key milestones, stats, or facts.
+   - NEVER give a superficial 2-sentence summary when rich data or search results were retrieved. Give the user a complete, informative, high-quality answer.
+
+AVAILABLE TOOLS:
+- read_file(file_path, start_line, end_line): Read file contents
+- write_file(file_path, content): Create or overwrite a file
+- edit_file(file_path, target_snippet, replacement_snippet): Surgical snippet replacement
 - create_file(file_path, content): Create a new file
 - delete_file(file_path): Delete a file
-- list_dir(dir_path): Inspect directory structure
-- search_code(query, search_dir): Fast search for keywords, functions, or imports
-- run_command(command, timeout): Run test suites (pytest, npm test), build commands, git, linters
-- git_status(): Check repository status and modified files
-- git_diff(): Inspect uncommitted changes
-- web_search(query): Search live web for documentation or technical solutions
-
-MANDATORY ENGINEERING STANDARDS:
-1. DEEP REPOSITORY EXPLORATION & SYNTHESIS:
-   - When asked to inspect, analyze, or summarize a repository or folder:
-     * NEVER just list filenames! Anyone can run 'ls'. A raw file listing is NOT an acceptable summary.
-     * You MUST actually read key files using `read_file`: read the README.md, package configuration files (package.json, pyproject.toml, requirements.txt), and core entry points/modules.
-     * Deliver a comprehensive, structured Technical Architecture Report:
-       - 📌 **Executive Overview**: What problem this project solves and its core value proposition.
-       - 🛠️ **Tech Stack & Tooling**: Languages, frameworks, backend services, UI stack.
-       - 🏛️ **Architecture & Module Breakdown**: Deep explanation of what each core package and file actually accomplishes inside.
-       - ⚡ **Workflow & Execution Pipeline**: How data and control flow through the system.
-       - 🧪 **Testing & Quality Assurance**: Test suites, verifiers, and how to run them.
-
-2. SURGICAL EDITS:
-   - Make clean, minimal, targeted edits. Respect existing code style, architecture, and tests.
-   - Do not guess file contents; always read the file before editing.
-
-3. OBSERVE & FIX:
-   - If tools return errors, inspect the traceback and fix them autonomously.
-
-4. INDEPENDENT VERIFICATION:
-   - When you are done modifying files, test your changes using `run_command` or the verifier.
-   - Never claim completion without passing tests.
+- list_dir(dir_path): List files and directories
+- search_code(query, search_dir): Search codebase for text or symbols
+- run_command(command, timeout): Run shell commands, tests, linters, git
+- git_status(): Check git status
+- git_diff(): View git diff
+- web_search(query): Search the web
 """
 
 
@@ -128,6 +122,17 @@ class AstraAgent:
         self.tests_run: List[Dict[str, Any]] = []
         self.verification_results: List[Dict[str, Any]] = []
 
+        # Autonomy, Checkpoints & Deterministic State Engine
+        self.checkpoint_manager = CheckpointManager(self.workspace_path)
+        self.loop_detector = StagnationAndLoopDetector()
+        self.task_state = TaskState(
+            session_id=self.session_id,
+            goal="",
+            workspace_path=str(self.workspace_path),
+            model_name=self.model_name,
+            state=self.state,
+        )
+
     def cancel(self) -> None:
         """User clicked Stop or cancelled execution."""
         self._is_cancelled = True
@@ -170,10 +175,10 @@ class AstraAgent:
             content = m.get("content") or ""
             role = m.get("role")
 
-            if role == "tool" and len(content) > 350:
-                head = content[:150]
-                tail = content[-150:]
-                trimmed = f"{head}\n... [Output trimmed for context: {len(content) - 300} chars omitted] ...\n{tail}"
+            if role == "tool" and len(content) > 500:
+                head = content[:250]
+                tail = content[-250:]
+                trimmed = f"{head}\n... [Output trimmed for context: {len(content) - 500} chars omitted] ...\n{tail}"
                 m_copy = dict(m)
                 m_copy["content"] = trimmed
                 compressed.append(m_copy)
@@ -244,6 +249,15 @@ class AstraAgent:
         meta = self.workspace_manager.scan()
 
         self._set_state(AgentState.PLANNING, {"goal": goal})
+        self.task_state.goal = goal
+        self.task_state.state = AgentState.PLANNING
+        if not self.task_state.plan.steps:
+            self.task_state.plan = TaskPlan(goal=goal)
+            self.task_state.plan.add_step("Explore & Plan", "Inspect workspace, structure, and dependencies.")
+            self.task_state.plan.add_step("Implement Changes", "Create or edit files to fulfill goal.")
+            self.task_state.plan.add_step("Verify & Conclude", "Run verification checks and ensure all tests pass.")
+        session_manager.save_task_state(self.task_state.to_dict())
+
         self._emit_event(EventType.AGENT_STARTED, {
             "goal": goal,
             "workspace": str(self.workspace_path),
@@ -252,28 +266,13 @@ class AstraAgent:
             "model": self.model_name,
         })
 
-        summary_keywords = ["summarize", "summary", "overview", "explain", "architecture", "what is this", "check my folder", "check folder", "audit"]
-        is_summary_request = any(k in goal.lower() for k in summary_keywords)
-        
-        hint = ""
-        if is_summary_request:
-            hint = (
-                "\n\n[INSTRUCTIONS FOR REPOSITORY SUMMARY]:\n"
-                "1. If you haven't explored the directory yet, inspect with `list_dir('.')` and read `README.md` using `read_file`.\n"
-                "2. Once you have inspected the directory and read `README.md`, do not waste iterations looking for non-existent files. Immediately synthesize your final comprehensive architectural summary.\n"
-                "3. Structure your final response cleanly with markdown sections:\n"
-                "   - 📌 **Executive Overview & Mission**: What ASTRA V4 does and the problem it solves.\n"
-                "   - 🛠️ **Tech Stack & Tooling**: Languages, frameworks, backend API, desktop UI, and local model runtime.\n"
-                "   - 🏛️ **Architecture & Module Breakdown**: Clear description of each directory (`astra/`, `desktop/`, `tests/`, etc.).\n"
-                "   - ⚡ **Autonomous Workflow**: The PLAN -> EXPLORE -> ACT -> VERIFY -> FIX cycle.\n"
-                "   - 🚀 **Commands & How to Run**: How to launch the desktop app, run tests, and verify.\n"
-            )
-
+        _now = _dt.datetime.now()
         initial_user_prompt = (
+            f"Current Date & Time: {_now.strftime('%A, %B %d, %Y %I:%M:%S %p')} (local system time)\n"
             f"Workspace: {self.workspace_path}\n"
             f"Detected Project: {meta.project_type.value.upper()} (Package Manager: {meta.package_manager})\n"
             f"Test Suite: {meta.test_command or 'Auto-detect'}\n\n"
-            f"Task Goal:\n{goal}{hint}"
+            f"User Objective:\n{goal}"
         )
 
         messages: List[Dict[str, Any]] = [
@@ -338,13 +337,18 @@ class AstraAgent:
 
                     if verification_result.passed:
                         self.callback.on_verification(True, verification_result.summary, verification_result.details)
-                        self._set_state(AgentState.COMPLETED, {"summary": final_summary})
+                        self.task_state.plan.complete_current_step("Verification passed.")
+                        clean_summary = final_summary
+                        if not clean_summary or "here's how" in clean_summary.lower() or "now that you have" in clean_summary.lower():
+                            clean_summary = f"Successfully completed task: {goal}. All changes verified and passing."
+                        self._set_state(AgentState.COMPLETED, {"summary": clean_summary})
                         self._emit_event(EventType.VERIFICATION_PASSED, {
                             "summary": verification_result.summary,
                             "details": verification_result.details,
                         })
-                        self._emit_event(EventType.AGENT_COMPLETED, {"summary": final_summary})
-                        return self._build_result("completed", final_summary, iteration, start_time, verification="passed")
+                        self._emit_event(EventType.AGENT_COMPLETED, {"summary": clean_summary})
+                        session_manager.save_task_state(self.task_state.to_dict())
+                        return self._build_result("completed", clean_summary, iteration, start_time, verification="passed")
                     else:
                         # VERIFICATION FAILED -> ENTER SELF-HEALING FIX LOOP
                         verification_attempts += 1
@@ -396,6 +400,7 @@ class AstraAgent:
                     # Read-only task (e.g., search or question)
                     self._set_state(AgentState.COMPLETED, {"summary": final_summary})
                     self._emit_event(EventType.AGENT_COMPLETED, {"summary": final_summary})
+                    session_manager.save_task_state(self.task_state.to_dict())
                     return self._build_result("completed", final_summary, iteration, start_time)
 
             # Process tool calls
@@ -421,6 +426,29 @@ class AstraAgent:
                     except Exception:
                         fn_args = {}
 
+                # Loop and Stagnation Check
+                is_stuck, loop_msg = self.loop_detector.check_loop(fn_name, fn_args)
+                if is_stuck:
+                    loop_obs = f"Observation: {loop_msg} File or command is already in the requested state. Moving to verification."
+                    messages.append({
+                        "role": "tool",
+                        "name": fn_name,
+                        "tool_call_id": tc.get("id"),
+                        "content": loop_obs,
+                    })
+                    session_manager.add_message(self.session_id, "tool", loop_obs)
+                    continue
+
+                # Checkpoint snapshot before file mutations
+                if fn_name in ("write_file", "create_file", "edit_file", "delete_file"):
+                    fp = fn_args.get("file_path", "")
+                    if fp:
+                        self.checkpoint_manager.create_checkpoint(
+                            session_id=self.session_id,
+                            description=f"Before {fn_name} on {fp}",
+                            files=[fp],
+                        )
+
                 self.callback.on_tool_call(fn_name, fn_args)
                 self._emit_event(EventType.TOOL_STARTED, {"name": fn_name, "arguments": fn_args})
 
@@ -428,6 +456,7 @@ class AstraAgent:
                     cmd_str = fn_args.get("command", "")
                     self._emit_event(EventType.COMMAND_STARTED, {"command": cmd_str})
                     self.commands_executed.append({"command": cmd_str, "timestamp": time.time()})
+                    self.task_state.commands_executed.append(cmd_str)
 
                 # Central execution via ToolRegistry
                 tool_res: ToolResult = self.tool_registry.execute(
@@ -435,9 +464,11 @@ class AstraAgent:
                     args=fn_args,
                     approval_callback=self.approval_handler,
                     cancel_check=self.is_cancelled,
+                    session_id=self.session_id,
                 )
 
                 tool_out = tool_res.to_string()
+                self.loop_detector.record_action(fn_name, fn_args, success=tool_res.success, output_summary=tool_out)
                 self.callback.on_tool_result(fn_name, tool_out)
                 self._emit_event(EventType.TOOL_COMPLETED, {
                     "name": fn_name,
@@ -457,6 +488,7 @@ class AstraAgent:
                     fp = fn_args.get("file_path", "")
                     if fp:
                         self.files_modified.add(fp)
+                        self.task_state.files_modified.add(fp)
                         session_manager.add_file_change(self.session_id, fp, "modified")
                         self.callback.on_file_changed(fp, "modified")
                         self._emit_event(EventType.FILE_CHANGED, {"file_path": fp, "action": "modified"})
@@ -464,6 +496,7 @@ class AstraAgent:
                     fp = fn_args.get("file_path", "")
                     if fp:
                         self.files_created.add(fp)
+                        self.task_state.files_created.add(fp)
                         session_manager.add_file_change(self.session_id, fp, "created")
                         self.callback.on_file_changed(fp, "created")
                         self._emit_event(EventType.FILE_CHANGED, {"file_path": fp, "action": "created"})
@@ -471,6 +504,7 @@ class AstraAgent:
                     fp = fn_args.get("file_path", "")
                     if fp:
                         self.files_deleted.add(fp)
+                        self.task_state.files_deleted.add(fp)
                         session_manager.add_file_change(self.session_id, fp, "deleted")
                         self.callback.on_file_changed(fp, "deleted")
                         self._emit_event(EventType.FILE_CHANGED, {"file_path": fp, "action": "deleted"})
@@ -482,6 +516,27 @@ class AstraAgent:
                     "content": tool_out,
                 })
                 session_manager.add_message(self.session_id, "tool", tool_out)
+                session_manager.save_task_state(self.task_state.to_dict())
+
+    def resume(self) -> Dict[str, Any]:
+        """Resume an interrupted task using saved TaskState."""
+        saved = session_manager.get_task_state(self.session_id)
+        if saved:
+            self.task_state = TaskState.from_dict(saved)
+            self.files_modified = set(self.task_state.files_modified)
+            self.files_created = set(self.task_state.files_created)
+            self.files_deleted = set(self.task_state.files_deleted)
+            goal = self.task_state.goal
+            curr_step = self.task_state.plan.get_current_step()
+            prompt = (
+                f"Resuming autonomous task: '{goal}'.\n"
+                f"Current Step: {curr_step.title if curr_step else 'Next Step'}\n"
+                f"Files modified: {list(self.files_modified)}\n"
+                f"Files created: {list(self.files_created)}\n"
+                f"Continue executing the task to completion."
+            )
+            return self.run(prompt)
+        return self.run("Resume previous task.")
 
         # Max iterations reached without clean finish
         status = "max_iterations_reached"
