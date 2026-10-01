@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   Sparkles,
   Copy,
@@ -251,10 +253,42 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({
               );
             }
             return (
-              <div key={i} className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">
+              <ReactMarkdown
+                key={i}
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  h1: ({ children }) => <h1 className="text-base font-bold text-zinc-100 mt-3 mb-1 border-b border-zinc-700 pb-1">{children}</h1>,
+                  h2: ({ children }) => <h2 className="text-sm font-semibold text-zinc-100 mt-3 mb-1">{children}</h2>,
+                  h3: ({ children }) => <h3 className="text-sm font-medium text-violet-300 mt-2 mb-0.5">{children}</h3>,
+                  p: ({ children }) => <p className="text-sm text-zinc-300 leading-relaxed mb-2">{children}</p>,
+                  strong: ({ children }) => <strong className="font-semibold text-zinc-100">{children}</strong>,
+                  em: ({ children }) => <em className="italic text-zinc-400">{children}</em>,
+                  a: ({ href, children }) => (
+                    <a href={href} target="_blank" rel="noopener noreferrer"
+                      className="text-violet-400 underline underline-offset-2 hover:text-violet-300 transition-colors">
+                      {children}
+                    </a>
+                  ),
+                  ul: ({ children }) => <ul className="list-disc list-inside space-y-0.5 my-1 text-sm text-zinc-300 pl-2">{children}</ul>,
+                  ol: ({ children }) => <ol className="list-decimal list-inside space-y-0.5 my-1 text-sm text-zinc-300 pl-2">{children}</ol>,
+                  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+                  blockquote: ({ children }) => (
+                    <blockquote className="border-l-2 border-violet-500 pl-3 my-2 text-zinc-400 italic text-sm">{children}</blockquote>
+                  ),
+                  code: ({ inline, children }: any) =>
+                    inline
+                      ? <code className="bg-zinc-800 text-violet-300 rounded px-1 py-0.5 font-mono text-xs">{children}</code>
+                      : <pre className="bg-[#101116] border border-[#282a35] rounded-lg p-3 overflow-x-auto my-2"><code className="font-mono text-xs text-zinc-300">{children}</code></pre>,
+                  hr: () => <hr className="border-zinc-700 my-3" />,
+                  table: ({ children }) => <table className="text-xs text-zinc-300 border-collapse w-full my-2">{children}</table>,
+                  th: ({ children }) => <th className="border border-zinc-700 px-2 py-1 text-zinc-100 bg-zinc-800 font-semibold">{children}</th>,
+                  td: ({ children }) => <td className="border border-zinc-700 px-2 py-1">{children}</td>,
+                }}
+              >
                 {p.content}
-              </div>
+              </ReactMarkdown>
             );
+
           })}
         </div>
       )}

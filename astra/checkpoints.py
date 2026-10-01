@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from astra.session import session_manager as global_session_manager
+
 
 @dataclass
 class Checkpoint:
@@ -37,12 +39,31 @@ class Checkpoint:
 
 
 class CheckpointManager:
-    """Manages workspace snapshots and non-destructive rollbacks."""
+    """Manages workspace snapshots and non-destructive rollbacks backed by SQLite persistence."""
 
-    def __init__(self, workspace_path: Path):
+    def __init__(self, workspace_path: Path, session_manager: Optional[Any] = None):
         self.workspace_path = workspace_path.resolve()
+        self.session_manager = session_manager or global_session_manager
         self.checkpoints: List[Checkpoint] = []
         self._initial_files: set[str] = self._scan_initial_files()
+        self._load_persisted_checkpoints()
+
+    def _load_persisted_checkpoints(self) -> None:
+        """Load stored checkpoints from SQLite database for crash recovery."""
+        try:
+            persisted = self.session_manager.get_checkpoints()
+            for p in persisted:
+                cp = Checkpoint(
+                    checkpoint_id=p["checkpoint_id"],
+                    session_id=p["session_id"],
+                    description=p["description"],
+                    timestamp=p["timestamp"],
+                    git_head=p.get("git_head"),
+                    file_snapshots=p.get("file_snapshots", {}),
+                )
+                self.checkpoints.append(cp)
+        except Exception:
+            pass
 
     def _scan_initial_files(self) -> set[str]:
         """Record all files that existed before the agent performed any mutations."""
@@ -107,14 +128,30 @@ class CheckpointManager:
                     # File did not exist at this checkpoint
                     snapshots[rel] = None
 
+        now = time.time()
         cp = Checkpoint(
             checkpoint_id=chk_id,
             session_id=session_id,
             description=description,
+            timestamp=now,
             git_head=git_head,
             file_snapshots=snapshots,
         )
         self.checkpoints.append(cp)
+
+        # Persist to SQLite for crash safety
+        try:
+            self.session_manager.save_checkpoint(
+                checkpoint_id=chk_id,
+                session_id=session_id,
+                description=description,
+                git_head=git_head,
+                file_snapshots=snapshots,
+                timestamp=now,
+            )
+        except Exception:
+            pass
+
         return cp
 
     def rollback(self, checkpoint_id: Optional[str] = None) -> Dict[str, Any]:
@@ -123,20 +160,32 @@ class CheckpointManager:
         CRITICAL SAFETY RULE: Never delete or overwrite files that were present
         before the session started, unless restoring their snapshotted contents.
         """
-        if not self.checkpoints:
-            return {"success": False, "error": "No checkpoints available to rollback."}
-
         target_cp: Optional[Checkpoint] = None
         if checkpoint_id:
             for cp in reversed(self.checkpoints):
                 if cp.checkpoint_id == checkpoint_id:
                     target_cp = cp
                     break
-        else:
+            if not target_cp:
+                # Try SQLite fallback
+                try:
+                    p = self.session_manager.get_checkpoint(checkpoint_id)
+                    if p:
+                        target_cp = Checkpoint(
+                            checkpoint_id=p["checkpoint_id"],
+                            session_id=p["session_id"],
+                            description=p["description"],
+                            timestamp=p["timestamp"],
+                            git_head=p.get("git_head"),
+                            file_snapshots=p.get("file_snapshots", {}),
+                        )
+                except Exception:
+                    pass
+        elif self.checkpoints:
             target_cp = self.checkpoints[-1]
 
         if not target_cp:
-            return {"success": False, "error": f"Checkpoint '{checkpoint_id}' not found."}
+            return {"success": False, "error": f"Checkpoint '{checkpoint_id}' not found." if checkpoint_id else "No checkpoints available to rollback."}
 
         restored_files: List[str] = []
         deleted_files: List[str] = []
@@ -170,6 +219,26 @@ class CheckpointManager:
         }
 
     def list_checkpoints(self, session_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        # Sync with SQLite to ensure all checkpoints (even from prior runs) are present
+        try:
+            persisted = self.session_manager.get_checkpoints(session_id)
+            if persisted:
+                known_ids = {c.checkpoint_id for c in self.checkpoints}
+                for p in persisted:
+                    if p["checkpoint_id"] not in known_ids:
+                        self.checkpoints.append(
+                            Checkpoint(
+                                checkpoint_id=p["checkpoint_id"],
+                                session_id=p["session_id"],
+                                description=p["description"],
+                                timestamp=p["timestamp"],
+                                git_head=p.get("git_head"),
+                                file_snapshots=p.get("file_snapshots", {}),
+                            )
+                        )
+        except Exception:
+            pass
+
         if session_id:
             return [c.to_dict() for c in self.checkpoints if c.session_id == session_id]
         return [c.to_dict() for c in self.checkpoints]

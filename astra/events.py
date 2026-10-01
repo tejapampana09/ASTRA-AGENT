@@ -109,6 +109,8 @@ class EventBus:
             except RuntimeError:
                 pass
 
+    publish = emit
+
 
 # Global event bus instance
 event_bus = EventBus()

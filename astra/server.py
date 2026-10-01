@@ -9,7 +9,7 @@ import asyncio
 import os
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -58,13 +58,27 @@ async def on_startup():
     main_event_loop = asyncio.get_running_loop()
 
 
-# Broadcast AgentEvents to all connected WebSockets
+# Broadcast AgentEvents to appropriate WebSockets:
+# Session-scoped events route strictly to that session's subscribers.
+# Global / system-wide events route to connected_websockets.
 def broadcast_event(event: AgentEvent) -> None:
     data_json = event.to_json()
     loop = main_event_loop
-    if loop and loop.is_running():
+    if not loop or not loop.is_running():
+        return
+
+    sess_id = event.session_id
+    if sess_id and sess_id in session_websockets:
+        sess_dead = set()
+        for ws in set(session_websockets[sess_id]):
+            try:
+                asyncio.run_coroutine_threadsafe(ws.send_text(data_json), loop)
+            except Exception:
+                sess_dead.add(ws)
+        if sess_dead:
+            session_websockets[sess_id].difference_update(sess_dead)
+    elif not sess_id or sess_id == "global":
         dead = set()
-        # Broadcast to global listeners
         for ws in set(connected_websockets):
             try:
                 asyncio.run_coroutine_threadsafe(ws.send_text(data_json), loop)
@@ -72,18 +86,6 @@ def broadcast_event(event: AgentEvent) -> None:
                 dead.add(ws)
         if dead:
             connected_websockets.difference_update(dead)
-
-        # Broadcast to session-scoped listeners
-        sess_id = event.session_id
-        if sess_id and sess_id in session_websockets:
-            sess_dead = set()
-            for ws in set(session_websockets[sess_id]):
-                try:
-                    asyncio.run_coroutine_threadsafe(ws.send_text(data_json), loop)
-                except Exception:
-                    sess_dead.add(ws)
-            if sess_dead:
-                session_websockets[sess_id].difference_update(sess_dead)
 
 
 event_bus.subscribe(broadcast_event)

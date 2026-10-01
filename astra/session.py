@@ -90,6 +90,16 @@ class SessionManager:
                 updated_at REAL NOT NULL,
                 FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS checkpoints (
+                checkpoint_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                description TEXT NOT NULL,
+                git_head TEXT,
+                file_snapshots TEXT NOT NULL,
+                timestamp REAL NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );
             """)
             conn.commit()
 
@@ -214,6 +224,26 @@ class SessionManager:
             conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id))
             conn.commit()
 
+    def get_messages(self, session_id: str) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cur = conn.execute(
+                "SELECT role, content, tool_calls FROM messages WHERE session_id = ? ORDER BY id ASC",
+                (session_id,),
+            )
+            res: List[Dict[str, Any]] = []
+            for r in cur.fetchall():
+                tc = None
+                if r["tool_calls"]:
+                    try:
+                        tc = json.loads(r["tool_calls"])
+                    except Exception:
+                        tc = None
+                msg: Dict[str, Any] = {"role": r["role"], "content": r["content"]}
+                if tc:
+                    msg["tool_calls"] = tc
+                res.append(msg)
+            return res
+
     def add_event(self, session_id: str, event: AgentEvent) -> None:
         now = time.time()
         with self._get_connection() as conn:
@@ -283,6 +313,77 @@ class SessionManager:
                 except Exception:
                     return None
         return None
+
+    def save_checkpoint(
+        self,
+        checkpoint_id: str,
+        session_id: str,
+        description: str,
+        git_head: Optional[str],
+        file_snapshots: Dict[str, Optional[str]],
+        timestamp: Optional[float] = None,
+    ) -> None:
+        now = timestamp or time.time()
+        snapshots_json = json.dumps(file_snapshots)
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO checkpoints (checkpoint_id, session_id, description, git_head, file_snapshots, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(checkpoint_id) DO UPDATE SET
+                    description = excluded.description,
+                    git_head = excluded.git_head,
+                    file_snapshots = excluded.file_snapshots,
+                    timestamp = excluded.timestamp
+                """,
+                (checkpoint_id, session_id, description, git_head, snapshots_json, now),
+            )
+            conn.commit()
+
+    def get_checkpoints(self, session_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            if session_id:
+                cur = conn.execute(
+                    "SELECT * FROM checkpoints WHERE session_id = ? ORDER BY timestamp ASC",
+                    (session_id,),
+                )
+            else:
+                cur = conn.execute("SELECT * FROM checkpoints ORDER BY timestamp ASC")
+            rows = cur.fetchall()
+            results = []
+            for r in rows:
+                try:
+                    snaps = json.loads(r["file_snapshots"])
+                except Exception:
+                    snaps = {}
+                results.append({
+                    "checkpoint_id": r["checkpoint_id"],
+                    "session_id": r["session_id"],
+                    "description": r["description"],
+                    "git_head": r["git_head"],
+                    "file_snapshots": snaps,
+                    "timestamp": r["timestamp"],
+                })
+            return results
+
+    def get_checkpoint(self, checkpoint_id: str) -> Optional[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cur = conn.execute("SELECT * FROM checkpoints WHERE checkpoint_id = ?", (checkpoint_id,))
+            r = cur.fetchone()
+            if not r:
+                return None
+            try:
+                snaps = json.loads(r["file_snapshots"])
+            except Exception:
+                snaps = {}
+            return {
+                "checkpoint_id": r["checkpoint_id"],
+                "session_id": r["session_id"],
+                "description": r["description"],
+                "git_head": r["git_head"],
+                "file_snapshots": snaps,
+                "timestamp": r["timestamp"],
+            }
 
 
 # Global default session manager

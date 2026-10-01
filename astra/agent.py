@@ -23,6 +23,8 @@ from astra.checkpoints import CheckpointManager
 from astra.config import settings
 from astra.events import AgentEvent, AgentState, EventType, event_bus
 from astra.llm import LLMClient, LLMResponse, parse_tool_calls_from_text
+from astra.planner import Planner
+from astra.progress import ProgressAction, ProgressReport, ProgressTracker
 from astra.session import session_manager
 from astra.state import ActionRecord, StagnationAndLoopDetector, StepStatus, TaskPlan, TaskState, TaskStep
 from astra.tools import PermissionLevel, ToolExecutor, ToolRegistry, ToolResult
@@ -123,8 +125,10 @@ class AstraAgent:
         self.verification_results: List[Dict[str, Any]] = []
 
         # Autonomy, Checkpoints & Deterministic State Engine
-        self.checkpoint_manager = CheckpointManager(self.workspace_path)
+        self.checkpoint_manager = CheckpointManager(self.workspace_path, session_manager)
         self.loop_detector = StagnationAndLoopDetector()
+        self.planner = Planner()
+        self.progress_tracker = ProgressTracker(self.workspace_path)
         self.task_state = TaskState(
             session_id=self.session_id,
             goal="",
@@ -203,13 +207,13 @@ class AstraAgent:
             return True
         return False
 
-    def run(self, goal: str) -> Dict[str, Any]:
+    def run(self, goal: str, existing_messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """Execute goal autonomously with planning, execution, verification, and self-healing."""
         self._is_cancelled = False
         start_time = time.time()
 
-        # Fast-path for conversational greetings & general questions
-        if self._is_conversational(goal):
+        # Fast-path for conversational greetings & general questions (only on fresh non-resumed tasks)
+        if not existing_messages and self._is_conversational(goal):
             self._set_state(AgentState.EXECUTING, {"goal": goal})
             self._emit_event(EventType.AGENT_STARTED, {
                 "goal": goal,
@@ -252,10 +256,7 @@ class AstraAgent:
         self.task_state.goal = goal
         self.task_state.state = AgentState.PLANNING
         if not self.task_state.plan.steps:
-            self.task_state.plan = TaskPlan(goal=goal)
-            self.task_state.plan.add_step("Explore & Plan", "Inspect workspace, structure, and dependencies.")
-            self.task_state.plan.add_step("Implement Changes", "Create or edit files to fulfill goal.")
-            self.task_state.plan.add_step("Verify & Conclude", "Run verification checks and ensure all tests pass.")
+            self.task_state.plan = self.planner.create_initial_plan(goal, meta.project_type.value)
         session_manager.save_task_state(self.task_state.to_dict())
 
         self._emit_event(EventType.AGENT_STARTED, {
@@ -266,19 +267,21 @@ class AstraAgent:
             "model": self.model_name,
         })
 
-        _now = _dt.datetime.now()
-        initial_user_prompt = (
-            f"Current Date & Time: {_now.strftime('%A, %B %d, %Y %I:%M:%S %p')} (local system time)\n"
-            f"Workspace: {self.workspace_path}\n"
-            f"Detected Project: {meta.project_type.value.upper()} (Package Manager: {meta.package_manager})\n"
-            f"Test Suite: {meta.test_command or 'Auto-detect'}\n\n"
-            f"User Objective:\n{goal}"
-        )
-
-        messages: List[Dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": initial_user_prompt},
-        ]
+        if existing_messages:
+            messages: List[Dict[str, Any]] = existing_messages
+        else:
+            _now = _dt.datetime.now()
+            initial_user_prompt = (
+                f"Current Date & Time: {_now.strftime('%A, %B %d, %Y %I:%M:%S %p')} (local system time)\n"
+                f"Workspace: {self.workspace_path}\n"
+                f"Detected Project: {meta.project_type.value.upper()} (Package Manager: {meta.package_manager})\n"
+                f"Test Suite: {meta.test_command or 'Auto-detect'}\n\n"
+                f"User Objective:\n{goal}"
+            )
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": initial_user_prompt},
+            ]
 
         iteration = 0
         verification_attempts = 0
@@ -518,8 +521,15 @@ class AstraAgent:
                 session_manager.add_message(self.session_id, "tool", tool_out)
                 session_manager.save_task_state(self.task_state.to_dict())
 
+        # Max iterations reached without clean finish
+        status = "max_iterations_reached"
+        msg = f"Task halted: maximum iteration limit ({self.max_iterations}) reached."
+        self._set_state(AgentState.FAILED, {"error": msg})
+        self._emit_event(EventType.AGENT_FAILED, {"error": msg})
+        return self._build_result(status, final_summary, iteration, start_time, error=msg)
+
     def resume(self) -> Dict[str, Any]:
-        """Resume an interrupted task using saved TaskState."""
+        """Resume an interrupted task using saved TaskState and conversation history."""
         saved = session_manager.get_task_state(self.session_id)
         if saved:
             self.task_state = TaskState.from_dict(saved)
@@ -528,22 +538,29 @@ class AstraAgent:
             self.files_deleted = set(self.task_state.files_deleted)
             goal = self.task_state.goal
             curr_step = self.task_state.plan.get_current_step()
-            prompt = (
-                f"Resuming autonomous task: '{goal}'.\n"
-                f"Current Step: {curr_step.title if curr_step else 'Next Step'}\n"
-                f"Files modified: {list(self.files_modified)}\n"
-                f"Files created: {list(self.files_created)}\n"
-                f"Continue executing the task to completion."
-            )
-            return self.run(prompt)
-        return self.run("Resume previous task.")
 
-        # Max iterations reached without clean finish
-        status = "max_iterations_reached"
-        msg = f"Task halted: maximum iteration limit ({self.max_iterations}) reached."
-        self._set_state(AgentState.FAILED, {"error": msg})
-        self._emit_event(EventType.AGENT_FAILED, {"error": msg})
-        return self._build_result(status, final_summary, iteration, start_time, error=msg)
+            existing_messages = session_manager.get_messages(self.session_id)
+            if not existing_messages:
+                prompt = (
+                    f"Resuming autonomous task: '{goal}'.\n"
+                    f"Current Step: {curr_step.title if curr_step else 'Next Step'}\n"
+                    f"Files modified: {list(self.files_modified)}\n"
+                    f"Files created: {list(self.files_created)}\n"
+                    f"Continue executing the task to completion."
+                )
+                return self.run(prompt)
+
+            continuation_prompt = (
+                f"[SYSTEM: Task Resumed]\n"
+                f"Resuming session from state: {self.task_state.state.value if isinstance(self.task_state.state, AgentState) else self.task_state.state}.\n"
+                f"Goal: {goal}\n"
+                f"Current Step: {curr_step.title if curr_step else 'Next Step'}\n"
+                f"Files modified so far: {list(self.files_modified)}\n"
+                f"Please continue executing the plan towards full verification and completion."
+            )
+            existing_messages.append({"role": "user", "content": continuation_prompt})
+            return self.run(goal, existing_messages=existing_messages)
+        return self.run("Resume previous task.")
 
     def _build_result(
         self,
