@@ -361,6 +361,8 @@ class AstraCLI:
 def main() -> None:
     parser = argparse.ArgumentParser(description="ASTRA 3.0 Autonomous Agent CLI", add_help=False)
     parser.add_argument("goal", nargs="*", help="Direct goal to execute")
+    parser.add_argument("--serve", action="store_true", help="Launch the ASTRA V4 API & WebSocket server for Desktop UI")
+    parser.add_argument("--port", type=int, default=8765, help="Port for ASTRA API server (default: 8765)")
     parser.add_argument("--model", "-m", default=None, help="LLM model (e.g. gemini, ollama, teja-gemma)")
     parser.add_argument("--repo", "-r", default=None, help="Target workspace path")
     parser.add_argument("--status", action="store_true", help="Show workspace git status")
@@ -368,6 +370,12 @@ def main() -> None:
     parser.add_argument("--help", "-h", action="store_true", help="Show help information")
 
     args, unknown = parser.parse_known_args()
+
+    if args.serve:
+        from astra.server import run_server
+        console.print(f"[bold cyan]🚀 Starting ASTRA V4 Runtime Server on http://127.0.0.1:{args.port}...[/bold cyan]")
+        run_server(port=args.port)
+        return
 
     cli = AstraCLI(workspace_path=args.repo, model=args.model)
 

@@ -27,5 +27,11 @@ env/
 # IDE & OS
 .vscode/
 .idea/
-.DS_Store
-Thumbs.db
+# Node / Desktop
+node_modules/
+desktop/node_modules/
+desktop/dist/
+desktop/dist-electron/
+*.db
+*.sqlite3
+

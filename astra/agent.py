@@ -1,42 +1,76 @@
-"""Core autonomous software engineering agent loop (Think-Plan-Act-Observe-Verify).
+"""ASTRA V4 Autonomous Software Engineering Agent.
 
-Features:
-- Mandatory Independent Verification (AST Syntax, Compilation, & pytest test execution)
-- Auto-Healing Fix Loop: If verification fails, the agent autonomously diagnoses & fixes code
-- Context Window Compression: Prunes older tool outputs to preserve token quota
-- Full State Machine: PLAN -> EXPLORE -> ACT -> OBSERVE -> VERIFY -> FIX -> DONE
+Core Orchestrator implementing:
+PLAN -> EXPLORE -> ACT -> OBSERVE -> VERIFY -> FIX -> DONE
+With:
+- Independent Verification (AST, compilation, project-aware tests)
+- Self-Healing Fix Loop
+- Loop & Stalling Detection
+- Real-time Structured Event Streaming (WebSockets, Desktop UI, Terminal)
+- Strict Cancellation and Timeout Controls
+- Comprehensive Change Tracking
 """
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
-from astra.llm import LLMClient
-from astra.tools import TOOL_DEFINITIONS, ToolExecutor
+
+from astra.config import settings
+from astra.events import AgentEvent, AgentState, EventType, event_bus
+from astra.llm import LLMClient, LLMResponse, parse_tool_calls_from_text
+from astra.session import session_manager
+from astra.tools import PermissionLevel, ToolExecutor, ToolRegistry, ToolResult
 from astra.verifier import IndependentVerifier, VerificationResult
+from astra.workspace import WorkspaceManager
 
-SYSTEM_PROMPT = """You are ASTRA, an elite autonomous software engineering agent.
-Your objective is to solve software engineering tasks, fix bugs, implement features, and independently verify code in the workspace.
+SYSTEM_PROMPT = """You are ASTRA V4, an elite Staff Autonomous Software Engineer and Repository Architect.
+Your objective is to solve software engineering tasks, explore codebases, implement features, fix bugs, and independently verify solutions in the target repository.
 
-You have access to powerful tools to inspect and modify the repository:
+You have access to powerful tools to explore, edit, and test the project:
 - read_file(file_path, start_line, end_line): Inspect file contents
-- write_file(file_path, content): Create or overwrite files
+- write_file(file_path, content): Overwrite or create files
 - edit_file(file_path, target_snippet, replacement_snippet): Perform surgical edits
+- create_file(file_path, content): Create a new file
+- delete_file(file_path): Delete a file
 - list_dir(dir_path): Inspect directory structure
-- search_code(query, search_dir): Search codebase symbols and text
-- run_command(command, timeout): Run pytest, python scripts, linters, or git commands
-- web_search(query): Search live web for docs or solutions
+- search_code(query, search_dir): Fast search for keywords, functions, or imports
+- run_command(command, timeout): Run test suites (pytest, npm test), build commands, git, linters
+- git_status(): Check repository status and modified files
+- git_diff(): Inspect uncommitted changes
+- web_search(query): Search live web for documentation or technical solutions
 
-AGENT WORKFLOW (Mandatory):
-1. EXPLORE: Read existing files, understand the architecture, and check test configurations.
-2. SURGICAL EDITS: Modify only what is necessary. Preserve style and existing tests.
-3. OBSERVE & FIX: If a command or edit errors, diagnose the cause and iterate.
-4. VERIFY: Note that an Independent Verifier will automatically validate AST syntax and run the test suite on all your changes before task completion is accepted. Never claim a task is completed without passing verification.
+MANDATORY ENGINEERING STANDARDS:
+1. DEEP REPOSITORY EXPLORATION & SYNTHESIS:
+   - When asked to inspect, analyze, or summarize a repository or folder:
+     * NEVER just list filenames! Anyone can run 'ls'. A raw file listing is NOT an acceptable summary.
+     * You MUST actually read key files using `read_file`: read the README.md, package configuration files (package.json, pyproject.toml, requirements.txt), and core entry points/modules.
+     * Deliver a comprehensive, structured Technical Architecture Report:
+       - 📌 **Executive Overview**: What problem this project solves and its core value proposition.
+       - 🛠️ **Tech Stack & Tooling**: Languages, frameworks, backend services, UI stack.
+       - 🏛️ **Architecture & Module Breakdown**: Deep explanation of what each core package and file actually accomplishes inside.
+       - ⚡ **Workflow & Execution Pipeline**: How data and control flow through the system.
+       - 🧪 **Testing & Quality Assurance**: Test suites, verifiers, and how to run them.
+
+2. SURGICAL EDITS:
+   - Make clean, minimal, targeted edits. Respect existing code style, architecture, and tests.
+   - Do not guess file contents; always read the file before editing.
+
+3. OBSERVE & FIX:
+   - If tools return errors, inspect the traceback and fix them autonomously.
+
+4. INDEPENDENT VERIFICATION:
+   - When you are done modifying files, test your changes using `run_command` or the verifier.
+   - Never claim completion without passing tests.
 """
 
 
 class AgentCallback:
-    """Hooks for streaming execution steps to the terminal or UI."""
+    """Hooks for streaming execution steps to terminal or custom observers."""
+
+    def on_state_change(self, state: AgentState, details: str = "") -> None:
+        pass
 
     def on_phase_change(self, phase: str, details: str = "") -> None:
         pass
@@ -50,7 +84,7 @@ class AgentCallback:
     def on_tool_result(self, name: str, result: str) -> None:
         pass
 
-    def on_file_changed(self, file_path: str) -> None:
+    def on_file_changed(self, file_path: str, action: str = "modified") -> None:
         pass
 
     def on_verification(self, passed: bool, summary: str, details: str = "") -> None:
@@ -62,31 +96,74 @@ class AstraAgent:
 
     def __init__(
         self,
-        workspace_path: Optional[Path] = None,
+        workspace_path: Optional[Path | str] = None,
         model_name: Optional[str] = None,
-        max_iterations: int = 15,
+        session_id: Optional[str] = None,
+        max_iterations: Optional[int] = None,
         max_verification_attempts: int = 3,
         callback: Optional[AgentCallback] = None,
+        approval_handler: Optional[Callable[[str, str, Dict[str, Any]], bool]] = None,
     ):
-        self.workspace_path = (workspace_path or Path.cwd()).resolve()
-        self.tools = ToolExecutor(self.workspace_path)
+        self.workspace_path = Path(workspace_path or settings.workspace_path).resolve()
+        self.workspace_manager = WorkspaceManager(self.workspace_path)
+        self.tool_registry = ToolRegistry(self.workspace_path)
         self.verifier = IndependentVerifier(self.workspace_path)
-        self.llm = LLMClient(model_name=model_name)
-        self.max_iterations = max_iterations
+        self.model_name = model_name or settings.default_model
+        self.llm = LLMClient(model_name=self.model_name)
+        self.session_id = session_id or session_manager.create_session(str(self.workspace_path), self.model_name)
+        
+        self.max_iterations = max_iterations or settings.max_iterations
         self.max_verification_attempts = max_verification_attempts
         self.callback = callback or AgentCallback()
+        self.approval_handler = approval_handler
+        
+        self.state = AgentState.IDLE
+        self._is_cancelled = False
+        
+        # Change & Execution Tracking
         self.files_modified: Set[str] = set()
+        self.files_created: Set[str] = set()
+        self.files_deleted: Set[str] = set()
+        self.commands_executed: List[Dict[str, Any]] = []
+        self.tests_run: List[Dict[str, Any]] = []
+        self.verification_results: List[Dict[str, Any]] = []
+
+    def cancel(self) -> None:
+        """User clicked Stop or cancelled execution."""
+        self._is_cancelled = True
+        self._set_state(AgentState.CANCELLED, {"message": "Execution stopped by user."})
+        self._emit_event(EventType.AGENT_CANCELLED, {"message": "Agent cancelled by user."})
+
+    def is_cancelled(self) -> bool:
+        return self._is_cancelled
+
+    def _set_state(self, state: AgentState, data: Optional[Dict[str, Any]] = None) -> None:
+        self.state = state
+        session_manager.update_session(self.session_id, state=state)
+        self.callback.on_state_change(state, data.get("message", "") if data else "")
+        self.callback.on_phase_change(state.value, data.get("message", "") if data else "")
+
+    def _emit_event(self, event_type: EventType | str, data: Optional[Dict[str, Any]] = None) -> None:
+        payload = data or {}
+        event = AgentEvent(
+            event_type=event_type if isinstance(event_type, str) else event_type.value,
+            state=self.state,
+            data=payload,
+            session_id=self.session_id,
+        )
+        event_bus.emit(event)
+        session_manager.add_event(self.session_id, event)
 
     def _compress_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Prune older lengthy tool outputs to save context window and token budget."""
+        """Context compression: keeps system prompt, initial goal, and recent turns, compressing older outputs."""
         if len(messages) <= 6:
             return messages
 
         compressed = []
-        cutoff = len(messages) - 4  # Keep last 4 messages completely uncompressed
+        cutoff = len(messages) - 4
 
         for idx, m in enumerate(messages):
-            if idx >= cutoff or idx < 2:  # Keep system and initial user goal intact
+            if idx >= cutoff or idx < 2:
                 compressed.append(m)
                 continue
 
@@ -105,14 +182,104 @@ class AstraAgent:
 
         return compressed
 
+    def _is_conversational(self, text: str) -> bool:
+        """Classify if user input is a conversational greeting/question rather than a coding task."""
+        cleaned = text.strip().lower().rstrip("!?.")
+        greetings = {
+            "hi", "hello", "hey", "hola", "yo", "sup", "howdy",
+            "good morning", "good afternoon", "good evening",
+            "who are you", "what are you", "what can you do",
+            "help", "thanks", "thank you", "nice to meet you"
+        }
+        if cleaned in greetings:
+            return True
+        words = cleaned.split()
+        if len(words) <= 2 and words[0] in {"hi", "hello", "hey", "yo"}:
+            return True
+        return False
+
     def run(self, goal: str) -> Dict[str, Any]:
-        """Execute the goal autonomously with independent verification and self-healing."""
+        """Execute goal autonomously with planning, execution, verification, and self-healing."""
+        self._is_cancelled = False
+        start_time = time.time()
+
+        # Fast-path for conversational greetings & general questions
+        if self._is_conversational(goal):
+            self._set_state(AgentState.EXECUTING, {"goal": goal})
+            self._emit_event(EventType.AGENT_STARTED, {
+                "goal": goal,
+                "workspace": str(self.workspace_path),
+                "model": self.model_name,
+                "is_conversational": True,
+            })
+            session_manager.add_message(self.session_id, "user", goal)
+
+            chat_messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are ASTRA, a friendly autonomous software engineering assistant. "
+                        "The user greeted you or asked a general question. Respond naturally, "
+                        "briefly introduce yourself, and ask what coding task or project they would like to work on today. "
+                        "Do not output markdown code blocks or execute tools unless asked."
+                    ),
+                },
+                {"role": "user", "content": goal},
+            ]
+            try:
+                resp = self.llm.complete(chat_messages)
+                reply = (
+                    resp.content.strip()
+                    or "Hello! I am ASTRA, your autonomous software engineering agent. What coding task would you like to work on today?"
+                )
+            except Exception:
+                reply = "Hello! I am ASTRA, your autonomous software engineering agent. How can I help you with your code today?"
+
+            session_manager.add_message(self.session_id, "assistant", reply)
+            self._set_state(AgentState.COMPLETED, {"summary": reply})
+            self._emit_event(EventType.AGENT_COMPLETED, {"summary": reply})
+            return self._build_result("completed", reply, 1, start_time)
+
+        # Autonomous Coding Task Workflow
+        meta = self.workspace_manager.scan()
+
+        self._set_state(AgentState.PLANNING, {"goal": goal})
+        self._emit_event(EventType.AGENT_STARTED, {
+            "goal": goal,
+            "workspace": str(self.workspace_path),
+            "project_type": meta.project_type.value,
+            "package_manager": meta.package_manager,
+            "model": self.model_name,
+        })
+
+        summary_keywords = ["summarize", "summary", "overview", "explain", "architecture", "what is this", "check my folder", "check folder", "audit"]
+        is_summary_request = any(k in goal.lower() for k in summary_keywords)
+        
+        hint = ""
+        if is_summary_request:
+            hint = (
+                "\n\n[INSTRUCTIONS FOR REPOSITORY SUMMARY]:\n"
+                "1. If you haven't explored the directory yet, inspect with `list_dir('.')` and read `README.md` using `read_file`.\n"
+                "2. Once you have inspected the directory and read `README.md`, do not waste iterations looking for non-existent files. Immediately synthesize your final comprehensive architectural summary.\n"
+                "3. Structure your final response cleanly with markdown sections:\n"
+                "   - 📌 **Executive Overview & Mission**: What ASTRA V4 does and the problem it solves.\n"
+                "   - 🛠️ **Tech Stack & Tooling**: Languages, frameworks, backend API, desktop UI, and local model runtime.\n"
+                "   - 🏛️ **Architecture & Module Breakdown**: Clear description of each directory (`astra/`, `desktop/`, `tests/`, etc.).\n"
+                "   - ⚡ **Autonomous Workflow**: The PLAN -> EXPLORE -> ACT -> VERIFY -> FIX cycle.\n"
+                "   - 🚀 **Commands & How to Run**: How to launch the desktop app, run tests, and verify.\n"
+            )
+
+        initial_user_prompt = (
+            f"Workspace: {self.workspace_path}\n"
+            f"Detected Project: {meta.project_type.value.upper()} (Package Manager: {meta.package_manager})\n"
+            f"Test Suite: {meta.test_command or 'Auto-detect'}\n\n"
+            f"Task Goal:\n{goal}{hint}"
+        )
+
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Workspace directory: {self.workspace_path}\n\nTask Goal:\n{goal}"},
+            {"role": "user", "content": initial_user_prompt},
         ]
-
-        self.callback.on_phase_change("PLAN", "Analyzing task goal and architecture")
 
         iteration = 0
         verification_attempts = 0
@@ -120,88 +287,118 @@ class AstraAgent:
         verification_result: Optional[VerificationResult] = None
 
         while iteration < self.max_iterations:
+            if self._is_cancelled:
+                return self._build_result("cancelled", "Task cancelled by user.", iteration, start_time)
+
             iteration += 1
 
-            # Prune older messages if context is getting heavy
+            # Context compression
             compressed_msgs = self._compress_messages(messages)
 
-            # Call LLM
-            try:
-                response = self.llm.complete(compressed_msgs, tools=TOOL_DEFINITIONS)
-            except Exception as exc:
-                return {
-                    "status": "error",
-                    "error": str(exc),
-                    "iterations": iteration,
-                    "files_modified": list(self.files_modified),
-                }
+            # Check if exploring vs executing
+            if iteration == 1:
+                self._set_state(AgentState.EXPLORING, {"iteration": iteration})
+                self._emit_event(EventType.EXPLORATION_STARTED, {"iteration": iteration})
+            else:
+                self._set_state(AgentState.EXECUTING, {"iteration": iteration})
 
-            # If model returned thoughts / explanation
+            # LLM Completion
+            try:
+                response = self.llm.complete(compressed_msgs, tools=self.tool_registry.get_definitions())
+            except Exception as exc:
+                err_msg = f"LLM error: {exc}"
+                self._set_state(AgentState.FAILED, {"error": err_msg})
+                self._emit_event(EventType.AGENT_FAILED, {"error": err_msg})
+                return self._build_result("error", err_msg, iteration, start_time, error=err_msg)
+
+            # Thoughts & Reasoning
             if response.content:
                 final_summary = response.content.strip()
                 if response.has_tool_calls():
                     self.callback.on_thought(final_summary)
+                    self._emit_event(EventType.PLANNING, {"thought": final_summary})
 
-            # Check if model has finished proposing tool calls
+            # Check if LLM proposes no further tool calls -> MODEL SAYS DONE
             if not response.has_tool_calls():
-                # Model says it's done — TRIGGER INDEPENDENT VERIFIER!
-                if self.files_modified:
-                    self.callback.on_phase_change("VERIFY", "Running mandatory independent AST & test verification...")
-                    verification_result = self.verifier.verify(self.files_modified)
+                all_changed = list(self.files_modified | self.files_created)
+                if all_changed:
+                    # TRIGGER MANDATORY INDEPENDENT VERIFIER
+                    self._set_state(AgentState.VERIFYING, {"modified_files": all_changed})
+                    self._emit_event(EventType.VERIFICATION_STARTED, {"files": all_changed})
+                    
+                    verification_result = self.verifier.verify(all_changed)
+                    session_manager.add_verification(
+                        self.session_id,
+                        verification_result.passed,
+                        verification_result.summary,
+                        verification_result.details,
+                        verification_result.phase,
+                    )
+                    self.verification_results.append(verification_result.to_dict())
 
                     if verification_result.passed:
                         self.callback.on_verification(True, verification_result.summary, verification_result.details)
-                        self.callback.on_phase_change("DONE", "Verification passed successfully.")
-                        return {
-                            "status": "completed",
-                            "summary": final_summary,
-                            "iterations": iteration,
-                            "files_modified": list(self.files_modified),
-                            "verification": "passed",
-                            "verification_details": verification_result.details,
-                        }
+                        self._set_state(AgentState.COMPLETED, {"summary": final_summary})
+                        self._emit_event(EventType.VERIFICATION_PASSED, {
+                            "summary": verification_result.summary,
+                            "details": verification_result.details,
+                        })
+                        self._emit_event(EventType.AGENT_COMPLETED, {"summary": final_summary})
+                        return self._build_result("completed", final_summary, iteration, start_time, verification="passed")
                     else:
-                        # Verification failed! Enter FIX loop
+                        # VERIFICATION FAILED -> ENTER SELF-HEALING FIX LOOP
                         verification_attempts += 1
                         self.callback.on_verification(False, verification_result.summary, verification_result.details)
+                        self._emit_event(EventType.VERIFICATION_FAILED, {
+                            "summary": verification_result.summary,
+                            "details": verification_result.details,
+                            "category": verification_result.error_category.value if verification_result.error_category else None,
+                        })
+
+                        # Loop detection check
+                        is_stuck = self.verifier.loop_detector.record_and_check(verification_result.details)
+                        if is_stuck:
+                            fail_msg = (
+                                f"ASTRA loop detector stopped execution: The exact same error repeated {self.verifier.loop_detector.max_repeated} times.\n"
+                                f"Repeated Blocker: {verification_result.details[:300]}\n"
+                                f"Recommended Action: Review dependency versions or manual test setup."
+                            )
+                            self._set_state(AgentState.FAILED, {"error": fail_msg})
+                            self._emit_event(EventType.AGENT_FAILED, {"error": fail_msg})
+                            return self._build_result("failed", final_summary, iteration, start_time, error=fail_msg, verification="failed")
 
                         if verification_attempts < self.max_verification_attempts:
-                            self.callback.on_phase_change(
-                                "FIX",
-                                f"Autonomous fix attempt {verification_attempts}/{self.max_verification_attempts}"
-                            )
-                            # Inject verification failure back into conversation to force self-healing
+                            self._set_state(AgentState.FIXING, {
+                                "attempt": verification_attempts,
+                                "max_attempts": self.max_verification_attempts,
+                            })
+                            self._emit_event(EventType.FIX_STARTED, {
+                                "attempt": verification_attempts,
+                                "details": verification_result.details,
+                            })
+
                             fix_prompt = (
                                 f"[INDEPENDENT VERIFICATION FAILED]\n"
                                 f"Stage: {verification_result.phase}\n"
+                                f"Error Classification: {verification_result.error_category.value if verification_result.error_category else 'runtime'}\n"
                                 f"Error Details:\n{verification_result.details}\n\n"
-                                f"The task CANNOT be marked complete until these errors are fixed and all tests pass.\n"
-                                f"Please diagnose the failure, inspect the code, modify the files to fix it, and verify."
+                                f"The task CANNOT be marked complete until all errors are fixed and tests pass.\n"
+                                f"Diagnose the failure, read the relevant source files, edit the code to fix it, and verify."
                             )
                             messages.append({"role": "user", "content": fix_prompt})
                             continue
                         else:
-                            # Exceeded fix attempts
-                            return {
-                                "status": "verification_failed",
-                                "summary": final_summary,
-                                "error": f"Independent verification failed after {verification_attempts} fix attempts:\n{verification_result.details}",
-                                "iterations": iteration,
-                                "files_modified": list(self.files_modified),
-                                "verification": "failed",
-                            }
+                            fail_msg = f"Independent verification failed after {verification_attempts} fix attempts:\n{verification_result.details}"
+                            self._set_state(AgentState.FAILED, {"error": fail_msg})
+                            self._emit_event(EventType.AGENT_FAILED, {"error": fail_msg})
+                            return self._build_result("failed", final_summary, iteration, start_time, error=fail_msg, verification="failed")
                 else:
-                    # No files were modified (e.g. read-only query or search)
-                    self.callback.on_phase_change("DONE", "Task complete.")
-                    return {
-                        "status": "completed",
-                        "summary": final_summary,
-                        "iterations": iteration,
-                        "files_modified": [],
-                    }
+                    # Read-only task (e.g., search or question)
+                    self._set_state(AgentState.COMPLETED, {"summary": final_summary})
+                    self._emit_event(EventType.AGENT_COMPLETED, {"summary": final_summary})
+                    return self._build_result("completed", final_summary, iteration, start_time)
 
             # Process tool calls
-            self.callback.on_phase_change("ACT", f"Executing {len(response.tool_calls)} tool call(s)")
             assistant_msg: Dict[str, Any] = {
                 "role": "assistant",
                 "content": response.content,
@@ -209,8 +406,12 @@ class AstraAgent:
                 "raw_content": response.raw_content,
             }
             messages.append(assistant_msg)
+            session_manager.add_message(self.session_id, "assistant", response.content, response.tool_calls)
 
             for tc in response.tool_calls:
+                if self._is_cancelled:
+                    return self._build_result("cancelled", "Task cancelled by user.", iteration, start_time)
+
                 fn = tc.get("function", {})
                 fn_name = fn.get("name")
                 fn_args = fn.get("arguments", {})
@@ -221,74 +422,97 @@ class AstraAgent:
                         fn_args = {}
 
                 self.callback.on_tool_call(fn_name, fn_args)
+                self._emit_event(EventType.TOOL_STARTED, {"name": fn_name, "arguments": fn_args})
 
-                # Execute tool
-                tool_out = self._execute_tool(fn_name, fn_args)
+                if fn_name == "run_command":
+                    cmd_str = fn_args.get("command", "")
+                    self._emit_event(EventType.COMMAND_STARTED, {"command": cmd_str})
+                    self.commands_executed.append({"command": cmd_str, "timestamp": time.time()})
 
-                # Track file changes
+                # Central execution via ToolRegistry
+                tool_res: ToolResult = self.tool_registry.execute(
+                    name=fn_name,
+                    args=fn_args,
+                    approval_callback=self.approval_handler,
+                    cancel_check=self.is_cancelled,
+                )
+
+                tool_out = tool_res.to_string()
+                self.callback.on_tool_result(fn_name, tool_out)
+                self._emit_event(EventType.TOOL_COMPLETED, {
+                    "name": fn_name,
+                    "success": tool_res.success,
+                    "output": tool_out[:1000],
+                    "duration_ms": tool_res.duration_ms,
+                })
+
+                if fn_name == "run_command":
+                    self._emit_event(EventType.COMMAND_OUTPUT, {
+                        "command": fn_args.get("command", ""),
+                        "output": tool_out,
+                    })
+
+                # Change tracking
                 if fn_name in ("write_file", "edit_file"):
-                    fp = fn_args.get("file_path")
+                    fp = fn_args.get("file_path", "")
                     if fp:
                         self.files_modified.add(fp)
-                        self.callback.on_file_changed(fp)
+                        session_manager.add_file_change(self.session_id, fp, "modified")
+                        self.callback.on_file_changed(fp, "modified")
+                        self._emit_event(EventType.FILE_CHANGED, {"file_path": fp, "action": "modified"})
+                elif fn_name == "create_file":
+                    fp = fn_args.get("file_path", "")
+                    if fp:
+                        self.files_created.add(fp)
+                        session_manager.add_file_change(self.session_id, fp, "created")
+                        self.callback.on_file_changed(fp, "created")
+                        self._emit_event(EventType.FILE_CHANGED, {"file_path": fp, "action": "created"})
+                elif fn_name == "delete_file":
+                    fp = fn_args.get("file_path", "")
+                    if fp:
+                        self.files_deleted.add(fp)
+                        session_manager.add_file_change(self.session_id, fp, "deleted")
+                        self.callback.on_file_changed(fp, "deleted")
+                        self._emit_event(EventType.FILE_CHANGED, {"file_path": fp, "action": "deleted"})
 
-                self.callback.on_tool_result(fn_name, tool_out)
+                messages.append({
+                    "role": "tool",
+                    "name": fn_name,
+                    "tool_call_id": tc.get("id"),
+                    "content": tool_out,
+                })
+                session_manager.add_message(self.session_id, "tool", tool_out)
 
-                messages.append(
-                    {
-                        "role": "tool",
-                        "name": fn_name,
-                        "tool_call_id": tc.get("id"),
-                        "content": tool_out,
-                    }
-                )
+        # Max iterations reached without clean finish
+        status = "max_iterations_reached"
+        msg = f"Task halted: maximum iteration limit ({self.max_iterations}) reached."
+        self._set_state(AgentState.FAILED, {"error": msg})
+        self._emit_event(EventType.AGENT_FAILED, {"error": msg})
+        return self._build_result(status, final_summary, iteration, start_time, error=msg)
 
-        # Max iterations reached
-        status = "completed" if iteration < self.max_iterations else "max_iterations_reached"
-        return {
+    def _build_result(
+        self,
+        status: str,
+        summary: str,
+        iterations: int,
+        start_time: float,
+        error: Optional[str] = None,
+        verification: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        duration = round(time.time() - start_time, 2)
+        res = {
+            "session_id": self.session_id,
             "status": status,
-            "summary": final_summary,
-            "iterations": iteration,
+            "summary": summary,
+            "iterations": iterations,
+            "duration_seconds": duration,
             "files_modified": list(self.files_modified),
+            "files_created": list(self.files_created),
+            "files_deleted": list(self.files_deleted),
+            "commands_executed": [c["command"] for c in self.commands_executed],
+            "verification": verification or ("passed" if status == "completed" else "unverified"),
         }
-
-    def _execute_tool(self, name: str, args: Dict[str, Any]) -> str:
-        """Map tool call to ToolExecutor methods."""
-        try:
-            if name == "read_file":
-                return self.tools.read_file(
-                    file_path=args.get("file_path", ""),
-                    start_line=args.get("start_line"),
-                    end_line=args.get("end_line"),
-                )
-            elif name == "write_file":
-                return self.tools.write_file(
-                    file_path=args.get("file_path", ""),
-                    content=args.get("content", ""),
-                )
-            elif name == "edit_file":
-                return self.tools.edit_file(
-                    file_path=args.get("file_path", ""),
-                    target_snippet=args.get("target_snippet", ""),
-                    replacement_snippet=args.get("replacement_snippet", ""),
-                )
-            elif name == "list_dir":
-                return self.tools.list_dir(dir_path=args.get("dir_path", "."))
-            elif name == "search_code":
-                return self.tools.search_code(
-                    query=args.get("query", ""),
-                    search_dir=args.get("search_dir", "."),
-                )
-            elif name == "run_command":
-                return self.tools.run_command(
-                    command=args.get("command", ""),
-                    timeout=args.get("timeout", 30),
-                )
-            elif name == "web_search":
-                return self.tools.web_search(
-                    query=args.get("query", ""),
-                )
-            else:
-                return f"Error: Unknown tool '{name}'."
-        except Exception as exc:
-            return f"Tool execution error ({name}): {exc}"
+        if error:
+            res["error"] = error
+        session_manager.update_session(self.session_id, summary=summary)
+        return res

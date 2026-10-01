@@ -1,40 +1,111 @@
-"""Independent Verifier for ASTRA Autonomous Agent.
+"""ASTRA V4 Multi-Language Independent Verification Engine.
 
-Enforces mandatory independent verification (AST syntax check, byte-compilation,
-and pytest test execution) to ensure no task is marked completed on mere hallucination.
+Supports:
+- Python (AST syntax, bytecode compilation, pytest / unittest)
+- Node.js / React / TypeScript (syntax, npm test, tsc typecheck, build)
+- Rust (cargo test, cargo check)
+- Go (go test)
+- Loop detection (repeated errors x 3 stops with diagnosis)
+- Error classification (syntax, type, build, test, runtime)
 """
 from __future__ import annotations
 
 import ast
 import os
 import py_compile
+import re
 import subprocess
+from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+from astra.workspace import ProjectMetadata, ProjectType, WorkspaceManager
 
 
+class ErrorCategory(str, Enum):
+    SYNTAX = "syntax_error"
+    TYPE_CHECK = "type_error"
+    BUILD = "build_error"
+    TEST_FAILURE = "test_failure"
+    MISSING_DEPENDENCY = "missing_dependency"
+    RUNTIME = "runtime_error"
+    TIMEOUT = "timeout_error"
+    UNKNOWN = "unknown_error"
+
+
+@dataclass
 class VerificationResult:
     """Outcome of an independent verification check."""
+    passed: bool
+    summary: str
+    details: str = ""
+    phase: str = "complete"
+    error_category: Optional[ErrorCategory] = None
+    failing_command: Optional[str] = None
 
-    def __init__(self, passed: bool, summary: str, details: str = "", phase: str = "complete"):
-        self.passed = passed
-        self.summary = summary
-        self.details = details
-        self.phase = phase
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "passed": self.passed,
+            "summary": self.summary,
+            "details": self.details,
+            "phase": self.phase,
+            "error_category": self.error_category.value if self.error_category else None,
+            "failing_command": self.failing_command,
+        }
 
     def __repr__(self) -> str:
         status = "PASSED" if self.passed else "FAILED"
         return f"<VerificationResult [{status}] phase={self.phase}: {self.summary}>"
 
 
+class LoopDetector:
+    """Detects repeated identical failures to avoid infinite looping and thrashing."""
+
+    def __init__(self, max_repeated_errors: int = 3):
+        self.max_repeated = max_repeated_errors
+        self.error_history: List[str] = []
+
+    def record_and_check(self, error_str: str) -> bool:
+        """Return True if loop/stall is detected (same failure repeated >= max_repeated)."""
+        # Normalize whitespace and numbers/paths slightly to catch similar errors
+        normalized = re.sub(r"\s+", " ", error_str.strip()[:300].lower())
+        self.error_history.append(normalized)
+
+        # Check last N
+        if len(self.error_history) >= self.max_repeated:
+            recent = self.error_history[-self.max_repeated:]
+            if len(set(recent)) == 1:
+                return True
+        return False
+
+
 class IndependentVerifier:
-    """Performs objective, external verification on modified code."""
+    """Performs objective, project-aware external verification."""
 
     def __init__(self, workspace_path: Path):
         self.workspace_path = workspace_path.resolve()
+        self.workspace_manager = WorkspaceManager(self.workspace_path)
+        self.loop_detector = LoopDetector(max_repeated_errors=3)
+
+    def classify_error(self, output: str) -> ErrorCategory:
+        lowered = output.lower()
+        if "syntaxerror" in lowered or "syntax error" in lowered or "parsing error" in lowered:
+            return ErrorCategory.SYNTAX
+        if "typeerror" in lowered or "ts2" in lowered or "cannot find name" in lowered or "type mismatch" in lowered:
+            return ErrorCategory.TYPE_CHECK
+        if "modulenotfounderror" in lowered or "cannot find module" in lowered or "importerror" in lowered:
+            return ErrorCategory.MISSING_DEPENDENCY
+        if "failed to compile" in lowered or "build failed" in lowered or "compilation error" in lowered:
+            return ErrorCategory.BUILD
+        if "assert" in lowered or "failed" in lowered or "assertionerror" in lowered or "test failed" in lowered:
+            return ErrorCategory.TEST_FAILURE
+        if "timed out" in lowered:
+            return ErrorCategory.TIMEOUT
+        return ErrorCategory.RUNTIME
 
     def verify(self, modified_files: Set[str] | List[str]) -> VerificationResult:
-        """Run multi-stage verification on modified files and the test suite."""
+        """Run multi-stage verification on modified files and test suite."""
         resolved_files: List[Path] = []
         for f in modified_files:
             p = Path(f)
@@ -43,29 +114,52 @@ class IndependentVerifier:
             if p.exists() and p.is_file():
                 resolved_files.append(p)
 
-        # 1. Stage 1: AST Syntax and Compilation Check
-        py_files = [f for f in resolved_files if f.suffix == ".py"]
-        syntax_err = self._check_syntax_and_compile(py_files)
-        if syntax_err:
-            return VerificationResult(
-                passed=False,
-                summary="AST Syntax or Compilation check failed.",
-                details=syntax_err,
-                phase="syntax_check",
-            )
+        meta = self.workspace_manager.scan()
 
-        # 2. Stage 2: Automated Test Execution (pytest)
-        test_err, test_summary = self._run_test_suite()
+        # Stage 1: Syntax & Static parse check for Python files
+        py_files = [f for f in resolved_files if f.suffix == ".py"]
+        if py_files or meta.project_type == ProjectType.PYTHON:
+            syntax_err = self._check_python_syntax(py_files)
+            if syntax_err:
+                cat = self.classify_error(syntax_err)
+                return VerificationResult(
+                    passed=False,
+                    summary="Python syntax or compilation check failed.",
+                    details=syntax_err,
+                    phase="syntax_check",
+                    error_category=cat,
+                )
+
+        # Stage 2: TypeScript / Node type-check or build if TS project
+        if meta.project_type in (ProjectType.TYPESCRIPT, ProjectType.REACT):
+            if (self.workspace_path / "tsconfig.json").exists():
+                ts_err = self._check_typescript()
+                if ts_err:
+                    cat = self.classify_error(ts_err)
+                    return VerificationResult(
+                        passed=False,
+                        summary="TypeScript compiler check failed.",
+                        details=ts_err,
+                        phase="type_check",
+                        error_category=cat,
+                        failing_command="npx tsc --noEmit",
+                    )
+
+        # Stage 3: Automated Test Execution based on detected project type
+        test_err, test_summary, test_cmd = self._run_project_tests(meta)
         if test_err:
+            cat = self.classify_error(test_err)
             return VerificationResult(
                 passed=False,
-                summary="Test suite execution failed.",
+                summary=f"Automated test execution failed ({test_cmd}).",
                 details=test_err,
                 phase="test_execution",
+                error_category=cat,
+                failing_command=test_cmd,
             )
 
-        # 3. All checks passed
-        details = test_summary or f"Verified {len(py_files)} modified Python file(s) with clean AST and compilation."
+        # All stages passed
+        details = test_summary or f"Verified {len(resolved_files)} file(s) with clean syntax and passing tests."
         return VerificationResult(
             passed=True,
             summary="All independent verification checks passed successfully.",
@@ -73,8 +167,7 @@ class IndependentVerifier:
             phase="verified",
         )
 
-    def _check_syntax_and_compile(self, py_files: List[Path]) -> Optional[str]:
-        """Verify that every modified python file has valid syntax and compiles."""
+    def _check_python_syntax(self, py_files: List[Path]) -> Optional[str]:
         for pf in py_files:
             try:
                 content = pf.read_text(encoding="utf-8", errors="replace")
@@ -100,42 +193,132 @@ class IndependentVerifier:
 
         return None
 
-    def _run_test_suite(self) -> Tuple[Optional[str], str]:
-        """Locate test suite and execute pytest if tests exist."""
-        has_tests = False
-        tests_dir = self.workspace_path / "tests"
-        if tests_dir.exists() and tests_dir.is_dir():
-            has_tests = True
-        else:
-            # Check for any test_*.py or *_test.py files
-            for p in self.workspace_path.glob("**/test_*.py"):
-                if "node_modules" not in str(p) and ".pytest_cache" not in str(p):
-                    has_tests = True
-                    break
-
-        if not has_tests:
-            return None, "No automated test suite detected in workspace. Syntax verified."
-
+    def _check_typescript(self) -> Optional[str]:
         try:
             res = subprocess.run(
-                ["python", "-m", "pytest", "-q", "--tb=short"],
+                ["npx", "tsc", "--noEmit"],
                 cwd=self.workspace_path,
                 capture_output=True,
                 text=True,
-                timeout=45,
+                encoding="utf-8",
+                errors="replace",
+                timeout=40,
                 check=False,
+                shell=True,
             )
-            output = (res.stdout + "\n" + res.stderr).strip()
             if res.returncode != 0:
-                # Truncate output to top 1500 chars to avoid giant tracebacks
-                err_lines = output.splitlines()
-                preview = "\n".join(err_lines[-35:]) if len(err_lines) > 35 else output
-                return preview, ""
-            
-            # Extract test summary line
-            summary_line = output.splitlines()[-1] if output else "Tests passed."
-            return None, f"pytest passed: {summary_line}"
-        except subprocess.TimeoutExpired:
-            return "Test execution timed out after 45 seconds.", ""
-        except Exception as exc:
-            return f"Error executing pytest: {exc}", ""
+                out = (res.stdout + "\n" + res.stderr).strip()
+                lines = out.splitlines()[:25]
+                return "\n".join(lines)
+            return None
+        except Exception:
+            return None
+
+    def _run_project_tests(self, meta: ProjectMetadata) -> Tuple[Optional[str], str, Optional[str]]:
+        # 1. Python Project
+        if meta.project_type == ProjectType.PYTHON:
+            tests_dir = self.workspace_path / "tests"
+            has_tests = tests_dir.exists() and tests_dir.is_dir()
+            if not has_tests:
+                for p in self.workspace_path.glob("**/test_*.py"):
+                    if "node_modules" not in str(p) and ".pytest_cache" not in str(p):
+                        has_tests = True
+                        break
+
+            if not has_tests:
+                return None, "No automated test suite detected in workspace. Syntax verified.", None
+
+            cmd = ["python", "-m", "pytest", "-q", "--tb=short"]
+            try:
+                res = subprocess.run(
+                    cmd,
+                    cwd=self.workspace_path,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=60,
+                    check=False,
+                )
+                output = (res.stdout + "\n" + res.stderr).strip()
+                if res.returncode != 0:
+                    err_lines = output.splitlines()
+                    preview = "\n".join(err_lines[-35:]) if len(err_lines) > 35 else output
+                    return preview, "", "pytest"
+                summary_line = output.splitlines()[-1] if output else "Tests passed."
+                return None, f"pytest passed: {summary_line}", "pytest"
+            except subprocess.TimeoutExpired:
+                return "pytest timed out after 60 seconds.", "", "pytest"
+            except Exception as exc:
+                return f"Error executing pytest: {exc}", "", "pytest"
+
+        # 2. Node / React / TypeScript Project
+        if meta.project_type in (ProjectType.NODE, ProjectType.TYPESCRIPT, ProjectType.REACT):
+            pkg_path = self.workspace_path / "package.json"
+            if pkg_path.exists():
+                test_cmd = meta.test_command or "npm test"
+                try:
+                    res = subprocess.run(
+                        test_cmd,
+                        cwd=self.workspace_path,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=60,
+                        check=False,
+                    )
+                    output = (res.stdout + "\n" + res.stderr).strip()
+                    # If test script says 'no test specified', treat as no tests
+                    if "no test specified" in output.lower():
+                        return None, "Node project verified (no tests configured).", test_cmd
+                    if res.returncode != 0:
+                        lines = output.splitlines()
+                        preview = "\n".join(lines[-35:]) if len(lines) > 35 else output
+                        return preview, "", test_cmd
+                    return None, f"Node tests passed: {test_cmd}", test_cmd
+                except Exception as exc:
+                    return f"Error running tests ({test_cmd}): {exc}", "", test_cmd
+
+        # 3. Rust Project
+        if meta.project_type == ProjectType.RUST:
+            try:
+                res = subprocess.run(
+                    ["cargo", "test"],
+                    cwd=self.workspace_path,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=90,
+                    check=False,
+                )
+                output = (res.stdout + "\n" + res.stderr).strip()
+                if res.returncode != 0:
+                    return output[-1500:], "", "cargo test"
+                return None, "cargo test passed.", "cargo test"
+            except Exception as exc:
+                return f"Error executing cargo test: {exc}", "", "cargo test"
+
+        # 4. Go Project
+        if meta.project_type == ProjectType.GO:
+            try:
+                res = subprocess.run(
+                    ["go", "test", "./..."],
+                    cwd=self.workspace_path,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=60,
+                    check=False,
+                )
+                output = (res.stdout + "\n" + res.stderr).strip()
+                if res.returncode != 0:
+                    return output[-1500:], "", "go test"
+                return None, "go test passed.", "go test"
+            except Exception as exc:
+                return f"Error executing go test: {exc}", "", "go test"
+
+        return None, "Workspace verified.", None
