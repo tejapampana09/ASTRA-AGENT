@@ -262,16 +262,6 @@ export const App: React.FC = () => {
           updateAssistantMessage((msg) => ({
             ...msg,
             thought: data.thought,
-            actions: [
-              ...(msg.actions || []).map((a) => (a.status === 'running' ? { ...a, status: 'completed' as const } : a)),
-              {
-                id: `thought_${Date.now()}`,
-                type: 'thought',
-                title: '✦ Reasoning Plan',
-                output: data.thought,
-                status: 'completed',
-              },
-            ],
           }));
         }
         break;
@@ -362,24 +352,21 @@ export const App: React.FC = () => {
           setFilesModified((prev) => Array.from(new Set([...prev, relPath])));
         }
         updateAssistantMessage((msg) => {
-          const acts = msg.actions || [];
-          const existing = acts.find((a) => a.title.includes(relPath));
-          if (existing) {
-            return msg; // Card already exists from tool_started, avoid duplicate pill
+          const acts = [...(msg.actions || [])];
+          const cleanRel = relPath.toLowerCase().replace(/\\/g, '/');
+          const existingIdx = acts.findIndex((a) => {
+            const t = a.title.toLowerCase().replace(/\\/g, '/');
+            return t.includes(cleanRel);
+          });
+          if (existingIdx >= 0) {
+            acts[existingIdx] = {
+              ...acts[existingIdx],
+              detail: `${data.lines_changed || 0} lines changed`,
+              status: 'completed',
+            };
+            return { ...msg, actions: acts };
           }
-          return {
-            ...msg,
-            actions: [
-              ...acts,
-              {
-                id: `file_${Date.now()}`,
-                type: 'file',
-                title: isCreated ? `Create ${relPath}` : `Modify ${relPath}`,
-                detail: `${data.lines_changed || 0} lines changed`,
-                status: 'completed',
-              },
-            ],
-          };
+          return msg; // Do not append duplicate card since tool_started already tracks the file operation
         });
         api.getWorkspaceDiff().then(setDiffResult).catch(() => {});
         break;
@@ -406,7 +393,7 @@ export const App: React.FC = () => {
               {
                 id: `verify_${Date.now()}`,
                 type: 'verification',
-                title: 'Independent Verification Check',
+                title: 'Verification (AST & Tests)',
                 detail: 'Testing AST, syntax, and automated test runners...',
                 status: 'running',
               },
@@ -424,7 +411,7 @@ export const App: React.FC = () => {
               ? {
                   ...a,
                   status: 'completed' as const,
-                  title: 'Independent Verification: PASSED',
+                  title: 'Verification: PASSED',
                   detail: data.summary,
                   output: `Passed: ${data.summary}\n${data.details || ''}`,
                 }
@@ -452,7 +439,7 @@ export const App: React.FC = () => {
               ? {
                   ...a,
                   status: 'failed' as const,
-                  title: 'Independent Verification: FAILED',
+                  title: 'Verification: FAILED',
                   detail: data.summary,
                   output: `Failed: ${data.summary}\n${data.details || ''}`,
                 }
@@ -785,16 +772,26 @@ export const App: React.FC = () => {
                 />
               ))}
 
-              {/* Live Working Indicator */}
+              {/* Live Autonomous Working Indicator */}
               {isRunning && (
-                <div className="p-3.5 rounded-2xl bg-[#191a24] border border-purple-500/30 text-xs space-y-1.5 animate-pulse max-w-md">
-                  <div className="flex items-center space-x-2 text-violet-400 font-semibold">
-                    <Sparkles className="w-4 h-4 animate-spin" />
-                    <span>ASTRA is working: {agentState}</span>
+                <div className="p-3 rounded-xl bg-[#12131d] border border-purple-500/40 text-xs shadow-lg shadow-purple-950/30 max-w-lg transition-all">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2.5">
+                      <span className="relative flex h-2.5 w-2.5">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-purple-500"></span>
+                      </span>
+                      <span className="font-semibold text-zinc-100 tracking-wide text-xs">ASTRA is executing</span>
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-purple-950/70 border border-purple-700/50 text-purple-300">
+                        {agentState}
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-mono text-zinc-500 animate-pulse">Running autonomous cycle...</span>
                   </div>
                   {currentAction && (
-                    <div className="text-zinc-400 font-mono text-[11px] pl-6 truncate">
-                      {currentAction}
+                    <div className="mt-2 text-zinc-300 font-mono text-[11px] pl-5 flex items-center gap-1.5 border-t border-purple-950/40 pt-2 truncate">
+                      <Terminal className="w-3 h-3 text-cyan-400 shrink-0" />
+                      <span className="truncate">{currentAction}</span>
                     </div>
                   )}
                 </div>
