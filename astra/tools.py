@@ -715,7 +715,7 @@ TOOL_DEFINITIONS = [
     {
         "name": "delete_file",
         "description": "Delete a file from the workspace.",
-        "permission": PermissionLevel.MODERATE,
+        "permission": PermissionLevel.DANGEROUS,
         "parameters": {
             "type": "object",
             "properties": {
@@ -848,11 +848,20 @@ class ToolRegistry:
             if cmd_perm == PermissionLevel.DANGEROUS:
                 permission = PermissionLevel.DANGEROUS
 
-        # If DANGEROUS, require explicit approval
+        # Determine if approval is needed:
+        # 1. Dangerous tools/commands (always require approval)
+        # 2. Strict mode: all MODERATE/DANGEROUS actions (write, edit, create, delete, run_command)
+        from astra.config import settings
+        requires_approval = (permission == PermissionLevel.DANGEROUS) or (
+            getattr(settings, "permission_mode", "balanced") == "strict"
+            and permission != PermissionLevel.SAFE
+        )
+
         approved = False
-        if permission == PermissionLevel.DANGEROUS:
+        if requires_approval:
+            cmd_display = args.get("command") if name == "run_command" else f"{name} {args.get('file_path', '')}".strip()
             if approval_callback:
-                approved = approval_callback(name, f"Tool '{name}' requested with args: {args}", args)
+                approved = approval_callback(name, f"Tool '{name}' requested: {cmd_display}", args)
             else:
                 try:
                     from astra.approval import approval_manager
@@ -860,8 +869,8 @@ class ToolRegistry:
                         session_id=session_id or "default",
                         tool_name=name,
                         arguments=args,
-                        description=f"Tool '{name}' requires user confirmation before proceeding.",
-                        command=args.get("command") if name == "run_command" else None,
+                        description=f"Action '{name}' requires user confirmation before proceeding.",
+                        command=cmd_display,
                     )
                     approved = approval_manager.wait_for_decision(appr_req)
                 except Exception:
@@ -871,7 +880,7 @@ class ToolRegistry:
                 return ToolResult(
                     success=False,
                     output="",
-                    error=f"Execution blocked: Command or action requires user approval.",
+                    error=f"Execution blocked: Action '{name}' requires user approval.",
                     duration_ms=(time.time() - start_time) * 1000,
                 )
 

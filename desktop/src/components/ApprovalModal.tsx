@@ -30,7 +30,7 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
         </div>
 
         <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 font-mono text-xs text-amber-300 break-all">
-          $ {command}
+          {command?.startsWith('$') ? command : `$ ${command || 'action'}`}
         </div>
 
         {description && <p className="text-xs text-slate-600">{description}</p>}

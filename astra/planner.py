@@ -21,22 +21,42 @@ class Planner:
     def create_initial_plan(goal: str, project_type: str = "generic") -> TaskPlan:
         """Construct a structured, measurable plan for an autonomous task."""
         plan = TaskPlan(goal=goal)
-        
-        # Step 1: Explore & Context
-        plan.add_step(
-            title="Explore & Discover Context",
-            description=f"Scan project structure, locate entry points, and read relevant configuration for {project_type} project.",
-        )
-        # Step 2: Implement Changes
-        plan.add_step(
-            title="Implement Solution",
-            description=f"Apply code modifications, create new files, or configure settings required for: {goal}.",
-        )
-        # Step 3: Verify & Validate
-        plan.add_step(
-            title="Verify & Conclude",
-            description="Run test suite, compile or syntax check, verify no regressions, and summarize completed work.",
-        )
+        goal_lower = goal.lower()
+
+        # Check if the goal is architectural, explanatory, or documentation-oriented
+        is_info_or_doc = any(kw in goal_lower for kw in [
+            "architecture", "documentation", "document", "explain", "overview",
+            "what is", "how does", "summarize", "walkthrough", "read and analyze",
+            "diagram", "components", "structure", "audit", "review"
+        ]) and not any(kw in goal_lower for kw in ["fix", "bug", "failing test", "implement", "refactor", "add feature"])
+
+        if is_info_or_doc:
+            plan.add_step(
+                title="Explore Repository Architecture",
+                description=f"Scan directories, read configuration manifests, README, and core entry points for {project_type} project.",
+            )
+            plan.add_step(
+                title="Analyze Components & Design Patterns",
+                description="Map module responsibilities, data flow, API endpoints, and dependencies.",
+            )
+            plan.add_step(
+                title="Deliver Comprehensive Documentation",
+                description="Synthesize and provide deep, professional architecture documentation answering the user request.",
+            )
+        else:
+            # Code modification / implementation / bug fix workflow
+            plan.add_step(
+                title="Explore & Discover Context",
+                description=f"Scan project structure, locate relevant files, and analyze error or feature requirements for {project_type} project.",
+            )
+            plan.add_step(
+                title="Implement Solution",
+                description=f"Apply clean surgical code modifications or create files required for: {goal}.",
+            )
+            plan.add_step(
+                title="Verify & Conclude",
+                description="Verify syntax and run tests if applicable to ensure regression-free completion.",
+            )
         
         # Activate Step 1
         if plan.steps:

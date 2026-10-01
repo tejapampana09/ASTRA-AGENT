@@ -389,7 +389,8 @@ class GeminiProvider(LLMProvider):
 
     def list_models(self) -> List[Dict[str, Any]]:
         return [
-            {"id": "gemini-3.8-flash", "name": "Gemini 3.8 Flash (Google Brain - Fast & Smart)", "provider": "gemini"},
+            {"id": "gemini-3.5-flash-lite", "name": "Gemini 3.5 Flash-Lite (Fast & Smart - Recommended)", "provider": "gemini"},
+            {"id": "gemini-3.5-flash", "name": "Gemini 3.5 Flash (Google Brain)", "provider": "gemini"},
             {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro (Deep Reasoning)", "provider": "gemini"},
         ]
 
@@ -408,11 +409,11 @@ class GeminiProvider(LLMProvider):
         from google.genai import types
 
         client = genai.Client(api_key=api_key)
-        model_id = model or "gemini-3.8-flash"
+        model_id = model or "gemini-3.5-flash-lite"
         if model_id.startswith("gemini/"):
             model_id = model_id[len("gemini/"):]
         if not model_id.startswith("gemini-"):
-            model_id = "gemini-3.8-flash"
+            model_id = "gemini-3.5-flash-lite"
 
         gemini_contents = []
         system_instruction = None

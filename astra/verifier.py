@@ -104,7 +104,7 @@ class IndependentVerifier:
             return ErrorCategory.TIMEOUT
         return ErrorCategory.RUNTIME
 
-    def verify(self, modified_files: Set[str] | List[str]) -> VerificationResult:
+    def verify(self, modified_files: Set[str] | List[str], goal: str = "") -> VerificationResult:
         """Run multi-stage verification on modified files and test suite."""
         resolved_files: List[Path] = []
         for f in modified_files:
@@ -145,21 +145,31 @@ class IndependentVerifier:
                         failing_command="npx tsc --noEmit",
                     )
 
-        # Stage 3: Automated Test Execution based on detected project type
-        test_err, test_summary, test_cmd = self._run_project_tests(meta)
-        if test_err:
-            cat = self.classify_error(test_err)
-            return VerificationResult(
-                passed=False,
-                summary=f"Automated test execution failed ({test_cmd}).",
-                details=test_err,
-                phase="test_execution",
-                error_category=cat,
-                failing_command=test_cmd,
-            )
+        # Stage 3: Automated Test Execution ONLY when relevant to user's goal or test files
+        # Do NOT force a full pytest run on everyday tasks or non-test edits
+        should_run_tests = False
+        goal_lower = (goal or "").lower()
+        if any(w in goal_lower for w in ["test", "pytest", "failing", "regression", "verify test"]):
+            should_run_tests = True
+        elif any("test" in f.name.lower() or "tests" in str(f).lower() for f in resolved_files):
+            should_run_tests = True
+
+        test_summary = ""
+        if should_run_tests:
+            test_err, test_summary, test_cmd = self._run_project_tests(meta)
+            if test_err:
+                cat = self.classify_error(test_err)
+                return VerificationResult(
+                    passed=False,
+                    summary=f"Automated test execution failed ({test_cmd}).",
+                    details=test_err,
+                    phase="test_execution",
+                    error_category=cat,
+                    failing_command=test_cmd,
+                )
 
         # All stages passed
-        details = test_summary or f"Verified {len(resolved_files)} file(s) with clean syntax and passing tests."
+        details = test_summary or f"Verified {len(resolved_files)} file(s) with clean syntax."
         return VerificationResult(
             passed=True,
             summary="All independent verification checks passed successfully.",

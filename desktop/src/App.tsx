@@ -27,13 +27,21 @@ const getRelativePath = (p: string, wsPath?: string): string => {
   if (!p) return '';
   let clean = p.replace(/\\/g, '/');
   if (wsPath) {
-    const wsClean = wsPath.replace(/\\/g, '/').replace(/\/$/, '');
+    const wsClean = wsPath.replace(/\\/g, '/').replace(/\/+$/, '');
     if (clean.toLowerCase().startsWith(wsClean.toLowerCase())) {
-      clean = clean.slice(wsClean.length).replace(/^\//, '');
+      clean = clean.slice(wsClean.length).replace(/^\/+/, '');
+    } else {
+      const wsBase = wsClean.split('/').filter(Boolean).pop();
+      if (wsBase && clean.toLowerCase().includes(wsBase.toLowerCase() + '/')) {
+        const idx = clean.toLowerCase().indexOf(wsBase.toLowerCase() + '/');
+        clean = clean.slice(idx + wsBase.length + 1).replace(/^\/+/, '');
+      }
     }
   }
-  const parts = clean.split('/');
-  return parts.length > 2 && clean.includes(':') ? parts.slice(-2).join('/') : clean;
+  if (/^[a-zA-Z]:\//i.test(clean)) {
+    clean = clean.split('/').pop() || clean;
+  }
+  return clean || p;
 };
 
 const formatToolAction = (name: string, args: Record<string, any>, wsPath?: string) => {
@@ -77,32 +85,32 @@ const formatToolAction = (name: string, args: Record<string, any>, wsPath?: stri
       };
     case 'list_dir':
       return {
-        type: 'tool' as const,
+        type: 'file' as const,
         title: `List ${getRelativePath(args.dir_path || '.', wsPath)}`,
         detail: '',
       };
     case 'search_code':
       return {
-        type: 'tool' as const,
-        title: `Search "${args.query}"`,
+        type: 'command' as const,
+        title: `Search code: "${args.query || ''}"`,
         detail: args.search_dir ? `in ${getRelativePath(args.search_dir, wsPath)}` : '',
       };
     case 'git_status':
       return {
-        type: 'tool' as const,
-        title: 'Git Status',
+        type: 'command' as const,
+        title: '$ git status',
         detail: '',
       };
     case 'git_diff':
       return {
-        type: 'tool' as const,
-        title: 'Git Diff',
+        type: 'command' as const,
+        title: '$ git diff',
         detail: '',
       };
     case 'web_search':
       return {
-        type: 'tool' as const,
-        title: `Web Search: ${args.query}`,
+        type: 'command' as const,
+        title: `Web search: "${args.query || ''}"`,
         detail: '',
       };
     default:
@@ -646,6 +654,13 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleOpenFile = (filePath: string) => {
+    if (!filePath) return;
+    setShowDiff(true);
+    setShowTerminal(false);
+    api.getWorkspaceDiff().then(setDiffResult).catch(() => {});
+  };
+
   const isRunning =
     agentState !== 'IDLE' &&
     agentState !== 'COMPLETED' &&
@@ -771,31 +786,15 @@ export const App: React.FC = () => {
                   message={m}
                   sourcesCount={toolCallsCount}
                   onOpenSourcesDrawer={() => setShowSourcesDrawer(true)}
+                  onOpenFile={handleOpenFile}
                 />
               ))}
 
-              {/* Live Autonomous Working Indicator */}
+              {/* Antigravity Minimal Working Indicator (Image 1 Style) */}
               {isRunning && (
-                <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs shadow-sm max-w-lg transition-all">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-2.5">
-                      <span className="relative flex h-2.5 w-2.5">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-600"></span>
-                      </span>
-                      <span className="font-semibold text-slate-900 tracking-wide text-xs">ASTRA is executing</span>
-                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-blue-50 border border-blue-200 text-blue-700">
-                        {agentState}
-                      </span>
-                    </div>
-                    <span className="text-[10px] font-mono text-slate-500">Working...</span>
-                  </div>
-                  {currentAction && (
-                    <div className="mt-2 text-slate-700 font-mono text-[11px] pl-5 flex items-center gap-1.5 border-t border-slate-200 pt-2 truncate">
-                      <Terminal className="w-3 h-3 text-slate-600 shrink-0" />
-                      <span className="truncate">{currentAction}</span>
-                    </div>
-                  )}
+                <div className="flex items-center space-x-2 py-2 text-xs font-medium text-slate-700 select-none">
+                  <span className="w-2 h-2 rounded-full bg-blue-600 animate-pulse" />
+                  <span>Working{currentAction ? ` • ${currentAction}` : ''}</span>
                 </div>
               )}
 

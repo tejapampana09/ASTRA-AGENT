@@ -5,18 +5,8 @@ import {
   Sparkles,
   Copy,
   Check,
-  Brain,
-  Layers,
-  CheckCircle2,
-  XCircle,
-  Terminal,
-  FileCode,
-  Wrench,
-  Shield,
   ChevronDown,
   ChevronRight,
-  Activity,
-  Search,
   ExternalLink,
   ThumbsUp,
   ThumbsDown,
@@ -27,124 +17,161 @@ interface ChatMessageViewProps {
   message: ChatMessage;
   onOpenSourcesDrawer?: () => void;
   sourcesCount?: number;
+  onOpenFile?: (filePath: string) => void;
 }
 
-const ActionStepCard: React.FC<{ action: AgentAction }> = ({ action }) => {
-  const [expanded, setExpanded] = useState<boolean>(action.status === 'running' || !!action.output);
-  const [copied, setCopied] = useState<boolean>(false);
+interface AntigravityGroup {
+  id: string;
+  type: 'explore' | 'edit' | 'commands';
+  label: string;
+  files?: string[];
+  filename?: string;
+  fileIcon?: string;
+  diffStats?: { added: number; deleted: number };
+  actions: AgentAction[];
+}
 
-  const handleCopyOutput = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (action.output) {
-      navigator.clipboard.writeText(action.output);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+const formatCommandLabel = (title: string, status?: string): string => {
+  let clean = title.trim();
+  if (clean.startsWith('$ ')) clean = clean.slice(2);
+  if (/^run\s+/i.test(clean)) clean = clean.slice(4);
+
+  if (title.toLowerCase().includes('checked task') || title.toLowerCase().includes('checking task')) {
+    return clean;
+  }
+  if (title.toLowerCase().includes('killed task') || title.toLowerCase().includes('canceling') || title.toLowerCase().includes('canceled')) {
+    return clean;
+  }
+  if (title.toLowerCase().startsWith('search code:') || title.toLowerCase().startsWith('web search:')) {
+    return clean;
+  }
+
+  if (status === 'running') {
+    return `Run ${clean}`;
+  }
+  return `Ran ${clean}`;
+};
+
+const getFileIcon = (filename: string): string => {
+  const f = filename.toLowerCase();
+  if (f.endsWith('.py')) return '🐍';
+  if (f.endsWith('.tsx') || f.endsWith('.jsx')) return '⚛️';
+  if (f.endsWith('.ts') || f.endsWith('.js')) return '📜';
+  if (f.endsWith('.css') || f.endsWith('.html')) return '🎨';
+  if (f.endsWith('.json') || f.endsWith('.yaml') || f.endsWith('.yml')) return '⚙️';
+  if (f.endsWith('.md')) return '📄';
+  return '📄';
+};
+
+const cleanFileNameDisplay = (raw: string): string => {
+  let clean = raw.trim().replace(/^['"]|['"]$/g, '').replace(/\\/g, '/');
+  clean = clean.replace(/^(read|read:|list|list:|inspect)\s+/i, '').trim();
+  if (clean.includes('/')) {
+    const parts = clean.split('/');
+    if (parts[0].includes('(') || parts[0].toLowerCase().includes('folder')) {
+      clean = parts.slice(1).join('/');
     }
-  };
+  }
+  return clean || raw;
+};
 
-  const isCommand = action.type === 'command' || action.title.startsWith('$');
-  const isFile = action.type === 'file' || /^(create|write|edit|delete|modify)/i.test(action.title);
-  const isVerify = action.type === 'verification' || /verif/i.test(action.title);
-  const isSearch = action.type === 'tool' && /search/i.test(action.title);
+const groupActionsChronologically = (actions: AgentAction[]): AntigravityGroup[] => {
+  const groups: AntigravityGroup[] = [];
 
-  return (
-    <div className="rounded-lg bg-white border border-slate-200 hover:border-slate-300 overflow-hidden my-1 shadow-xs text-xs transition-all">
-      <div
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center justify-between px-3 py-2 bg-slate-50/80 hover:bg-slate-100/80 cursor-pointer transition-colors"
-      >
-        <div className="flex items-center space-x-2 truncate max-w-[82%]">
-          {/* Badge */}
-          {isCommand && (
-            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-700 font-mono text-[10px] font-semibold shrink-0">
-              <Terminal className="w-3 h-3 shrink-0 text-slate-600" />
-              <span>CMD</span>
-            </span>
-          )}
-          {isFile && (
-            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 border border-blue-200 text-blue-700 font-mono text-[10px] font-semibold shrink-0">
-              <FileCode className="w-3 h-3 shrink-0 text-blue-600" />
-              <span>FILE</span>
-            </span>
-          )}
-          {isVerify && (
-            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-700 font-mono text-[10px] font-semibold shrink-0">
-              <Shield className="w-3 h-3 shrink-0 text-emerald-600" />
-              <span>VERIFY</span>
-            </span>
-          )}
-          {isSearch && (
-            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-700 font-mono text-[10px] font-semibold shrink-0">
-              <Search className="w-3 h-3 shrink-0 text-amber-600" />
-              <span>SEARCH</span>
-            </span>
-          )}
-          {!isCommand && !isFile && !isVerify && !isSearch && (
-            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-700 font-mono text-[10px] font-semibold shrink-0">
-              <Wrench className="w-3 h-3 shrink-0 text-slate-500" />
-              <span>TOOL</span>
-            </span>
-          )}
+  for (const act of actions) {
+    if (act.type === 'thought') continue;
 
-          <span className="font-mono font-medium text-slate-800 truncate text-[12px]">{action.title}</span>
-          {action.detail && (
-            <span className="text-slate-400 font-mono text-[11px] truncate">{action.detail}</span>
-          )}
-        </div>
+    const titleLower = (act.title || '').toLowerCase();
+    // STRICT: Only actual file reads and directory listings belong in Explored files
+    const isFileRead =
+      act.type === 'file' &&
+      (titleLower.startsWith('read ') ||
+        titleLower.startsWith('read:') ||
+        titleLower.startsWith('list ') ||
+        titleLower.startsWith('list:'));
 
-        <div className="flex items-center space-x-2 shrink-0">
-          <span
-            className={`text-[10px] font-mono px-2 py-0.5 rounded-full flex items-center gap-1 ${
-              action.status === 'running'
-                ? 'bg-blue-50 text-blue-700 border border-blue-200 animate-pulse'
-                : action.status === 'completed'
-                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                : 'bg-rose-50 text-rose-700 border border-rose-200'
-            }`}
-          >
-            {action.status === 'running' && <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-ping" />}
-            {action.status === 'completed' && <Check className="w-2.5 h-2.5" />}
-            {action.status === 'failed' && <XCircle className="w-2.5 h-2.5" />}
-            <span>{action.status}</span>
-          </span>
-          {expanded ? (
-            <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
-          ) : (
-            <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-          )}
-        </div>
-      </div>
+    const isEditOrCreate =
+      !isFileRead &&
+      (act.type === 'file' ||
+        /^(create|created|write|edit|modify|modified|delete)/i.test(act.title));
 
-      {expanded && action.output && (
-        <div className="relative bg-slate-900 border-t border-slate-200">
-          <div className="flex items-center justify-between px-3 py-1 bg-slate-950 border-b border-slate-800 text-[10px] text-slate-400">
-            <span className="font-mono">Output</span>
-            <button
-              onClick={handleCopyOutput}
-              className="hover:text-slate-200 flex items-center gap-1 transition-colors"
-              title="Copy output"
-            >
-              {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-              <span>{copied ? 'Copied' : 'Copy'}</span>
-            </button>
-          </div>
-          <pre className="p-3 font-mono text-[11px] text-slate-200 overflow-x-auto max-h-64 leading-relaxed whitespace-pre-wrap select-text">
-            {action.output}
-          </pre>
-        </div>
-      )}
-    </div>
-  );
+    if (isFileRead) {
+      const fileName = cleanFileNameDisplay(act.title);
+      const lastGroup = groups[groups.length - 1];
+      if (lastGroup && lastGroup.type === 'explore') {
+        if (fileName && !lastGroup.files?.includes(fileName)) {
+          lastGroup.files?.push(fileName);
+        }
+        lastGroup.actions.push(act);
+      } else {
+        groups.push({
+          id: `grp_${act.id}`,
+          type: 'explore',
+          label: 'Explored',
+          files: [fileName],
+          actions: [act],
+        });
+      }
+    } else if (isEditOrCreate) {
+      let rawName = act.title
+        .replace(/^(create|created:|write|edit|modify|modified:|delete)\s+/i, '')
+        .trim();
+      if (!rawName && act.detail) rawName = act.detail;
+      const basename = cleanFileNameDisplay(rawName.split(/[\\/]/).pop() || rawName);
+
+      let diffStats: { added: number; deleted: number } | undefined;
+      const match = /\+(\d+)\s+-(\d+)/.exec(act.detail || '');
+      if (match) {
+        diffStats = { added: parseInt(match[1]), deleted: parseInt(match[2]) };
+      } else if (act.detail && act.detail.includes('lines')) {
+        const num = parseInt(act.detail) || 1;
+        diffStats = { added: num, deleted: 0 };
+      }
+
+      groups.push({
+        id: `grp_${act.id}`,
+        type: 'edit',
+        label: /create/i.test(act.title) ? 'Created' : 'Edited',
+        filename: basename,
+        fileIcon: getFileIcon(basename),
+        diffStats,
+        actions: [act],
+      });
+    } else {
+      // Command, status, search, or task step
+      const lastGroup = groups[groups.length - 1];
+      if (lastGroup && lastGroup.type === 'commands') {
+        lastGroup.actions.push(act);
+      } else {
+        groups.push({
+          id: `grp_${act.id}`,
+          type: 'commands',
+          label: 'Commands',
+          actions: [act],
+        });
+      }
+    }
+  }
+
+  return groups;
 };
 
 export const ChatMessageView: React.FC<ChatMessageViewProps> = ({
   message,
+  onOpenFile,
   onOpenSourcesDrawer,
-  sourcesCount = 0,
+  sourcesCount,
 }) => {
   const [copied, setCopied] = useState(false);
-  const [showThinking, setShowThinking] = useState(false);
-  const [userExpandedOverride, setUserExpandedOverride] = useState<boolean | null>(null);
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [selectedOutput, setSelectedOutput] = useState<string | null>(null);
+
+  const toggleGroup = (id: string, defaultOpen = false) => {
+    setExpandedGroups((prev) => ({
+      ...prev,
+      [id]: prev[id] !== undefined ? !prev[id] : !defaultOpen,
+    }));
+  };
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -152,11 +179,11 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // User prompt: Antigravity clean light bubble
+  // User prompt
   if (message.role === 'user') {
     return (
       <div className="flex justify-end my-4 select-text">
-        <div className="max-w-[78%] rounded-2xl px-4 py-3 bg-slate-100 border border-slate-200 text-sm text-slate-900 shadow-xs space-y-1">
+        <div className="max-w-[78%] rounded-2xl px-4 py-3 bg-slate-100 text-sm text-slate-900 space-y-1">
           <div className="whitespace-pre-wrap leading-relaxed font-normal">{message.content}</div>
           <div className="flex items-center justify-end space-x-2 pt-1 text-slate-400">
             <button
@@ -172,170 +199,154 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({
     );
   }
 
-  // Deduplicate and sanitize actions
-  const deduplicatedActions = React.useMemo(() => {
-    if (!message.actions) return [];
-    const list: AgentAction[] = [];
-
-    for (const act of message.actions) {
-      if (act.type === 'thought') continue;
-
-      const rawTitle = (act.title || '').trim();
-      const normKey = rawTitle
-        .toLowerCase()
-        .replace(/\\/g, '/')
-        .replace(/^(create|created:|modify|modified:|edit|write|read|delete)\s+/, '')
-        .trim();
-
-      const existingIdx = list.findIndex((a) => {
-        if (a.type === 'verification' && act.type === 'verification') return true;
-        const aNorm = (a.title || '')
-          .toLowerCase()
-          .replace(/\\/g, '/')
-          .replace(/^(create|created:|modify|modified:|edit|write|read|delete)\s+/, '')
-          .trim();
-        return aNorm === normKey;
-      });
-
-      if (existingIdx >= 0) {
-        list[existingIdx] = {
-          ...list[existingIdx],
-          ...act,
-          output: act.output || list[existingIdx].output,
-          status: act.status || list[existingIdx].status,
-        };
-      } else {
-        list.push(act);
-      }
-    }
-    return list;
-  }, [message.actions]);
-
-  // Antigravity auto-collapse logic:
-  // If any action is still running, keep open. Once completed, auto-collapse steps so UI stays clean!
-  const isStillRunning = deduplicatedActions.some((a) => a.status === 'running');
-  const actionsExpanded = userExpandedOverride !== null ? userExpandedOverride : isStillRunning;
-
-  const hasVerificationInActions = deduplicatedActions.some(
-    (a) => a.type === 'verification' || /verif/i.test(a.title)
-  );
+  // Deduplicate raw actions
+  const rawActions = message.actions || [];
+  const groups = groupActionsChronologically(rawActions);
+  const isStillRunning = rawActions.some((a) => a.status === 'running');
 
   return (
-    <div className="flex flex-col space-y-3 my-4 max-w-[94%] select-text">
-      {/* Antigravity Agent Header */}
-      <div className="flex items-center justify-between text-xs pb-0.5">
-        <div className="flex items-center space-x-2">
-          <span className="w-5 h-5 rounded-md bg-slate-900 flex items-center justify-center text-white text-[10px] font-bold shadow-xs">
-            <Sparkles className="w-3 h-3 text-white" />
-          </span>
-          <span className="font-semibold text-slate-900 tracking-tight text-xs">ASTRA</span>
-          <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-slate-100 border border-slate-200 text-slate-600 font-medium">
-            AUTONOMOUS
-          </span>
-        </div>
+    <div className="flex flex-col space-y-2 my-4 max-w-full select-text font-sans">
+      {/* Antigravity Minimal Header */}
+      <div className="flex items-center space-x-2 text-xs pb-0.5 select-none">
+        <span className="w-5 h-5 rounded-md bg-slate-900 flex items-center justify-center text-white text-[10px] font-bold">
+          <Sparkles className="w-3 h-3 text-white" />
+        </span>
+        <span className="font-semibold text-slate-900 tracking-tight text-xs">ASTRA</span>
       </div>
 
-      {/* Thinking Process Accordion */}
-      {message.thought && (
-        <div className="rounded-xl bg-slate-50 border border-slate-200 overflow-hidden text-xs">
-          <button
-            onClick={() => setShowThinking(!showThinking)}
-            className="w-full flex items-center justify-between px-3.5 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 font-mono text-[11px] transition-colors"
-          >
-            <div className="flex items-center space-x-2">
-              <Brain className="w-3.5 h-3.5 text-slate-500" />
-              <span className="font-medium">Thinking Process</span>
-              <span className="text-slate-400 text-[10px]">({message.thought.split(/\s+/).length} words)</span>
-            </div>
-            {showThinking ? (
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
-            ) : (
-              <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-            )}
-          </button>
-          {showThinking && (
-            <div className="p-3.5 font-mono text-[11px] text-slate-600 leading-relaxed whitespace-pre-wrap border-t border-slate-200 bg-white">
-              {message.thought}
+      {/* Antigravity Sequential Activity Stream (Exact Match to Image 1) */}
+      {groups.length > 0 && (
+        <div className="space-y-1 py-1 text-xs select-none">
+          {groups.map((group) => {
+            if (group.type === 'explore') {
+              const count = group.files?.length || group.actions.length || 1;
+              const isExpanded = expandedGroups[group.id] || false;
+              return (
+                <div key={group.id} className="py-0.5">
+                  <div
+                    onClick={() => toggleGroup(group.id, false)}
+                    className="flex items-center space-x-1.5 text-slate-600 hover:text-slate-900 cursor-pointer w-fit transition-colors"
+                  >
+                    <span>Explored {count} file{count > 1 ? 's' : ''}</span>
+                    <ChevronRight className={`w-3 h-3 text-slate-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                  </div>
+                  {isExpanded && (
+                    <div className="pl-4 py-0.5 space-y-0.5 mt-0.5 font-mono text-[11px] text-slate-500">
+                      {(group.files || []).map((f, i) => (
+                        <div
+                          key={i}
+                          onClick={() => onOpenFile?.(f)}
+                          className="flex items-center space-x-1.5 py-0.5 px-1.5 rounded hover:bg-slate-100 hover:text-slate-900 cursor-pointer w-fit transition-colors group"
+                          title={`Click to inspect ${f}`}
+                        >
+                          <span className="text-xs">{getFileIcon(f)}</span>
+                          <span className="group-hover:underline text-slate-700">{f}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            if (group.type === 'edit') {
+              return (
+                <div
+                  key={group.id}
+                  onClick={() => onOpenFile?.(group.filename || '')}
+                  className="flex items-center space-x-1.5 text-slate-800 py-0.5 px-1 rounded hover:bg-slate-50 cursor-pointer font-mono text-xs w-fit transition-colors group"
+                  title={`Click to view diff for ${group.filename}`}
+                >
+                  <span className="text-slate-500 font-sans font-medium">{group.label}</span>
+                  <span className="text-sm">{group.fileIcon}</span>
+                  <span className="font-semibold text-slate-900 group-hover:underline">{group.filename}</span>
+                  {group.diffStats && (
+                    <div className="flex items-center space-x-1 text-[11px] font-medium ml-1">
+                      <span className="text-emerald-600">+{group.diffStats.added}</span>
+                      <span className="text-rose-600">-{group.diffStats.deleted}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            if (group.type === 'commands') {
+              const cmdCount = group.actions.length;
+              const hasRunning = group.actions.some((a) => a.status === 'running');
+              const isExpanded = expandedGroups[group.id] !== undefined ? expandedGroups[group.id] : hasRunning;
+
+              return (
+                <div key={group.id} className="py-0.5">
+                  <div
+                    onClick={() => toggleGroup(group.id, hasRunning)}
+                    className="flex items-center space-x-1.5 text-slate-700 hover:text-slate-950 cursor-pointer w-fit font-medium transition-colors"
+                  >
+                    <span>
+                      {hasRunning
+                        ? `Exploring ${Math.max(1, cmdCount)} task${cmdCount > 1 ? 's' : ''}, running ${cmdCount} command${cmdCount > 1 ? 's' : ''}`
+                        : `Ran ${cmdCount} command${cmdCount > 1 ? 's' : ''}`}
+                    </span>
+                    <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isExpanded ? '' : '-rotate-90'}`} />
+                  </div>
+
+                  {isExpanded && (
+                    <div className="pl-4 py-0.5 space-y-1 mt-0.5">
+                      {group.actions.map((act) => {
+                        const lbl = formatCommandLabel(act.title, act.status);
+                        const hasOut = Boolean(act.output);
+                        const isRunningThis = act.status === 'running';
+
+                        return (
+                          <div key={act.id}>
+                            <div
+                              onClick={() => hasOut && setSelectedOutput(selectedOutput === act.id ? null : act.id)}
+                              className={`flex items-center space-x-1.5 text-slate-600 hover:text-slate-900 ${
+                                hasOut ? 'cursor-pointer' : ''
+                              }`}
+                            >
+                              <span className="truncate">{lbl}</span>
+                              {isRunningThis ? (
+                                <span className="inline-block animate-spin text-[12px] text-blue-600 shrink-0">↻</span>
+                              ) : null}
+                              {hasOut ? (
+                                <ChevronRight className={`w-3 h-3 text-slate-400 shrink-0 transition-transform ${selectedOutput === act.id ? 'rotate-90' : ''}`} />
+                              ) : null}
+                            </div>
+
+                            {selectedOutput === act.id && act.output && (
+                              <div className="my-1.5 p-3 rounded-lg bg-slate-950 text-slate-200 font-mono text-[11px] overflow-x-auto max-h-56 whitespace-pre-wrap select-text">
+                                {act.output}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            return null;
+          })}
+
+          {/* Antigravity Working Status Line (Image 1 Style) */}
+          {isStillRunning && (
+            <div className="text-xs text-slate-600 font-medium py-1 select-none flex items-center space-x-1.5">
+              <span>Working.</span>
             </div>
           )}
         </div>
       )}
 
-      {/* Auto-Collapsing Execution Steps Group */}
-      {deduplicatedActions.length > 0 && (
-        <div className="rounded-xl bg-slate-50/60 border border-slate-200 p-2 space-y-1.5">
-          <div
-            onClick={() => setUserExpandedOverride(!actionsExpanded)}
-            className="flex items-center justify-between px-1.5 py-0.5 cursor-pointer text-[11px] text-slate-600 font-mono hover:text-slate-900 select-none"
-          >
-            <span className="flex items-center gap-1.5 font-medium">
-              <Activity className="w-3.5 h-3.5 text-blue-600" />
-              <span>
-                {isStillRunning ? 'Executing Steps' : 'Completed Execution'} ({deduplicatedActions.length})
-              </span>
-              {!actionsExpanded && (
-                <span className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded font-sans">
-                  ✓ All steps verified
-                </span>
-              )}
-            </span>
-            <span className="text-[10px] text-slate-400 hover:text-slate-700 flex items-center gap-1 transition-colors">
-              {actionsExpanded ? 'Collapse steps' : 'View all steps'}
-              {actionsExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-            </span>
-          </div>
-
-          {actionsExpanded && (
-            <div className="space-y-1 pt-1 border-t border-slate-200">
-              {deduplicatedActions.map((act) => (
-                <ActionStepCard key={act.id} action={act} />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Standalone Verification Card (if not in actions) */}
-      {message.verification && !hasVerificationInActions && (
-        <div
-          className={`rounded-xl p-3 border text-xs ${
-            message.verification.passed
-              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-              : 'bg-rose-50 border-rose-200 text-rose-800'
-          }`}
-        >
-          <div className="flex items-center space-x-2 font-semibold mb-1">
-            {message.verification.passed ? (
-              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-            ) : (
-              <XCircle className="w-4 h-4 text-rose-600" />
-            )}
-            <span>{message.verification.passed ? 'Independent Verification: PASSED' : 'Verification FAILED'}</span>
-          </div>
-          <p className="text-[11px] text-slate-600">{message.verification.summary}</p>
-          {message.verification.details && (
-            <div className="mt-2 p-2 rounded bg-slate-900 font-mono text-[10px] text-slate-200 overflow-x-auto whitespace-pre-wrap">
-              {message.verification.details}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Antigravity Final Summary & Message Body */}
+      {/* Natural Markdown Response Text (NO BORDER BOX, Clean Antigravity Flow) */}
       {message.content && (
-        <div className="space-y-2 bg-white border border-slate-200 p-5 rounded-2xl shadow-xs text-slate-800">
-          {!isStillRunning && deduplicatedActions.length > 0 && (
-            <div className="flex items-center gap-1.5 pb-2 mb-2 border-b border-slate-100 text-xs font-semibold text-slate-900">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-              <span>Final Task Summary</span>
-            </div>
-          )}
-
+        <div className="text-slate-800 text-sm leading-relaxed space-y-2 pt-1 font-normal">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={{
               h1: ({ children }) => (
-                <h1 className="text-base font-bold text-slate-900 mt-3 mb-1.5 border-b border-slate-200 pb-1">
+                <h1 className="text-base font-bold text-slate-900 mt-3 mb-1.5 pb-1 border-b border-slate-100">
                   {children}
                 </h1>
               ),
@@ -346,7 +357,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({
                 <h3 className="text-sm font-medium text-slate-800 mt-2 mb-0.5">{children}</h3>
               ),
               p: ({ children }) => (
-                <p className="text-sm text-slate-700 leading-relaxed mb-2.5 font-normal">{children}</p>
+                <p className="text-sm text-slate-800 leading-relaxed mb-2.5 font-normal">{children}</p>
               ),
               strong: ({ children }) => <strong className="font-semibold text-slate-900">{children}</strong>,
               em: ({ children }) => <em className="italic text-slate-600">{children}</em>,
@@ -362,19 +373,23 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({
                 </a>
               ),
               ul: ({ children }) => (
-                <ul className="list-disc list-inside space-y-1 my-1.5 text-sm text-slate-700 pl-1">{children}</ul>
+                <ul className="list-disc list-inside space-y-1 my-1.5 text-sm text-slate-800 pl-1">{children}</ul>
               ),
               ol: ({ children }) => (
-                <ol className="list-decimal list-inside space-y-1 my-1.5 text-sm text-slate-700 pl-1">{children}</ol>
+                <ol className="list-decimal list-inside space-y-1 my-1.5 text-sm text-slate-800 pl-1">{children}</ol>
               ),
               li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+              blockquote: ({ children }) => (
+                <blockquote className="border-l-2 border-slate-300 pl-3 my-2 text-slate-500 italic text-sm">
+                  {children}
+                </blockquote>
+              ),
               pre: ({ children }: any) => <>{children}</>,
               code: ({ className, children, ...props }: any) => {
                 const match = /language-(\w+)/.exec(className || '');
                 const rawString = String(children);
                 const isMultiline = rawString.includes('\n');
 
-                // Inline code chip (e.g. `git_status`, `desktop`)
                 if (!match && !isMultiline) {
                   return (
                     <code
@@ -386,7 +401,6 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({
                   );
                 }
 
-                // Fenced multi-line code block
                 const language = match ? match[1] : '';
                 return (
                   <div className="rounded-xl bg-slate-900 border border-slate-800 overflow-hidden my-3 shadow-xs">
@@ -426,35 +440,21 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({
         </div>
       )}
 
-      {/* Bottom Action Bar */}
-      <div className="flex items-center justify-between pt-0.5 text-slate-400 text-xs">
-        <div className="flex items-center space-x-2">
-          {sourcesCount > 0 && onOpenSourcesDrawer && (
-            <button
-              onClick={onOpenSourcesDrawer}
-              className="flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 font-medium text-[11px] transition-colors"
-            >
-              <Layers className="w-3 h-3 text-slate-600" />
-              <span>{sourcesCount} Tool Calls</span>
-            </button>
-          )}
-        </div>
-
-        <div className="flex items-center space-x-1">
-          <button className="p-1 hover:text-slate-700 transition-colors" title="Good response">
-            <ThumbsUp className="w-3.5 h-3.5" />
-          </button>
-          <button className="p-1 hover:text-slate-700 transition-colors" title="Bad response">
-            <ThumbsDown className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => handleCopy(message.content)}
-            className="p-1 hover:text-slate-700 transition-colors"
-            title="Copy message"
-          >
-            {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-          </button>
-        </div>
+      {/* Bottom Minimal Action Bar */}
+      <div className="flex items-center space-x-2 pt-1 text-slate-400 text-xs">
+        <button className="p-1 hover:text-slate-700 transition-colors" title="Good response">
+          <ThumbsUp className="w-3.5 h-3.5" />
+        </button>
+        <button className="p-1 hover:text-slate-700 transition-colors" title="Bad response">
+          <ThumbsDown className="w-3.5 h-3.5" />
+        </button>
+        <button
+          onClick={() => handleCopy(message.content)}
+          className="p-1 hover:text-slate-700 transition-colors"
+          title="Copy message"
+        >
+          {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+        </button>
       </div>
     </div>
   );

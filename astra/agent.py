@@ -31,28 +31,36 @@ from astra.tools import PermissionLevel, ToolExecutor, ToolRegistry, ToolResult
 from astra.verifier import IndependentVerifier, VerificationResult
 from astra.workspace import WorkspaceManager
 
-SYSTEM_PROMPT = """You are ASTRA, an autonomous senior software engineering assistant (like Cline and Google Antigravity).
-You help developers explore repositories, understand codebases, implement features, fix bugs, and verify solutions.
+SYSTEM_PROMPT = """You are ASTRA, an autonomous senior software engineering assistant (powered by the Google Antigravity engineering engine).
+You help developers explore repositories, understand architecture, implement features, fix bugs, and create documentation.
 
-HOW TO ACT & COMMUNICATE:
-1. Speak naturally, directly, and like an expert engineer pair-programming with the user.
-2. NEVER talk down to the user or speak in future intentions without acting. When asked to fix a test, run checks, or implement code, DO NOT just say "To fix this, we need to investigate...". ACT IMMEDIATELY: call the appropriate tool (e.g. run_command, read_file, search_code) to run tests, inspect code, and fix it!
-3. Take ONE action at a time using tool calls. When multiple steps are needed, execute them step by step until the entire goal is completed and verified.
-4. When writing or editing code:
-   - Make clean, surgical edits.
-   - Run tests using run_command to verify your changes before finishing.
-5. FINAL SUMMARY REQUIREMENT:
-   - When your task is complete, you MUST provide a complete, comprehensive, and well-structured Final Task Summary.
-   - Include:
-     * Executive Overview (what was requested and what was achieved)
-     * Changes Made (files created, modified, or deleted with specific functions/logic updated)
-     * Verification & Test Results (exact commands executed, tests passed, or status confirmed)
-     * Current Status of the workspace.
-   - Format with clean markdown headers (###), bullet points, and inline code tags (`code`).
-   - NEVER provide a lazy 1-sentence or 2-sentence summary. Deliver a full, professional engineering summary.
-6. When researching, answering questions, or summarizing topics:
-   - Provide a thorough, well-structured, and comprehensive answer using all gathered details.
-   - Organize with clear headings, bullet points, key milestones, stats, or facts.
+CORE PARADIGM: THINK -> HUMAN-IN-THE-LOOP CHECK -> EXECUTE
+
+1. THINK (Analyze User Intent First):
+   - Determine what the user actually wants before taking any action:
+     * ARCHITECTURE / DOCUMENTATION / EXPLANATION REQUESTS:
+       - Examples: "what is project architecture", "explain how this works", "document the system", "make a documentation".
+       - Action: EXPLORE the local workspace! Use `list_dir`, `read_file` on core files (`README.md`, `package.json`, `setup.py`, `pyproject.toml`, main entry points).
+       - DO NOT run `pytest`, `npm test`, or `git status` for questions or architecture inquiries.
+       - DO NOT search the web for generic articles. The user wants the architecture and documentation of THIS workspace!
+       - DELIVER: Provide the full, high-quality, in-depth architectural breakdown directly to the user (components, data flow, tech stack, API overview, directory structure, design patterns). If asked to "make documentation", write it to `docs/ARCHITECTURE.md` or `ARCHITECTURE.md` and present the complete guide in your response!
+     * CODE IMPLEMENTATION / BUG FIX / FEATURE REQUESTS:
+       - Examples: "fix failing pytest", "add endpoint", "refactor function".
+       - Action: Locate the code, make clean surgical edits (`edit_file`, `write_file`), and verify with syntax/tests.
+
+2. HUMAN-IN-THE-LOOP CHECK:
+   - Destructive operations (`delete_file`, git hard resets, dropping data, or critical system commands) require explicit human authorization.
+   - Explain your rationale clearly before proposing destructive or major mutating actions.
+
+3. EXECUTE:
+   - Take ONE purposeful action at a time.
+   - Observe tool results and use the gathered knowledge to progress directly towards fulfilling the user's goal.
+   - NEVER loop or repeatedly call the same tool with the same arguments.
+
+4. DELIVER REAL VALUE (NO ROBOTIC META-SUMMARIES):
+   - When answering a question or providing documentation, output the complete, well-structured, professional documentation directly in markdown!
+   - NEVER output a robotic meta-summary recounting your own tool calls (e.g. NEVER say: "Executive Overview: The assistant ran git status... Changes Made: No files were edited"). That is completely useless.
+   - Deliver real value: complete documentation, working code, or verified solutions.
 
 AVAILABLE TOOLS:
 - read_file(file_path, start_line, end_line): Read file contents
@@ -334,12 +342,19 @@ class AstraAgent:
                     "i will now", "i'll now", "in order to fix", "we must",
                     "let us now", "investigate the changes and ensure",
                     "to fix the failing", "to fix this, we need", "i will inspect",
+                    "let's try running", "let's try", "here's the updated command",
+                    "here is the updated command", "here's the command", "here is the command",
+                    "try running the test again", "run the test again", "run the following command",
+                    "let's run", "we can run", "let's execute", "run the updated command",
                 ]
                 if iteration < self.max_iterations and any(im in final_summary.lower() for im in intent_markers):
                     messages.append({"role": "assistant", "content": response.content})
                     messages.append({
                         "role": "user",
-                        "content": "Do not stop with an intermediate plan. Proceed immediately to execute the next action using tools (e.g. run_command, read_file, search_code)."
+                        "content": (
+                            "You are an autonomous engineering agent (ASTRA). Do NOT instruct the user to run commands "
+                            "or state what command to try next. Execute the command yourself immediately using the 'run_command' tool."
+                        )
                     })
                     continue
 
@@ -358,7 +373,7 @@ class AstraAgent:
                     self._set_state(AgentState.VERIFYING, {"modified_files": all_changed})
                     self._emit_event(EventType.VERIFICATION_STARTED, {"files": all_changed})
                     
-                    verification_result = self.verifier.verify(all_changed)
+                    verification_result = self.verifier.verify(all_changed, goal=goal)
                     session_manager.add_verification(
                         self.session_id,
                         verification_result.passed,
@@ -602,47 +617,91 @@ class AstraAgent:
         intent_markers = ["we need to", "we should", "next step", "let's now", "i will now", "i'll now"]
         has_intent = any(im in current_summary.lower() for im in intent_markers)
 
-        # If summary is already rich (> 50 words with markdown headings and no future intent), use it
-        if len(words) >= 50 and has_structure and not has_intent:
+        # If summary is already rich (> 40 words with markdown headings and no future intent), use it directly
+        if len(words) >= 40 and has_structure and not has_intent:
             return current_summary
 
-        # Otherwise synthesize a complete, professional engineering summary
-        summary_prompt = [
-            {
-                "role": "system",
-                "content": (
-                    "You are ASTRA, a senior autonomous engineering agent. "
-                    "The task is complete. Provide a complete, professional, beautifully structured Final Task Summary for the user.\n"
-                    "Use this exact format:\n"
-                    "### 🎯 Executive Summary\n"
-                    "Direct explanation of what was achieved and the outcome.\n\n"
-                    "### 🛠️ Actions & Changes Made\n"
-                    "Bullet points detailing the files modified, created, or inspected, with specific updates.\n\n"
-                    "### 🧪 Verification & Results\n"
-                    "Specific commands executed (e.g. tests or status checks) and their results.\n\n"
-                    "### ✅ Current Status\n"
-                    "Confirmation that everything is verified and the workspace is clean.\n\n"
-                    "Use clean markdown with bullet points and code chips (`code`). NEVER give a 1-sentence or 2-sentence response."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"User Objective: {goal}\n"
-                    f"Files Modified: {changed_files}\n"
-                    f"Commands Executed: {[c['command'] for c in self.commands_executed]}\n"
-                    f"Verification Status: {'Passed' if verification_result and verification_result.passed else 'All steps complete'}\n"
-                    f"Previous observation: {current_summary}\n\n"
-                    f"Generate the full, complete Final Task Summary now."
-                ),
-            },
-        ]
+        goal_lower = goal.lower()
+        is_info_or_doc = any(kw in goal_lower for kw in [
+            "architecture", "documentation", "document", "explain", "overview",
+            "what is", "how does", "summarize", "walkthrough", "read and analyze",
+            "diagram", "components", "structure", "audit", "review"
+        ])
+
+        if is_info_or_doc or not changed_files:
+            summary_prompt = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are ASTRA, a senior autonomous software engineering agent. "
+                        "The user asked an architectural, explanatory, or documentation question about the codebase. "
+                        "Deliver a comprehensive, beautifully formatted, deep architectural guide or documentation answering their request directly.\n"
+                        "Include:\n"
+                        "- 🏛️ Executive Architecture Overview\n"
+                        "- 🧩 Core Components & Modules (directory layout, key files, responsibilities)\n"
+                        "- 🔄 Execution Pipeline & Data Flow\n"
+                        "- ⚡ Key Technologies & Design Patterns\n"
+                        "- 🚀 Entry Points & Setup\n\n"
+                        "DO NOT write a meta-log about yourself or recount which tools were called. Deliver the actual requested architecture documentation in rich Markdown with clean sections, code blocks, and diagrams."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"User Objective: {goal}\n"
+                        f"Workspace context / observations gathered:\n{current_summary}\n\n"
+                        f"Provide the complete, in-depth architectural documentation now."
+                    ),
+                },
+            ]
+        else:
+            # Code modification summary
+            summary_prompt = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are ASTRA, a senior autonomous engineering agent. "
+                        "The task is complete. Provide a complete, professional, beautifully structured Final Task Summary for the user.\n"
+                        "Use this exact format:\n"
+                        "### 🎯 Executive Summary\n"
+                        "Direct explanation of what was achieved and the outcome.\n\n"
+                        "### 🛠️ Actions & Changes Made\n"
+                        "Bullet points detailing the files modified, created, or inspected, with specific updates.\n\n"
+                        "### 🧪 Verification & Results\n"
+                        "Specific commands executed (e.g. tests or status checks) and their results.\n\n"
+                        "### ✅ Current Status\n"
+                        "Confirmation that everything is verified and the workspace is clean.\n\n"
+                        "Use clean markdown with bullet points and code chips (`code`). NEVER give a 1-sentence or 2-sentence response."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"User Objective: {goal}\n"
+                        f"Files Modified: {changed_files}\n"
+                        f"Commands Executed: {[c['command'] for c in self.commands_executed]}\n"
+                        f"Verification Status: {'Passed' if verification_result and verification_result.passed else 'All steps complete'}\n"
+                        f"Previous observation: {current_summary}\n\n"
+                        f"Generate the full, complete Final Task Summary now."
+                    ),
+                },
+            ]
+
         try:
             resp = self.llm.complete(summary_prompt)
             if resp.content and len(resp.content.strip().split()) >= 30:
                 return resp.content.strip()
         except Exception:
             pass
+
+        if is_info_or_doc or not changed_files:
+            return (
+                f"### 🏛️ Architecture & System Overview\n\n"
+                f"**Objective:** {goal}\n\n"
+                f"ASTRA completed repository exploration and context discovery. "
+                f"The repository comprises core service logic, API server endpoints, and frontend desktop components.\n\n"
+                f"{current_summary}"
+            )
 
         # Fallback template
         cmds_list = "\n".join(f"- `{c['command']}`" for c in self.commands_executed[-5:]) if self.commands_executed else "- Workspace inspection completed"
