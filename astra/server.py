@@ -68,24 +68,21 @@ def broadcast_event(event: AgentEvent) -> None:
         return
 
     sess_id = event.session_id
+    recipients = set(connected_websockets)
     if sess_id and sess_id in session_websockets:
-        sess_dead = set()
-        for ws in set(session_websockets[sess_id]):
-            try:
-                asyncio.run_coroutine_threadsafe(ws.send_text(data_json), loop)
-            except Exception:
-                sess_dead.add(ws)
-        if sess_dead:
-            session_websockets[sess_id].difference_update(sess_dead)
-    elif not sess_id or sess_id == "global":
-        dead = set()
-        for ws in set(connected_websockets):
-            try:
-                asyncio.run_coroutine_threadsafe(ws.send_text(data_json), loop)
-            except Exception:
-                dead.add(ws)
-        if dead:
-            connected_websockets.difference_update(dead)
+        recipients.update(session_websockets[sess_id])
+
+    dead = set()
+    for ws in recipients:
+        try:
+            asyncio.run_coroutine_threadsafe(ws.send_text(data_json), loop)
+        except Exception:
+            dead.add(ws)
+
+    if dead:
+        connected_websockets.difference_update(dead)
+        if sess_id and sess_id in session_websockets:
+            session_websockets[sess_id].difference_update(dead)
 
 
 event_bus.subscribe(broadcast_event)

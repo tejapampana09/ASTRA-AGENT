@@ -727,8 +727,20 @@ class GroqProvider(LLMProvider):
                         "function": {"name": fn.get("name"), "arguments": parsed_args},
                     })
 
-                return LLMResponse(content=content, tool_calls=tool_calls, raw_content=data, provider="groq", model=model_id)
         except Exception as exc:
+            err_str = str(exc)
+            if "429" in err_str or "too many requests" in err_str.lower() or "rate" in err_str.lower():
+                if getattr(settings, "gemini_api_key", None):
+                    try:
+                        gemini = GeminiProvider()
+                        return gemini.complete(messages=messages, tools=tools, temperature=temperature)
+                    except Exception:
+                        pass
+                try:
+                    ollama = OllamaProvider()
+                    return ollama.complete(messages=messages, tools=tools, temperature=temperature)
+                except Exception:
+                    pass
             raise RuntimeError(f"Groq API error: {exc}")
 
 
