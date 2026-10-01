@@ -124,7 +124,7 @@ export const App: React.FC = () => {
 
   // Active Session & Agent State
   const [activeSessionId, setActiveSessionId] = useState<string>('');
-  const [selectedModel, setSelectedModel] = useState<string>('ollama/qwen2.5-coder:7b');
+  const [selectedModel, setSelectedModel] = useState<string>('groq');
   const [agentState, setAgentState] = useState<AgentState>('IDLE');
 
   // Chat & Execution Data
@@ -172,10 +172,12 @@ export const App: React.FC = () => {
 
       const mData = await api.getModels();
       setModelsData(mData);
-      if (mData?.models?.ollama && mData.models.ollama.length > 0) {
-        setSelectedModel(`ollama/${mData.models.ollama[0].id}`);
-      } else if (h.default_model) {
+      if (h?.default_model) {
         setSelectedModel(h.default_model);
+      } else if (mData?.models?.groq && mData.models.groq.length > 0) {
+        setSelectedModel('groq');
+      } else if (mData?.models?.ollama && mData.models.ollama.length > 0) {
+        setSelectedModel(`ollama/${mData.models.ollama[0].id}`);
       }
 
       const meta = await api.getWorkspace();

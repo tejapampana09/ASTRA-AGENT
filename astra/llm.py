@@ -310,6 +310,8 @@ class OllamaProvider(LLMProvider):
             "keep_alive": "15m",
             "options": {
                 "temperature": temperature,
+                "num_ctx": 4096,
+                "num_predict": 1024,
             },
         }
         if ollama_tools:
