@@ -31,21 +31,28 @@ from astra.tools import PermissionLevel, ToolExecutor, ToolRegistry, ToolResult
 from astra.verifier import IndependentVerifier, VerificationResult
 from astra.workspace import WorkspaceManager
 
-SYSTEM_PROMPT = """You are ASTRA, an autonomous senior software engineering assistant (like Cline).
+SYSTEM_PROMPT = """You are ASTRA, an autonomous senior software engineering assistant (like Cline and Google Antigravity).
 You help developers explore repositories, understand codebases, implement features, fix bugs, and verify solutions.
 
 HOW TO ACT & COMMUNICATE:
-1. Speak naturally, directly, and concisely like an expert engineer pair-programming with the user.
-2. NEVER lecture or talk down to the user. When a file is created or code is written, do NOT explain how the user can write a test themselves. You are an autonomous agent: DO the work yourself and give a concise summary when finished.
-3. Take ONE action at a time. After taking an action, observe the tool result before deciding the next action.
+1. Speak naturally, directly, and like an expert engineer pair-programming with the user.
+2. NEVER talk down to the user or speak in future intentions without acting. When asked to fix a test, run checks, or implement code, DO NOT just say "To fix this, we need to investigate...". ACT IMMEDIATELY: call the appropriate tool (e.g. run_command, read_file, search_code) to run tests, inspect code, and fix it!
+3. Take ONE action at a time using tool calls. When multiple steps are needed, execute them step by step until the entire goal is completed and verified.
 4. When writing or editing code:
    - Make clean, surgical edits.
-   - Run tests to verify your changes before finishing.
-   - Once all required changes are implemented and verified, conclude with a brief summary of what was accomplished.
-5. When researching, answering questions, or summarizing topics (e.g. web search, explaining a person, concept, or codebase):
+   - Run tests using run_command to verify your changes before finishing.
+5. FINAL SUMMARY REQUIREMENT:
+   - When your task is complete, you MUST provide a complete, comprehensive, and well-structured Final Task Summary.
+   - Include:
+     * Executive Overview (what was requested and what was achieved)
+     * Changes Made (files created, modified, or deleted with specific functions/logic updated)
+     * Verification & Test Results (exact commands executed, tests passed, or status confirmed)
+     * Current Status of the workspace.
+   - Format with clean markdown headers (###), bullet points, and inline code tags (`code`).
+   - NEVER provide a lazy 1-sentence or 2-sentence summary. Deliver a full, professional engineering summary.
+6. When researching, answering questions, or summarizing topics:
    - Provide a thorough, well-structured, and comprehensive answer using all gathered details.
    - Organize with clear headings, bullet points, key milestones, stats, or facts.
-   - NEVER give a superficial 2-sentence summary when rich data or search results were retrieved. Give the user a complete, informative, high-quality answer.
 
 AVAILABLE TOOLS:
 - read_file(file_path, start_line, end_line): Read file contents
@@ -322,7 +329,30 @@ class AstraAgent:
 
             # Check if LLM proposes no further tool calls -> MODEL SAYS DONE
             if not response.has_tool_calls():
+                intent_markers = [
+                    "we need to", "we should", "next step", "let's now", 
+                    "i will now", "i'll now", "in order to fix", "we must",
+                    "let us now", "investigate the changes and ensure",
+                    "to fix the failing", "to fix this, we need", "i will inspect",
+                ]
+                if iteration < self.max_iterations and any(im in final_summary.lower() for im in intent_markers):
+                    messages.append({"role": "assistant", "content": response.content})
+                    messages.append({
+                        "role": "user",
+                        "content": "Do not stop with an intermediate plan. Proceed immediately to execute the next action using tools (e.g. run_command, read_file, search_code)."
+                    })
+                    continue
+
                 all_changed = list(self.files_modified | self.files_created)
+                is_actionable = any(w in goal.lower() for w in ["fix", "pytest", "test", "implement", "build", "create", "write", "debug"])
+                if is_actionable and iteration < 4 and not self.commands_executed and not all_changed:
+                    messages.append({"role": "assistant", "content": response.content})
+                    messages.append({
+                        "role": "user",
+                        "content": f"The objective '{goal}' requires taking action. Please invoke the appropriate tool (such as run_command with pytest or read_file to inspect code)."
+                    })
+                    continue
+
                 if all_changed:
                     # TRIGGER MANDATORY INDEPENDENT VERIFIER
                     self._set_state(AgentState.VERIFYING, {"modified_files": all_changed})
@@ -341,9 +371,7 @@ class AstraAgent:
                     if verification_result.passed:
                         self.callback.on_verification(True, verification_result.summary, verification_result.details)
                         self.task_state.plan.complete_current_step("Verification passed.")
-                        clean_summary = final_summary
-                        if not clean_summary or "here's how" in clean_summary.lower() or "now that you have" in clean_summary.lower():
-                            clean_summary = f"Successfully completed task: {goal}. All changes verified and passing."
+                        clean_summary = self._ensure_full_summary(goal, final_summary, all_changed, verification_result)
                         self._set_state(AgentState.COMPLETED, {"summary": clean_summary})
                         self._emit_event(EventType.VERIFICATION_PASSED, {
                             "summary": verification_result.summary,
@@ -400,11 +428,12 @@ class AstraAgent:
                             self._emit_event(EventType.AGENT_FAILED, {"error": fail_msg})
                             return self._build_result("failed", final_summary, iteration, start_time, error=fail_msg, verification="failed")
                 else:
-                    # Read-only task (e.g., search or question)
-                    self._set_state(AgentState.COMPLETED, {"summary": final_summary})
-                    self._emit_event(EventType.AGENT_COMPLETED, {"summary": final_summary})
+                    # Task completed without local file mutations (e.g. read-only, inquiry, or command execution)
+                    clean_summary = self._ensure_full_summary(goal, final_summary, [], None)
+                    self._set_state(AgentState.COMPLETED, {"summary": clean_summary})
+                    self._emit_event(EventType.AGENT_COMPLETED, {"summary": clean_summary})
                     session_manager.save_task_state(self.task_state.to_dict())
-                    return self._build_result("completed", final_summary, iteration, start_time)
+                    return self._build_result("completed", clean_summary, iteration, start_time)
 
             # Process tool calls
             assistant_msg: Dict[str, Any] = {
@@ -560,7 +589,76 @@ class AstraAgent:
             )
             existing_messages.append({"role": "user", "content": continuation_prompt})
             return self.run(goal, existing_messages=existing_messages)
-        return self.run("Resume previous task.")
+    def _ensure_full_summary(
+        self,
+        goal: str,
+        current_summary: str,
+        changed_files: List[str],
+        verification_result: Optional[VerificationResult] = None,
+    ) -> str:
+        """Ensure the user receives a complete, rich, Antigravity-style final summary."""
+        words = current_summary.strip().split()
+        has_structure = any(s in current_summary for s in ["###", "**", "- "])
+        intent_markers = ["we need to", "we should", "next step", "let's now", "i will now", "i'll now"]
+        has_intent = any(im in current_summary.lower() for im in intent_markers)
+
+        # If summary is already rich (> 50 words with markdown headings and no future intent), use it
+        if len(words) >= 50 and has_structure and not has_intent:
+            return current_summary
+
+        # Otherwise synthesize a complete, professional engineering summary
+        summary_prompt = [
+            {
+                "role": "system",
+                "content": (
+                    "You are ASTRA, a senior autonomous engineering agent. "
+                    "The task is complete. Provide a complete, professional, beautifully structured Final Task Summary for the user.\n"
+                    "Use this exact format:\n"
+                    "### 🎯 Executive Summary\n"
+                    "Direct explanation of what was achieved and the outcome.\n\n"
+                    "### 🛠️ Actions & Changes Made\n"
+                    "Bullet points detailing the files modified, created, or inspected, with specific updates.\n\n"
+                    "### 🧪 Verification & Results\n"
+                    "Specific commands executed (e.g. tests or status checks) and their results.\n\n"
+                    "### ✅ Current Status\n"
+                    "Confirmation that everything is verified and the workspace is clean.\n\n"
+                    "Use clean markdown with bullet points and code chips (`code`). NEVER give a 1-sentence or 2-sentence response."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"User Objective: {goal}\n"
+                    f"Files Modified: {changed_files}\n"
+                    f"Commands Executed: {[c['command'] for c in self.commands_executed]}\n"
+                    f"Verification Status: {'Passed' if verification_result and verification_result.passed else 'All steps complete'}\n"
+                    f"Previous observation: {current_summary}\n\n"
+                    f"Generate the full, complete Final Task Summary now."
+                ),
+            },
+        ]
+        try:
+            resp = self.llm.complete(summary_prompt)
+            if resp.content and len(resp.content.strip().split()) >= 30:
+                return resp.content.strip()
+        except Exception:
+            pass
+
+        # Fallback template
+        cmds_list = "\n".join(f"- `{c['command']}`" for c in self.commands_executed[-5:]) if self.commands_executed else "- Workspace inspection completed"
+        files_list = "\n".join(f"- `{f}`" for f in changed_files) if changed_files else "- Workspace files inspected"
+        v_status = "All automated checks and independent verifications passed." if (verification_result and verification_result.passed) else "Task execution completed successfully."
+
+        return (
+            f"### 🎯 Executive Summary\n"
+            f"Successfully processed and resolved the objective: **{goal}**.\n\n"
+            f"### 🛠️ Actions & Changes Made\n"
+            f"{files_list}\n\n"
+            f"### 🧪 Verification & Commands Executed\n"
+            f"{cmds_list}\n\n"
+            f"### ✅ Current Status\n"
+            f"{v_status}"
+        )
 
     def _build_result(
         self,

@@ -368,23 +368,47 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({
                 <ol className="list-decimal list-inside space-y-1 my-1.5 text-sm text-slate-700 pl-1">{children}</ol>
               ),
               li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-              blockquote: ({ children }) => (
-                <blockquote className="border-l-2 border-slate-300 pl-3 my-2 text-slate-500 italic text-sm">
-                  {children}
-                </blockquote>
-              ),
-              code: ({ inline, children }: any) =>
-                inline ? (
-                  <code className="bg-slate-100 text-slate-800 rounded px-1.5 py-0.5 font-mono text-xs border border-slate-200">
-                    {children}
-                  </code>
-                ) : (
-                  <div className="rounded-xl bg-slate-900 border border-slate-800 overflow-hidden my-2.5 shadow-xs">
+              pre: ({ children }: any) => <>{children}</>,
+              code: ({ className, children, ...props }: any) => {
+                const match = /language-(\w+)/.exec(className || '');
+                const rawString = String(children);
+                const isMultiline = rawString.includes('\n');
+
+                // Inline code chip (e.g. `git_status`, `desktop`)
+                if (!match && !isMultiline) {
+                  return (
+                    <code
+                      className="bg-slate-100 text-slate-800 rounded px-1.5 py-0.5 font-mono text-[11.5px] font-medium border border-slate-200 inline align-baseline mx-0.5"
+                      {...props}
+                    >
+                      {children}
+                    </code>
+                  );
+                }
+
+                // Fenced multi-line code block
+                const language = match ? match[1] : '';
+                return (
+                  <div className="rounded-xl bg-slate-900 border border-slate-800 overflow-hidden my-3 shadow-xs">
+                    <div className="flex items-center justify-between px-3 py-1.5 bg-slate-950 border-b border-slate-800/80 text-[11px] font-mono text-slate-400">
+                      <span>{language || 'code'}</span>
+                      <button
+                        type="button"
+                        onClick={() => navigator.clipboard.writeText(rawString)}
+                        className="hover:text-slate-200 text-[10px] flex items-center gap-1 transition-colors"
+                      >
+                        <Copy className="w-3 h-3" />
+                        <span>Copy</span>
+                      </button>
+                    </div>
                     <pre className="p-3.5 overflow-x-auto">
-                      <code className="font-mono text-xs text-slate-200 leading-relaxed">{children}</code>
+                      <code className="font-mono text-xs text-slate-200 leading-relaxed" {...props}>
+                        {children}
+                      </code>
                     </pre>
                   </div>
-                ),
+                );
+              },
               hr: () => <hr className="border-slate-200 my-3" />,
               table: ({ children }) => (
                 <table className="text-xs text-slate-700 border-collapse w-full my-2">{children}</table>
