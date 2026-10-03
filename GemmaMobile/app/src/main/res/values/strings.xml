@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Gemma Mobile</string>
+    <string name="accessibility_service_desc">Enables Gemma AI Assistant to automatically send WhatsApp messages without manual touch.</string>
+</resources>

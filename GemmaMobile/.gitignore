@@ -1,0 +1,23 @@
+# Android build artifacts
+*.class
+*.apk
+*.aab
+*.aar
+*.so
+build/
+.gradle/
+local.properties
+*.iml
+
+# Compiled class output dirs
+classes_out/
+extracted_content_text/
+extracted_jar/
+scratch_aar/
+
+# IDE
+.idea/
+*.DS_Store
+
+# Gradle wrapper jar (recommend checking this in, but exclude if preferred)
+# gradle/wrapper/gradle-wrapper.jar
