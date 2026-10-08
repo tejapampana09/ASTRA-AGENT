@@ -1266,149 +1266,40 @@ fun ChatScreen(
                             )
                             .padding(bottom = if (isImeVisible) 4.dp else 8.dp)
                     ) {
-                        // Attached Document / Image Preview (ChatGPT Floating Thumbnail Style)
-                        if (attachedDocument != null) {
-                            val doc = attachedDocument!!
-                            Row(
+                        // Document Quick Action Chips (when document is attached)
+                        if (attachedDocument != null && !attachedDocument!!.isImage) {
+                            androidx.compose.foundation.lazy.LazyRow(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                    .padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                if (doc.isImage && doc.previewBitmap != null) {
-                                    Box(
-                                        modifier = Modifier.size(58.dp)
-                                    ) {
-                                        androidx.compose.foundation.Image(
-                                            painter = androidx.compose.ui.graphics.painter.BitmapPainter(doc.previewBitmap!!.asImageBitmap()),
-                                            contentDescription = "Image preview",
-                                            modifier = Modifier
-                                                .size(54.dp)
-                                                .align(Alignment.BottomStart)
-                                                .clip(RoundedCornerShape(12.dp))
-                                                .background(Color(0xFF212121)),
-                                            contentScale = ContentScale.Crop
-                                        )
-                                        Surface(
-                                            shape = CircleShape,
-                                            color = Color(0xFF212121),
-                                            border = BorderStroke(1.dp, Color(0xFF383838)),
-                                            modifier = Modifier
-                                                .size(20.dp)
-                                                .align(Alignment.TopEnd)
-                                                .clickable { viewModel.clearAttachedDocument() }
-                                        ) {
-                                            Box(contentAlignment = Alignment.Center) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Close,
-                                                    contentDescription = "Remove image",
-                                                    tint = Color.White,
-                                                    modifier = Modifier.size(11.dp)
-                                                )
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    val isPdf = doc.fileName.endsWith(".pdf", ignoreCase = true)
+                                val docChips = listOf(
+                                    Pair("📑 Summarize document", "Summarize this document"),
+                                    Pair("📚 Extract all topics", "Extract all topics and sections"),
+                                    Pair("🎯 Key takeaways", "Key takeaways and findings"),
+                                    Pair("❓ Ask a question", "")
+                                )
+                                items(docChips) { (chipLabel, actionPrompt) ->
                                     Surface(
-                                        shape = RoundedCornerShape(16.dp),
-                                        color = Color(0xFF1C1C20),
-                                        border = BorderStroke(1.dp, Color(0xFF2C2C34))
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = Color(0xFF1E1E24),
+                                        border = BorderStroke(1.dp, Color(0xFF33333E)),
+                                        modifier = Modifier.clickable {
+                                            if (actionPrompt.isNotBlank()) {
+                                                viewModel.onInputTextChanged(actionPrompt)
+                                                viewModel.sendMessage()
+                                            } else {
+                                                keyboardController?.show()
+                                            }
+                                        }
                                     ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                        ) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(34.dp)
-                                                    .clip(RoundedCornerShape(8.dp))
-                                                    .background(if (isPdf) Color(0xFF381515) else Color(0xFF132824)),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                Icon(
-                                                    imageVector = if (isPdf) Icons.Default.PictureAsPdf else Icons.Default.Description,
-                                                    contentDescription = "File",
-                                                    tint = if (isPdf) Color(0xFFFF857D) else Color(0xFF66D9B8),
-                                                    modifier = Modifier.size(18.dp)
-                                                )
-                                            }
-                                            Column(modifier = Modifier.widthIn(max = 210.dp)) {
-                                                Text(
-                                                    text = doc.fileName,
-                                                    style = MaterialTheme.typography.labelMedium,
-                                                    fontWeight = FontWeight.SemiBold,
-                                                    color = Color.White,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                                val details = if (doc.pageCount > 1) {
-                                                    "${doc.pageCount} pages • ${doc.wordCount} words"
-                                                } else {
-                                                    "${doc.wordCount} words"
-                                                }
-                                                Text(
-                                                    text = details,
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = Color(0xFFAAAAAA),
-                                                    fontSize = 11.sp
-                                                )
-                                            }
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(24.dp)
-                                                    .clip(CircleShape)
-                                                    .background(Color(0xFF2A2A30))
-                                                    .clickable { viewModel.clearAttachedDocument() },
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Close,
-                                                    contentDescription = "Remove",
-                                                    tint = Color(0xFFCCCCCC),
-                                                    modifier = Modifier.size(14.dp)
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (!doc.isImage) {
-                                androidx.compose.foundation.lazy.LazyRow(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 4.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    val docChips = listOf(
-                                        Pair("📑 Summarize document", "Summarize this document"),
-                                        Pair("📚 Extract all topics", "Extract all topics and sections"),
-                                        Pair("🎯 Key takeaways", "Key takeaways and findings"),
-                                        Pair("❓ Ask a question", "")
-                                    )
-                                    items(docChips) { (chipLabel, actionPrompt) ->
-                                        Surface(
-                                            shape = RoundedCornerShape(12.dp),
-                                            color = Color(0xFF1E1E24),
-                                            border = BorderStroke(1.dp, Color(0xFF33333E)),
-                                            modifier = Modifier.clickable {
-                                                if (actionPrompt.isNotBlank()) {
-                                                    viewModel.onInputTextChanged(actionPrompt)
-                                                    viewModel.sendMessage()
-                                                } else {
-                                                    keyboardController?.show()
-                                                }
-                                            }
-                                        ) {
-                                            Text(
-                                                text = chipLabel,
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = Color(0xFFD6D6E0),
-                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
-                                            )
-                                        }
+                                        Text(
+                                            text = chipLabel,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = Color(0xFFD6D6E0),
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                                        )
                                     }
                                 }
                             }
@@ -1591,7 +1482,9 @@ fun ChatScreen(
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 showAttachmentMenu = !showAttachmentMenu
                             },
-                            hasAttachment = attachedDocument != null
+                            hasAttachment = attachedDocument != null,
+                            attachedDocument = attachedDocument,
+                            onRemoveAttachment = { viewModel.clearAttachedDocument() }
                         )
                     }
                 }
@@ -3603,34 +3496,15 @@ fun SearchImagesCarousel(
     onImageClick: (SearchImage) -> Unit
 ) {
     if (images.isEmpty()) return
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
+            .padding(vertical = 6.dp)
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(bottom = 6.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Default.Image,
-                contentDescription = null,
-                tint = Color(0xFF9E9EA4),
-                modifier = Modifier.size(13.dp)
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = "Images (${images.size})",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = Color(0xFF9E9EA4)
-            )
-        }
-
         LazyRow(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            contentPadding = PaddingValues(vertical = 2.dp)
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp)
         ) {
             items(images) { img ->
                 SearchImageThumbnail(
@@ -3660,13 +3534,14 @@ fun SearchImageThumbnail(
     }
 
     Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = Color(0xFF212124),
-        border = BorderStroke(0.8.dp, Color(0xFF323238)),
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFF1E1E22),
+        border = BorderStroke(1.dp, Color(0xFF2E2E34)),
+        shadowElevation = 3.dp,
         modifier = Modifier
-            .width(155.dp)
-            .height(105.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .width(230.dp)
+            .height(150.dp)
+            .clip(RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
@@ -3685,34 +3560,50 @@ fun SearchImageThumbnail(
                     CircularProgressIndicator(
                         color = Color(0xFF555558),
                         strokeWidth = 2.dp,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(22.dp)
                     )
                 }
             }
 
-            // Bottom gradient overlay with source domain
+            // Bottom gradient overlay with source domain & icon
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .background(
                         Brush.verticalGradient(
-                            listOf(Color.Transparent, Color(0xCC000000))
+                            listOf(
+                                Color.Transparent,
+                                Color(0x66000000),
+                                Color(0xEE000000)
+                            )
                         )
                     )
-                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
             ) {
                 val domain = remember(image.sourceDomain, image.sourceUrl) {
                     image.sourceDomain.ifBlank { extractDomain(image.sourceUrl) }
                 }
-                Text(
-                    text = domain.ifBlank { image.title },
-                    color = Color.White,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Language,
+                        contentDescription = null,
+                        tint = Color(0xFFBBBBBB),
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Text(
+                        text = domain.ifBlank { image.title },
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
     }
@@ -4107,7 +3998,9 @@ fun ChatInputBar(
     onVoiceInput: () -> Unit = {},
     onVoiceAssistant: () -> Unit = {},
     onAttach: () -> Unit = {},
-    hasAttachment: Boolean = false
+    hasAttachment: Boolean = false,
+    attachedDocument: ExtractedDocument? = null,
+    onRemoveAttachment: () -> Unit = {}
 ) {
     val focusManager = LocalFocusManager.current
     val isImeVisible = WindowInsets.isImeVisible
@@ -4121,11 +4014,13 @@ fun ChatInputBar(
         }
     }
 
-    // Dynamic Expansion: Expands instantly when keyboard opens, field is focused, or text is typed
-    val isExpanded = isImeVisible || isFocused || inputText.isNotEmpty()
-    val isMultiLine = remember(inputText) { inputText.contains('\n') || inputText.length > 45 }
+    // Dynamic Expansion: Expands instantly when keyboard opens, field is focused, text is typed, or attachment present
+    val isExpanded = isImeVisible || isFocused || inputText.isNotEmpty() || attachedDocument != null
+    val isMultiLine = remember(inputText, attachedDocument) {
+        inputText.contains('\n') || inputText.length > 45 || attachedDocument != null
+    }
 
-    // ChatGPT smooth morph: Circular pill (28.dp) when single-line, rounded card (20.dp) when multi-line
+    // ChatGPT smooth morph: Circular pill (28.dp) when single-line, rounded card (20.dp) when multi-line or attachment
     val cornerRadius by animateDpAsState(
         targetValue = if (isMultiLine) 20.dp else 28.dp,
         animationSpec = spring(
@@ -4177,12 +4072,102 @@ fun ChatInputBar(
                     )
                 )
         ) {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 6.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.Bottom
+                    .padding(horizontal = 6.dp, vertical = 6.dp)
             ) {
+                // Uploaded Image / Document Preview INSIDE Chatbox (ChatGPT style)
+                if (attachedDocument != null) {
+                    val doc = attachedDocument
+                    if (doc.isImage && doc.previewBitmap != null) {
+                        Box(
+                            modifier = Modifier
+                                .padding(start = 6.dp, top = 2.dp, bottom = 6.dp)
+                                .size(64.dp)
+                        ) {
+                            androidx.compose.foundation.Image(
+                                painter = androidx.compose.ui.graphics.painter.BitmapPainter(doc.previewBitmap.asImageBitmap()),
+                                contentDescription = "Attached image",
+                                modifier = Modifier
+                                    .size(60.dp)
+                                    .align(Alignment.BottomStart)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color(0xFF2A2A2A)),
+                                contentScale = ContentScale.Crop
+                            )
+                            Surface(
+                                shape = CircleShape,
+                                color = Color(0xDD000000),
+                                border = BorderStroke(1.dp, Color(0x44FFFFFF)),
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .align(Alignment.TopEnd)
+                                    .clip(CircleShape)
+                                    .clickable { onRemoveAttachment() }
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Remove attachment",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(11.dp)
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        val isPdf = doc.fileName.endsWith(".pdf", ignoreCase = true)
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = Color(0xFF2A2A30),
+                            border = BorderStroke(0.8.dp, Color(0xFF3A3A42)),
+                            modifier = Modifier.padding(start = 6.dp, top = 2.dp, bottom = 6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isPdf) Icons.Default.PictureAsPdf else Icons.Default.Description,
+                                    contentDescription = null,
+                                    tint = if (isPdf) Color(0xFFFF857D) else Color(0xFF66D9B8),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = doc.fileName,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Medium,
+                                    color = Color.White,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.widthIn(max = 180.dp)
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .size(18.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF383840))
+                                        .clickable { onRemoveAttachment() },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Remove",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(11.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Bottom
+                ) {
                 // 1. Left Plus (+) Action Button
                 ChatGptSurfaceButton(
                     onClick = onAttach,
@@ -4381,6 +4366,7 @@ fun ChatInputBar(
             }
         }
     }
+}
 }
 
 @Composable
