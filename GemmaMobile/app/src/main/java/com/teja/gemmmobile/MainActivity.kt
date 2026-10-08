@@ -12,7 +12,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import com.teja.gemmmobile.assistant.AssistantActivity
 import com.teja.gemmmobile.ui.ChatScreen
 import com.teja.gemmmobile.ui.ChatViewModel
 
@@ -56,10 +55,6 @@ class MainActivity : ComponentActivity() {
 
         handleIntent(intent)
 
-        if (com.teja.gemmmobile.assistant.GemmaWakeWordService.isEnabled(this)) {
-            com.teja.gemmmobile.assistant.GemmaWakeWordService.start(this)
-        }
-
         // Move task to back on back press so background response generation,
         // conversation state, and model engine are never aborted when closing the chat view
         onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
@@ -98,11 +93,6 @@ class MainActivity : ComponentActivity() {
         val targetSessionId = incomingIntent.getStringExtra(EXTRA_SESSION_ID)
         if (!targetSessionId.isNullOrBlank()) {
             chatViewModel.selectSession(targetSessionId)
-        } else if (incomingIntent.action == Intent.ACTION_ASSIST || incomingIntent.action == Intent.ACTION_VOICE_COMMAND) {
-            val assistIntent = Intent(this, AssistantActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            }
-            startActivity(assistIntent)
         }
     }
 }

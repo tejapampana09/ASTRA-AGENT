@@ -73,8 +73,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.teja.gemmmobile.ai.GemmaConfig
-import com.teja.gemmmobile.assistant.GemmaWakeWordService
-import com.teja.gemmmobile.assistant.WhatsAppActionHandler
+
 
 /**
  * Dedicated Full-Screen Settings & Parameters Configuration Page.
@@ -108,29 +107,7 @@ fun SettingsScreen(
     var thinkingBudget by remember(currentConfig) { mutableIntStateOf(currentConfig.thinkingBudget) }
     var systemPrompt by remember(currentConfig) { mutableStateOf(currentConfig.systemPrompt) }
 
-    // Wake-Word state
-    var wakeWordEnabled by remember { mutableStateOf(GemmaWakeWordService.isEnabled(context)) }
 
-    // WhatsApp Gateway state
-    var gatewayUrl by remember { mutableStateOf(WhatsAppActionHandler.getGatewayUrl(context)) }
-    var gatewayApiKey by remember { mutableStateOf(WhatsAppActionHandler.getGatewayApiKey(context)) }
-
-    val micPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            wakeWordEnabled = true
-            try {
-                GemmaWakeWordService.setEnabled(context, true)
-                Toast.makeText(context, "🎤 Wake-word listener activated", Toast.LENGTH_SHORT).show()
-            } catch (e: Exception) {
-                Toast.makeText(context, "Could not start: ${e.message}", Toast.LENGTH_SHORT).show()
-            }
-        } else {
-            wakeWordEnabled = false
-            Toast.makeText(context, "Microphone permission is required for Wake-Word", Toast.LENGTH_SHORT).show()
-        }
-    }
 
     // Intercept hardware/gesture back press to return smoothly to Chat
     BackHandler {
@@ -549,188 +526,7 @@ fun SettingsScreen(
                     }
                 }
 
-                // SECTION 5: Voice Assistant & Wake-Word
-                item {
-                    SettingsSectionHeader(
-                        icon = Icons.Default.Mic,
-                        title = "Voice & Hands-Free Assistant"
-                    )
-                }
 
-                item {
-                    SettingsCard {
-                        // Wake-word
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                                Text(
-                                    text = "Wake-Word (\"Hey Gemma\" / \"Hey Teja\")",
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 14.sp,
-                                    color = Color.White
-                                )
-                                Text(
-                                    text = "Listen in background and launch the assistant overlay completely hands-free.",
-                                    fontSize = 11.sp,
-                                    color = Color(0xFF8E8E93)
-                                )
-                            }
-                            Switch(
-                                checked = wakeWordEnabled,
-                                onCheckedChange = { checked ->
-                                    if (checked) {
-                                        val hasPermission = ContextCompat.checkSelfPermission(
-                                            context,
-                                            Manifest.permission.RECORD_AUDIO
-                                        ) == PackageManager.PERMISSION_GRANTED
-
-                                        if (hasPermission) {
-                                            wakeWordEnabled = true
-                                            try {
-                                                GemmaWakeWordService.setEnabled(context, true)
-                                                Toast.makeText(context, "🎤 Wake-word listener enabled", Toast.LENGTH_SHORT).show()
-                                            } catch (e: Exception) {
-                                                Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
-                                            }
-                                        } else {
-                                            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                        }
-                                    } else {
-                                        wakeWordEnabled = false
-                                        GemmaWakeWordService.setEnabled(context, false)
-                                        Toast.makeText(context, "Wake-word listener paused", Toast.LENGTH_SHORT).show()
-                                    }
-                                },
-                                colors = chatGptSwitchColors()
-                            )
-                        }
-
-                        SettingsDivider()
-
-                        // Default Phone Assistant
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f).padding(end = 6.dp)) {
-                                Text(
-                                    text = "Set as Default Phone Assistant",
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 14.sp,
-                                    color = Color.White
-                                )
-                                Text(
-                                    text = "Launch Gemma with power button long-press or corner swipe (Gemini style).",
-                                    fontSize = 11.sp,
-                                    color = Color(0xFF8E8E93)
-                                )
-                            }
-                            OutlinedButton(
-                                onClick = {
-                                    try {
-                                        val intent = Intent(Settings.ACTION_VOICE_INPUT_SETTINGS).apply {
-                                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                        }
-                                        context.startActivity(intent)
-                                    } catch (_: Exception) {
-                                        try {
-                                            val intent = Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS).apply {
-                                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                            }
-                                            context.startActivity(intent)
-                                        } catch (_: Exception) {}
-                                    }
-                                },
-                                shape = RoundedCornerShape(12.dp),
-                                border = BorderStroke(1.dp, Color(0xFF383838)),
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                            ) {
-                                Text("Configure", fontSize = 12.sp, color = Color(0xFF10A37F))
-                            }
-                        }
-                    }
-                }
-
-                // SECTION 6: WhatsApp Connected App Gateway
-                item {
-                    SettingsSectionHeader(
-                        icon = Icons.Default.Settings,
-                        title = "Connected App Integrations"
-                    )
-                }
-
-                item {
-                    SettingsCard {
-                        Text(
-                            text = "WhatsApp Connected App Gateway",
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 14.sp,
-                            color = Color.White
-                        )
-                        Text(
-                            text = "Connect external WhatsApp Webhook / Bridge (WAHA, Baileys, Evolution API) to send messages without opening the WhatsApp app.",
-                            fontSize = 11.sp,
-                            color = Color(0xFF8E8E93),
-                            modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
-                        )
-
-                        OutlinedTextField(
-                            value = gatewayUrl,
-                            onValueChange = {
-                                gatewayUrl = it
-                                WhatsAppActionHandler.setGatewayConfig(context, it, gatewayApiKey)
-                            },
-                            placeholder = { Text("https://your-gateway.com/send", fontSize = 12.sp, color = Color(0xFF6B6B70)) },
-                            label = { Text("Gateway Endpoint URL", fontSize = 11.sp, color = Color(0xFF8E8E93)) },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            shape = RoundedCornerShape(10.dp),
-                            textStyle = MaterialTheme.typography.bodySmall.copy(
-                                color = Color.White,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 12.sp
-                            ),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = Color(0xFF191919),
-                                unfocusedContainerColor = Color(0xFF191919),
-                                focusedBorderColor = Color(0xFF10A37F),
-                                unfocusedBorderColor = Color(0xFF2E2E2E),
-                                cursorColor = Color.White
-                            )
-                        )
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        OutlinedTextField(
-                            value = gatewayApiKey,
-                            onValueChange = {
-                                gatewayApiKey = it
-                                WhatsAppActionHandler.setGatewayConfig(context, gatewayUrl, it)
-                            },
-                            placeholder = { Text("Bearer / API Key (optional)", fontSize = 12.sp, color = Color(0xFF6B6B70)) },
-                            label = { Text("API Key", fontSize = 11.sp, color = Color(0xFF8E8E93)) },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            shape = RoundedCornerShape(10.dp),
-                            textStyle = MaterialTheme.typography.bodySmall.copy(
-                                color = Color.White,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 12.sp
-                            ),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = Color(0xFF191919),
-                                unfocusedContainerColor = Color(0xFF191919),
-                                focusedBorderColor = Color(0xFF10A37F),
-                                unfocusedBorderColor = Color(0xFF2E2E2E),
-                                cursorColor = Color.White
-                            )
-                        )
-                    }
-                }
 
                 // SECTION 7: Hardware & Engine Telemetry
                 item {

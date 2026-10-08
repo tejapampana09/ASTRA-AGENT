@@ -89,9 +89,6 @@ dependencies {
     // Google ML Kit Text Recognition (On-device OCR)
     implementation("com.google.mlkit:text-recognition:16.0.1")
 
-    // Vosk Offline On-Device Speech / Wake-Word Recognition (Zero cloud, continuous AudioRecord stream)
-    implementation("com.alphacephei:vosk-android:0.3.75")
-
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.1")

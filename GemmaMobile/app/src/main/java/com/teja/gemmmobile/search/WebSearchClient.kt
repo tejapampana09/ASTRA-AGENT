@@ -29,7 +29,7 @@ data class SearchResult(
  * Supports multi-query deep search (like ChatGPT) to fetch rich profiles, projects, and activities.
  * Requires 0 API keys and runs on background IO dispatcher.
  */
-class WebSearchClient {
+open class WebSearchClient {
 
     fun sanitizeQuery(raw: String): String {
         var query = raw.trim()
@@ -104,7 +104,7 @@ class WebSearchClient {
         return s
     }
 
-    suspend fun search(query: String, maxResults: Int = 10): List<SearchResult> = withContext(Dispatchers.IO) {
+    open suspend fun search(query: String, maxResults: Int = 10): List<SearchResult> = withContext(Dispatchers.IO) {
         val clean = sanitizeQuery(query)
         if (clean.isBlank()) return@withContext emptyList()
 

@@ -26,6 +26,7 @@ import kotlinx.coroutines.launch
 import com.teja.gemmmobile.memory.MemoryItem
 import com.teja.gemmmobile.memory.MemoryManager
 import com.teja.gemmmobile.search.SearchResult
+import com.teja.gemmmobile.search.SearchImage
 import com.teja.gemmmobile.search.WebSearchClient
 import com.teja.gemmmobile.audio.TtsManager
 import com.teja.gemmmobile.ocr.ExtractedDocument
@@ -48,14 +49,13 @@ data class ChatMessage(
     val text: String,
     val thoughtText: String = "",
     val searchResults: List<SearchResult> = emptyList(),
+    val searchImages: List<SearchImage> = emptyList(),
     val isStreaming: Boolean = false,
     val isThinking: Boolean = false,
     val isSearchingWeb: Boolean = false,
     val isImageAnalysis: Boolean = false,
     @Transient val imageBitmap: Bitmap? = null,
     val imagePath: String? = null,
-    val whatsAppAction: com.teja.gemmmobile.assistant.WhatsAppAction? = null,
-    val callAction: com.teja.gemmmobile.assistant.CallAction? = null,
     val isExecutingTool: Boolean = false,
     val toolExecutionStatus: String? = null
 )
@@ -64,13 +64,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     val modelManager = ModelManager(application.applicationContext)
     private val chatStorage = ChatStorage(application.applicationContext)
+    private val searchManager = com.teja.gemmmobile.search.SearchManager()
     private val webSearchClient = WebSearchClient()
     val memoryManager = MemoryManager(application.applicationContext)
     val toolRegistry = com.teja.gemmmobile.tools.ToolRegistry().apply {
-        register(com.teja.gemmmobile.tools.WebSearchTool(webSearchClient))
-        register(com.teja.gemmmobile.tools.ContactsTool(application.applicationContext))
-        register(com.teja.gemmmobile.tools.WhatsAppTool(application.applicationContext))
-        register(com.teja.gemmmobile.tools.CallTool(application.applicationContext))
+        register(com.teja.gemmmobile.tools.WebSearchTool(searchManager))
         register(com.teja.gemmmobile.tools.MemoryTool(memoryManager))
         register(com.teja.gemmmobile.tools.OcrTool(application.applicationContext))
     }
@@ -119,16 +117,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private var activeGenerationJob: Job? = null
     val activeGeneratingSessionId = MutableStateFlow<String?>(null)
 
-    private val _showAssistantOverlay = MutableStateFlow(false)
-    val showAssistantOverlay: StateFlow<Boolean> = _showAssistantOverlay.asStateFlow()
 
-    fun openAssistantOverlay() {
-        _showAssistantOverlay.value = true
-    }
-
-    fun closeAssistantOverlay() {
-        _showAssistantOverlay.value = false
-    }
 
     fun sendMessageWithText(text: String) {
         _inputText.value = text
@@ -408,16 +397,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         return realTimeKeywords.any { keyword -> p.contains(keyword) }
     }
 
-    private fun shouldIncludeTools(prompt: String): Boolean {
-        val p = prompt.lowercase().trim()
-        val toolKeywords = listOf(
-            "call ", "dial ", "call to", "whatsapp", "pampu", "send message", "send a message",
-            "search contacts", "contact number", "phone number", "remember that", "remember my", "remember:",
-            "extract text", "read document", "ocr"
-        )
-        return toolKeywords.any { p.contains(it) }
-    }
-
     fun onInputTextChanged(text: String) {
         _inputText.value = text
     }
@@ -455,44 +434,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _attachedDocument.value = null
 
         ttsManager.stop()
-
-        // Check for WhatsApp action intent (e.g. "send hi to Manoj in whatsapp")
-        val whatsAppParsed = if (doc == null) com.teja.gemmmobile.assistant.WhatsAppActionHandler.parseWhatsAppIntent(rawInput) else null
-        if (whatsAppParsed != null) {
-            handleWhatsAppIntent(rawInput, whatsAppParsed.first, whatsAppParsed.second)
-            return
-        }
-
-        // Check for phone call intent (e.g. "call manoj", "manoj ki call cheyi")
-        val callTarget = if (doc == null) com.teja.gemmmobile.assistant.CallActionHandler.parseCallIntent(rawInput) else null
-        if (callTarget != null) {
-            handleCallIntent(rawInput, callTarget)
-            return
-        }
-
-
-        // Check if there is a pending WhatsApp confirmation in the current chat
-        val lastMsg = _messages.value.lastOrNull()
-        if (lastMsg != null && lastMsg.whatsAppAction?.status == com.teja.gemmmobile.assistant.WhatsAppStatus.AWAITING_CONFIRMATION) {
-            val pendingAction = lastMsg.whatsAppAction
-            val cleanLower = rawInput.lowercase().trim('.', '!', '?', ' ')
-            val isConfirm = cleanLower in listOf(
-                "yes", "send", "pampu", "confirm", "send it", "avunu", "ha", "sure", "ok", "okay", "cheyi", "send cheyi", "proceed", "yes please", "do it", "y"
-            ) || cleanLower.startsWith("yes") || cleanLower.startsWith("send")
-            val isCancel = cleanLower in listOf(
-                "no", "cancel", "vaddu", "don't send", "dont send", "stop", "abort", "oddu", "n"
-            ) || cleanLower.startsWith("no") || cleanLower.startsWith("cancel")
-
-            if (isConfirm) {
-                _inputText.value = ""
-                confirmAndSendWhatsAppAction(pendingAction)
-                return
-            } else if (isCancel) {
-                _inputText.value = ""
-                cancelWhatsAppAction(pendingAction)
-                return
-            }
-        }
 
         val eng = engine
         if (eng == null || _engineState.value !is EngineState.Ready) {
@@ -600,224 +541,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    fun handleWhatsAppIntent(contactQuery: String, messageText: String) {
-        handleWhatsAppIntent("Send \"$messageText\" to $contactQuery on WhatsApp", contactQuery, messageText)
-    }
 
-    fun handleWhatsAppIntent(userPrompt: String, contactQuery: String, messageText: String) {
-        val currSessionId = _currentSessionId.value
-        _inputText.value = ""
-
-        val userMessage = ChatMessage(
-            id = UUID.randomUUID().toString(),
-            role = MessageRole.USER,
-            text = userPrompt
-        )
-
-        val context = getApplication<Application>()
-        val matches = com.teja.gemmmobile.assistant.ContactHelper.searchContact(context, contactQuery)
-
-        val assistantMessage: ChatMessage
-        if (matches.isNotEmpty()) {
-            val contact = matches.first()
-            val composedMsg = com.teja.gemmmobile.assistant.WhatsAppActionHandler.resolveMessageBody(contact.name, messageText)
-
-            val action = com.teja.gemmmobile.assistant.WhatsAppAction(
-                recipientName = contact.name,
-                messageText = composedMsg,
-                rawIntent = messageText,
-                matchedNumber = contact.phoneNumber,
-                candidateContacts = matches,
-                status = com.teja.gemmmobile.assistant.WhatsAppStatus.AWAITING_CONFIRMATION
-            )
-
-            val responseText = "I found **${contact.name}** (${contact.formattedNumber}). I've drafted this message:\n\n> *\"$composedMsg\"*\n\nWould you like me to send it on WhatsApp?"
-
-            assistantMessage = ChatMessage(
-                id = UUID.randomUUID().toString(),
-                role = MessageRole.ASSISTANT,
-                text = responseText,
-                whatsAppAction = action
-            )
-        } else {
-            val composedMsg = com.teja.gemmmobile.assistant.WhatsAppActionHandler.resolveMessageBody(contactQuery, messageText)
-            val responseText = "I couldn't find \"$contactQuery\" in your contacts. Please ensure Contacts permission is granted or check the saved contact name."
-            assistantMessage = ChatMessage(
-                id = UUID.randomUUID().toString(),
-                role = MessageRole.ASSISTANT,
-                text = responseText,
-                whatsAppAction = com.teja.gemmmobile.assistant.WhatsAppAction(
-                    recipientName = contactQuery,
-                    messageText = composedMsg,
-                    rawIntent = messageText,
-                    matchedNumber = null,
-                    candidateContacts = emptyList(),
-                    status = com.teja.gemmmobile.assistant.WhatsAppStatus.NO_CONTACT_FOUND
-                )
-            )
-        }
-
-        updateSessionMessages(currSessionId) { msgs ->
-            msgs + userMessage + assistantMessage
-        }
-        val updatedSession = _sessions.value.find { it.id == currSessionId }
-        if (updatedSession != null) {
-            applicationScope.launch { chatStorage.saveSession(updatedSession) }
-        }
-    }
-
-    fun confirmAndSendWhatsAppAction(action: com.teja.gemmmobile.assistant.WhatsAppAction?) {
-        if (action == null) return
-        val number = action.matchedNumber ?: return
-        val context = getApplication<Application>()
-
-        // 1. Permanently remember this contact so subsequent lookups are instant
-        com.teja.gemmmobile.assistant.ContactMemoryManager.rememberContact(
-            context = context,
-            queryKey = action.recipientName,
-            fullName = action.recipientName,
-            phoneNumber = number,
-            formattedNumber = number
-        )
-
-        // 2. Send via WhatsApp & Accessibility Service
-        val a11yEnabled = com.teja.gemmmobile.assistant.GemmaAccessibilityService.isAccessibilityEnabled(context)
-        com.teja.gemmmobile.assistant.WhatsAppActionHandler.sendWhatsAppDirect(
-            context = context,
-            phoneNumber = number,
-            message = action.messageText,
-            autoSend = true
-        )
-
-        // 3. Update chat session UI
-        val currSessionId = _currentSessionId.value
-        val newStatus = if (a11yEnabled) com.teja.gemmmobile.assistant.WhatsAppStatus.SENT_DIRECTLY else com.teja.gemmmobile.assistant.WhatsAppStatus.READY_TO_SEND
-        val confirmationText = if (a11yEnabled) {
-            "✓ Sent \"${action.messageText}\" to **${action.recipientName}** ($number) on WhatsApp."
-        } else {
-            "✓ Prepared message for **${action.recipientName}** ($number) in WhatsApp."
-        }
-
-        updateSessionMessages(currSessionId) { msgs ->
-            msgs.map { msg ->
-                if (msg.whatsAppAction != null && msg.whatsAppAction.status == com.teja.gemmmobile.assistant.WhatsAppStatus.AWAITING_CONFIRMATION) {
-                    msg.copy(
-                        text = confirmationText,
-                        whatsAppAction = msg.whatsAppAction.copy(status = newStatus)
-                    )
-                } else msg
-            }
-        }
-        persistChat()
-    }
-
-    fun cancelWhatsAppAction(action: com.teja.gemmmobile.assistant.WhatsAppAction?) {
-        val currSessionId = _currentSessionId.value
-        updateSessionMessages(currSessionId) { msgs ->
-            msgs.map { msg ->
-                if (msg.whatsAppAction != null && msg.whatsAppAction.status == com.teja.gemmmobile.assistant.WhatsAppStatus.AWAITING_CONFIRMATION) {
-                    msg.copy(
-                        text = "Cancelled sending message to **${action?.recipientName ?: "contact"}**.",
-                        whatsAppAction = msg.whatsAppAction.copy(status = com.teja.gemmmobile.assistant.WhatsAppStatus.CANCELLED)
-                    )
-                } else msg
-            }
-        }
-        persistChat()
-    }
-
-    fun selectWhatsAppCandidate(candidate: com.teja.gemmmobile.assistant.ContactMatch, action: com.teja.gemmmobile.assistant.WhatsAppAction) {
-        val currSessionId = _currentSessionId.value
-        val raw = if (action.rawIntent.isNotBlank()) action.rawIntent else action.messageText
-        val reComposed = com.teja.gemmmobile.assistant.WhatsAppActionHandler.resolveMessageBody(candidate.name, raw)
-
-        updateSessionMessages(currSessionId) { msgs ->
-            msgs.map { msg ->
-                if (msg.whatsAppAction != null && msg.whatsAppAction.status == com.teja.gemmmobile.assistant.WhatsAppStatus.AWAITING_CONFIRMATION) {
-                    msg.copy(
-                        text = "Selected **${candidate.name}** (${candidate.formattedNumber}). I've drafted this message:\n\n> *\"$reComposed\"*\n\nWould you like me to send it on WhatsApp?",
-                        whatsAppAction = msg.whatsAppAction.copy(
-                            recipientName = candidate.name,
-                            matchedNumber = candidate.phoneNumber,
-                            messageText = reComposed
-                        )
-                    )
-                } else msg
-            }
-        }
-    }
-
-    fun executeWhatsAppAction(action: com.teja.gemmmobile.assistant.WhatsAppAction) {
-        confirmAndSendWhatsAppAction(action)
-    }
-
-    // ─── Phone Call handling ───────────────────────────────────────────────────
-
-    fun handleCallIntent(userPrompt: String, contactQuery: String) {
-        val currSessionId = _currentSessionId.value
-        _inputText.value = ""
-
-        val userMessage = ChatMessage(
-            id = UUID.randomUUID().toString(),
-            role = MessageRole.USER,
-            text = userPrompt
-        )
-
-        val context = getApplication<Application>()
-        val matches = com.teja.gemmmobile.assistant.ContactHelper.searchContact(context, contactQuery)
-
-        val assistantMessage: ChatMessage
-        if (matches.isNotEmpty()) {
-            val contact = matches.first()
-            val action = com.teja.gemmmobile.assistant.CallAction(
-                recipientName = contact.name,
-                matchedNumber = contact.phoneNumber,
-                candidateContacts = matches,
-                status = com.teja.gemmmobile.assistant.CallStatus.CALLING
-            )
-            val responseText = "Calling **${contact.name}** (${contact.formattedNumber})…"
-            // Place the call immediately — no confirmation needed for calls
-            com.teja.gemmmobile.assistant.CallActionHandler.makeCall(context, contact.phoneNumber)
-            com.teja.gemmmobile.assistant.ContactMemoryManager.rememberContact(
-                context = context,
-                queryKey = contactQuery,
-                fullName = contact.name,
-                phoneNumber = contact.phoneNumber,
-                formattedNumber = contact.formattedNumber
-            )
-            assistantMessage = ChatMessage(
-                id = UUID.randomUUID().toString(),
-                role = MessageRole.ASSISTANT,
-                text = responseText,
-                callAction = action.copy(status = com.teja.gemmmobile.assistant.CallStatus.DIALED)
-            )
-        } else {
-            val action = com.teja.gemmmobile.assistant.CallAction(
-                recipientName = contactQuery,
-                matchedNumber = null,
-                candidateContacts = emptyList(),
-                status = com.teja.gemmmobile.assistant.CallStatus.NO_CONTACT_FOUND
-            )
-            val responseText = "I couldn't find \"$contactQuery\" in your contacts."
-            assistantMessage = ChatMessage(
-                id = UUID.randomUUID().toString(),
-                role = MessageRole.ASSISTANT,
-                text = responseText,
-                callAction = action
-            )
-        }
-
-        updateSessionMessages(currSessionId) { msgs -> msgs + userMessage + assistantMessage }
-        persistChat()
-    }
-
-
-    fun openAccessibilitySettings() {
-        try {
-            val intent = com.teja.gemmmobile.assistant.GemmaAccessibilityService.getAccessibilitySettingsIntent()
-            getApplication<Application>().startActivity(intent)
-        } catch (_: Exception) {}
-    }
 
     private fun startGeneration(
         targetSessionId: String,
@@ -843,6 +567,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             try {
                 var searchResults: List<SearchResult> = emptyList()
+                var searchImages: List<SearchImage> = emptyList()
                 var searchContext = ""
 
                 if (useWebSearch) {
@@ -855,24 +580,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                     try {
                         val cleanQuery = extractSearchQuery(prompt)
-                        val fetchedResults = kotlinx.coroutines.withTimeoutOrNull(9000L) {
-                            webSearchClient.search(cleanQuery, maxResults = 12)
+                        val enrichedResults = kotlinx.coroutines.withTimeoutOrNull(10000L) {
+                            searchManager.searchAndRead(cleanQuery, maxResults = 5)
                         }
-                        if (fetchedResults != null && fetchedResults.isNotEmpty()) {
-                            searchResults = fetchedResults
-                            // Use top 3 highest-signal snippets for the LLM prompt to keep prompt prefill fast and snappy
-                            val contextSnippets = searchResults.take(3).mapIndexed { idx, res ->
-                                "[${idx + 1}] Source: ${res.title}\nURL: ${res.url}\nInfo: ${res.snippet.take(180)}"
-                            }.joinToString("\n\n")
-
-                            searchContext = "Real-Time Internet Search Results:\n$contextSnippets"
+                        if (!enrichedResults.isNullOrEmpty()) {
+                            searchResults = enrichedResults.map { it.toSearchResult() }
+                            searchContext = searchManager.formatGemmaWebContext(enrichedResults)
+                            try {
+                                searchImages = kotlinx.coroutines.withTimeoutOrNull(5000L) {
+                                    searchManager.searchImages(cleanQuery, enrichedResults)
+                                } ?: emptyList()
+                            } catch (e: Exception) {
+                                Log.w(TAG, "[$TAG] Image search failed", e)
+                            }
                         }
                     } catch (t: Throwable) {
                         Log.w(TAG, "[$TAG] Web search failed", t)
                     } finally {
                         updateSessionMessages(targetSessionId) { msgs ->
                             msgs.map { msg ->
-                                if (msg.id == assistantMessageId) msg.copy(searchResults = searchResults, isSearchingWeb = false) else msg
+                                if (msg.id == assistantMessageId) msg.copy(
+                                    searchResults = searchResults,
+                                    searchImages = searchImages,
+                                    isSearchingWeb = false
+                                ) else msg
                             }
                         }
                     }
@@ -889,15 +620,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 $baseSystemPrompt
 
 ## WEB SEARCH MODE
-You have been given real-time web search results. Use them as your primary source of truth.
+You are provided with real-time web search results and extracted webpage content. Use them as your primary source of truth.
 
-### HOW TO ANSWER:
+### RULES & GROUNDING:
 1. **Lead with the direct answer** — give the most important fact or answer in the first 1-2 sentences.
-2. **Expand with context** — use the search results to add supporting details, explanations, or recent updates.
-3. **Structure clearly** — use ## headings, bullet points, bold text, and tables where useful.
-4. **Be specific and factual** — include relevant numbers, dates, names, and statistics from the results.
-5. **Do NOT hallucinate** — only use information from the provided search results. Do not invent URLs, links, or facts not present in the results.
-6. **Language** — reply in the SAME language as the user's question.
+2. **Ground strictly on evidence** — prefer facts supported by the extracted webpage content. If sources disagree, explicitly state the disagreement.
+3. **Cite source URLs** — mention the source names and reference URLs provided in the results. Do NOT invent URLs or links not present in the sources.
+4. **Dates and Recency** — for "latest/current/today" queries, prioritize recent updates found in the sources. If the fetched content is insufficient, say so instead of hallucinating.
+5. **Structure clearly** — use ## headings, bullet points, bold text, and tables where useful.
+6. **Language** — reply in the SAME language as the user's question (e.g. English, Telugu).
 
 ### FORMATTING BY QUERY TYPE:
 - **News / Events**: Headline summary → Key details (who, what, when, where) → Impact/context
@@ -917,7 +648,7 @@ You have been given real-time web search results. Use them as your primary sourc
                     val historyTurns = targetMsgs.filter { it.id != assistantMessageId }.dropLast(1)
                     contextManager.buildPrompt(
                         systemPrompt = "", // Handled natively in ConversationConfig
-                        toolsDocumentation = if (useWebSearch || !shouldIncludeTools(prompt)) "" else toolRegistry.getToolsDocumentation(),
+                        toolsDocumentation = if (useWebSearch) "" else toolRegistry.getToolsDocumentation(),
                         memoryContext = memoryContext,
                         conversationHistory = historyTurns,
                         currentPrompt = prompt,
@@ -993,16 +724,23 @@ You have been given real-time web search results. Use them as your primary sourc
                 val rawFinalText = responseBuilder.toString()
                 val finalThought = thoughtBuilder.toString()
 
-                // Autonomous on-device tool calling loop
-                val detectedToolCall = if (imageBytes == null && !useWebSearch) toolRegistry.parseToolCall(rawFinalText) else null
-                if (detectedToolCall != null) {
-                    Log.d(TAG, "[$TAG] Autonomous tool call detected: ${detectedToolCall.name} with ${detectedToolCall.arguments}")
+                // Bounded autonomous on-device tool calling loop (up to MAX_TOOL_STEPS)
+                val MAX_TOOL_STEPS = 3
+                var currentToolStep = 0
+                var currentGenerationText = responseBuilder.toString()
+                val accumulatedToolResults = StringBuilder()
+
+                while (imageBytes == null && !useWebSearch && currentToolStep < MAX_TOOL_STEPS) {
+                    val detectedToolCall = toolRegistry.parseToolCall(currentGenerationText) ?: break
+                    currentToolStep++
+                    Log.d(TAG, "[$TAG] Step $currentToolStep: Tool call detected: ${detectedToolCall.name} with ${detectedToolCall.arguments}")
+
                     updateSessionMessages(targetSessionId) { msgs ->
                         msgs.map { msg ->
                             if (msg.id == assistantMessageId) {
                                 msg.copy(
                                     isExecutingTool = true,
-                                    toolExecutionStatus = "Running ${detectedToolCall.name}...",
+                                    toolExecutionStatus = "Using ${detectedToolCall.name}...",
                                     isStreaming = false
                                 )
                             } else msg
@@ -1010,52 +748,8 @@ You have been given real-time web search results. Use them as your primary sourc
                     }
 
                     val toolResult = toolRegistry.execute(detectedToolCall.name, detectedToolCall.arguments)
+                    accumulatedToolResults.appendLine("[Tool: ${detectedToolCall.name}]\n${toolResult.content}\n")
 
-                    // 1. WhatsApp Action (Strictly Awaiting User Confirmation)
-                    if (toolResult.data is com.teja.gemmmobile.assistant.WhatsAppAction) {
-                        val action = toolResult.data
-                        updateSessionMessages(targetSessionId) { msgs ->
-                            msgs.map { msg ->
-                                if (msg.id == assistantMessageId) {
-                                    msg.copy(
-                                        text = toolResult.content,
-                                        whatsAppAction = action,
-                                        isStreaming = false,
-                                        isThinking = false,
-                                        isExecutingTool = false,
-                                        toolExecutionStatus = null
-                                    )
-                                } else msg
-                            }
-                        }
-                        val completedSession = _sessions.value.find { it.id == targetSessionId }
-                        if (completedSession != null) chatStorage.saveSession(completedSession)
-                        return@launch
-                    }
-
-                    // 2. Phone Call Action (Strictly Awaiting User Confirmation)
-                    if (toolResult.data is com.teja.gemmmobile.assistant.CallAction) {
-                        val action = toolResult.data
-                        updateSessionMessages(targetSessionId) { msgs ->
-                            msgs.map { msg ->
-                                if (msg.id == assistantMessageId) {
-                                    msg.copy(
-                                        text = toolResult.content,
-                                        callAction = action,
-                                        isStreaming = false,
-                                        isThinking = false,
-                                        isExecutingTool = false,
-                                        toolExecutionStatus = null
-                                    )
-                                } else msg
-                            }
-                        }
-                        val completedSession = _sessions.value.find { it.id == targetSessionId }
-                        if (completedSession != null) chatStorage.saveSession(completedSession)
-                        return@launch
-                    }
-
-                    // 3. Informational Tools (web_search, search_contacts, manage_memory, ocr_document)
                     if (detectedToolCall.name == "web_search" && toolResult.data is List<*>) {
                         val newSearchResults = toolResult.data.filterIsInstance<SearchResult>()
                         if (newSearchResults.isNotEmpty()) {
@@ -1063,16 +757,17 @@ You have been given real-time web search results. Use them as your primary sourc
                         }
                     }
 
-                    val secondTurnPrompt = contextManager.buildPrompt(
-                        systemPrompt = "You are a helpful, accurate AI assistant. Answer the user's request using this verified tool result:\n\n${toolResult.content}",
-                        toolsDocumentation = "",
+                    // Feed tool result back to the model for next turn/synthesis
+                    val nextTurnPrompt = contextManager.buildPrompt(
+                        systemPrompt = "You are a helpful, accurate AI assistant. Use the tool results below to answer the user's request. If more information is needed, call another tool; otherwise provide a final, comprehensive conversational answer.\n\n$accumulatedToolResults",
+                        toolsDocumentation = if (currentToolStep < MAX_TOOL_STEPS) toolRegistry.getToolsDocumentation() else "",
                         memoryContext = memoryContext,
                         conversationHistory = targetMsgs.filter { it.id != assistantMessageId },
                         currentPrompt = prompt,
-                        toolResultsContext = toolResult.content
+                        toolResultsContext = accumulatedToolResults.toString()
                     )
 
-                    val secondTurnResponseBuilder = StringBuilder()
+                    val nextTurnBuilder = StringBuilder()
                     updateSessionMessages(targetSessionId) { msgs ->
                         msgs.map { msg ->
                             if (msg.id == assistantMessageId) {
@@ -1087,35 +782,30 @@ You have been given real-time web search results. Use them as your primary sourc
                     }
 
                     try {
-                        eng.sendMessage(prompt = secondTurnPrompt).collect { chunk ->
+                        eng.sendMessage(prompt = nextTurnPrompt).collect { chunk ->
                             if (chunk.thought.isNotEmpty()) thoughtBuilder.append(chunk.thought)
                             val clean = chunk.text.replace("<thought>", "").replace("</thought>", "")
                             if (clean.isNotEmpty()) {
-                                secondTurnResponseBuilder.append(clean)
+                                nextTurnBuilder.append(clean)
                                 if (_currentSessionId.value == targetSessionId) {
                                     _messages.value = _messages.value.map { msg ->
                                         if (msg.id == assistantMessageId) {
-                                            msg.copy(text = secondTurnResponseBuilder.toString(), isStreaming = true)
+                                            msg.copy(text = nextTurnBuilder.toString(), isStreaming = true)
                                         } else msg
                                     }
                                 }
                             }
                         }
                     } catch (t: Throwable) {
-                        Log.w(TAG, "[$TAG] Follow-up tool synthesis error", t)
+                        Log.w(TAG, "[$TAG] Follow-up tool synthesis error at step $currentToolStep", t)
                     }
 
-                    if (secondTurnResponseBuilder.isNotBlank() && secondTurnResponseBuilder.length >= rawFinalText.length) {
+                    currentGenerationText = nextTurnBuilder.toString()
+                    if (currentGenerationText.isNotBlank()) {
                         responseBuilder.clear()
-                        responseBuilder.append(secondTurnResponseBuilder.toString())
+                        responseBuilder.append(currentGenerationText)
                     } else if (responseBuilder.isEmpty() && toolResult.content.isNotBlank()) {
                         responseBuilder.append(toolResult.content)
-                    } else if (rawFinalText.isNotBlank()) {
-                        if (_currentSessionId.value == targetSessionId) {
-                            _messages.value = _messages.value.map { msg ->
-                                if (msg.id == assistantMessageId) msg.copy(text = rawFinalText, isStreaming = false) else msg
-                            }
-                        }
                     }
                 }
 

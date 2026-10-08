@@ -144,7 +144,21 @@ object ProfileAvatarLoader {
         return null
     }
 
-    private fun downloadBitmap(imgUrl: String): Bitmap? {
+    private val imageCache = LruCache<String, Bitmap>(60)
+
+    fun getCachedImage(url: String): Bitmap? = imageCache.get(url)
+
+    suspend fun loadImage(imgUrl: String): Bitmap? = withContext(Dispatchers.IO) {
+        if (imgUrl.isBlank()) return@withContext null
+        imageCache.get(imgUrl)?.let { return@withContext it }
+        val bmp = downloadBitmap(imgUrl, maxDimension = 960)
+        if (bmp != null) {
+            imageCache.put(imgUrl, bmp)
+        }
+        bmp
+    }
+
+    fun downloadBitmap(imgUrl: String, maxDimension: Int = 480): Bitmap? {
         var conn: HttpURLConnection? = null
         try {
             conn = URL(imgUrl).openConnection() as HttpURLConnection
@@ -162,9 +176,7 @@ object ProfileAvatarLoader {
                     }
                     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
 
-                    // Downsample if image is huge (e.g. > 300px) to save RAM
                     var sampleSize = 1
-                    val maxDimension = 240
                     while (opts.outWidth / sampleSize > maxDimension || opts.outHeight / sampleSize > maxDimension) {
                         sampleSize *= 2
                     }

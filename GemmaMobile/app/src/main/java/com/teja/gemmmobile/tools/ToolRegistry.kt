@@ -29,19 +29,26 @@ class ToolRegistry {
     fun getAll(): List<GemmaTool> = tools.values.toList()
 
     /**
-     * Generates standard system prompt documentation for all registered tools
-     * instructing the model on available functions and expected calling format.
+     * Generates comprehensive system prompt documentation for all registered tools
+     * including parameter JSON schemas and exact calling instructions.
      */
     fun getToolsDocumentation(): String {
         if (tools.isEmpty()) return ""
 
         val sb = StringBuilder()
-        sb.appendLine("## Available Tools")
-        sb.appendLine("Call a tool ONLY if needed by outputting single JSON: {\"name\": \"tool_name\", \"arguments\": {\"arg\": \"val\"}}")
+        sb.appendLine("## Available Tools & Functions")
+        sb.appendLine("You have access to the following tools. When you need to take an action, search the web, read a document, or access memory, output ONLY a JSON object:")
+        sb.appendLine("```json")
+        sb.appendLine("{\"name\": \"<tool_name>\", \"arguments\": {<parameters>}}")
+        sb.appendLine("```")
+        sb.appendLine()
+        sb.appendLine("### Registered Tool Schemas:")
         tools.values.forEach { tool ->
-            sb.appendLine("- `${tool.name}`: ${tool.description}")
+            sb.appendLine("- **`${tool.name}`**: ${tool.description}")
+            sb.appendLine("  Schema: `${tool.parametersJsonSchema}`")
         }
-        sb.appendLine("Otherwise, answer directly.")
+        sb.appendLine()
+        sb.appendLine("If no tool is needed, answer the user directly and conversationally.")
         return sb.toString().trim()
     }
 

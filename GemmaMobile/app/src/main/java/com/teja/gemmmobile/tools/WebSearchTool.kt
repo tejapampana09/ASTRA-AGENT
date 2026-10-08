@@ -1,20 +1,21 @@
 package com.teja.gemmmobile.tools
 
+import com.teja.gemmmobile.search.SearchManager
 import com.teja.gemmmobile.search.SearchResult
-import com.teja.gemmmobile.search.WebSearchClient
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * On-device live web search tool using WebSearchClient.
+ * On-device live web search tool using SearchManager.
+ * Enriches search results with verified readable content from top public webpages.
  */
 class WebSearchTool(
-    private val client: WebSearchClient = WebSearchClient()
+    private val searchManager: SearchManager = SearchManager()
 ) : GemmaTool {
 
     override val name: String = "web_search"
 
     override val description: String =
-        "Search the live internet for recent events, facts, news, people, websites, URLs, and real-time information."
+        "Search the live internet for recent events, facts, news, people, websites, URLs, and real-time information, extracting readable webpage content."
 
     override val parametersJsonSchema: String = """
     {
@@ -31,11 +32,11 @@ class WebSearchTool(
 
     override suspend fun execute(arguments: Map<String, Any?>): ToolResult {
         val query = arguments["query"] as? String ?: return ToolResult.failure("Missing required 'query' parameter")
-        val cleanQuery = client.sanitizeQuery(query)
+        val cleanQuery = query.trim()
         if (cleanQuery.isBlank()) return ToolResult.failure("Search query cannot be empty")
 
-        val results = withTimeoutOrNull(9000L) {
-            client.search(cleanQuery, maxResults = 8)
+        val results = withTimeoutOrNull(10000L) {
+            searchManager.searchAndRead(cleanQuery, maxResults = 5)
         } ?: emptyList()
 
         if (results.isEmpty()) {
@@ -43,16 +44,24 @@ class WebSearchTool(
         }
 
         val formatted = buildString {
-            appendLine("Web Search Results for \"$cleanQuery\":")
+            appendLine("WEB SEARCH RESULTS")
+            appendLine()
             results.forEachIndexed { index, res ->
                 val cleanTitle = res.title.substringBefore("-").substringBefore("|").trim()
-                appendLine("[${index + 1}] Title: $cleanTitle")
-                appendLine("    URL: ${res.url}")
-                appendLine("    Snippet: ${res.snippet.trim()}")
+                appendLine("[${index + 1}]")
+                appendLine("Title: $cleanTitle")
+                appendLine("URL: ${res.url}")
+                appendLine("Search snippet: ${res.snippet.trim()}")
+                if (res.fetchSucceeded && res.pageContent.isNotBlank()) {
+                    appendLine("Page content:")
+                    appendLine(res.pageContent.take(1500).trim())
+                } else {
+                    appendLine("Page content: Unavailable (rely on search snippet above)")
+                }
                 appendLine()
             }
         }.trim()
 
-        return ToolResult.success(formatted, data = results)
+        return ToolResult.success(formatted, data = results.map { it.toSearchResult() })
     }
 }

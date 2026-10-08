@@ -32,14 +32,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.RepeatMode
-import com.teja.gemmmobile.assistant.AssistantActivity
-import com.teja.gemmmobile.assistant.GeminiBlue
-import com.teja.gemmmobile.assistant.WhatsAppAction
-import com.teja.gemmmobile.assistant.WhatsAppStatus
-import com.teja.gemmmobile.assistant.WhatsAppActionCard
-import com.teja.gemmmobile.assistant.ContactMatch
-import com.teja.gemmmobile.assistant.CallAction
-import com.teja.gemmmobile.assistant.CallActionCard
+
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.togetherWith
@@ -158,6 +151,12 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.BottomSheetDefaults
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.teja.gemmmobile.search.SearchImage
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
@@ -630,7 +629,11 @@ fun ChatScreen(
                     },
                     onLaunchVoice = {
                         scope.launch { drawerState.close() }
-                        context.startActivity(Intent(context, AssistantActivity::class.java))
+                        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                            putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to Gemma…")
+                        }
+                        voiceLauncher.launch(intent)
                     },
                     onCloseDrawer = {
                         scope.launch { drawerState.close() }
@@ -951,12 +954,7 @@ fun ChatScreen(
                                         onSpeak = { viewModel.toggleSpeak(message.id, if (message.text.isNotBlank()) message.text else message.thoughtText) },
                                         onShare = { ExportHelper.shareMessage(context, if (message.text.isNotBlank()) message.text else message.thoughtText) },
                                         onRegenerate = { viewModel.regenerateLastResponse() },
-                                        onLongPressUserMessage = { activeUserMenuMessage = it },
-                                        onConfirmWhatsApp = { action -> viewModel.confirmAndSendWhatsAppAction(action) },
-                                        onCancelWhatsApp = { action -> viewModel.cancelWhatsAppAction(action) },
-                                        onSelectWhatsAppCandidate = { candidate, action -> viewModel.selectWhatsAppCandidate(candidate, action) },
-                                        onWhatsAppSendAgain = { action -> viewModel.executeWhatsAppAction(action) },
-                                        onOpenA11ySettings = { viewModel.openAccessibilitySettings() }
+                                        onLongPressUserMessage = { activeUserMenuMessage = it }
                                     )
                                 }
 
@@ -1254,7 +1252,11 @@ fun ChatScreen(
                         },
                         onVoiceAssistant = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            context.startActivity(Intent(context, AssistantActivity::class.java))
+                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to Gemma…")
+                            }
+                            voiceLauncher.launch(intent)
                         },
                         onAttach = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -1947,12 +1949,7 @@ fun MessageBubble(
     onSpeak: () -> Unit = {},
     onShare: () -> Unit = {},
     onRegenerate: () -> Unit = {},
-    onLongPressUserMessage: (ChatMessage) -> Unit = {},
-    onConfirmWhatsApp: (WhatsAppAction) -> Unit = {},
-    onCancelWhatsApp: (WhatsAppAction) -> Unit = {},
-    onSelectWhatsAppCandidate: (ContactMatch, WhatsAppAction) -> Unit = { _, _ -> },
-    onWhatsAppSendAgain: (WhatsAppAction) -> Unit = {},
-    onOpenA11ySettings: () -> Unit = {}
+    onLongPressUserMessage: (ChatMessage) -> Unit = {}
 ) {
     val isUser = message.role == MessageRole.USER
     val context = LocalContext.current
@@ -2047,26 +2044,6 @@ fun MessageBubble(
                 .padding(vertical = 4.dp),
             horizontalAlignment = Alignment.Start
         ) {
-            // WhatsApp Direct Action Card
-            if (message.whatsAppAction != null) {
-                WhatsAppActionCard(
-                    action = message.whatsAppAction,
-                    onConfirmSend = onConfirmWhatsApp,
-                    onCancel = onCancelWhatsApp,
-                    onSelectCandidate = onSelectWhatsAppCandidate,
-                    onSendAgain = onWhatsAppSendAgain,
-                    onOpenA11ySettings = onOpenA11ySettings
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-
-            // Phone Call Action Card
-            if (message.callAction != null) {
-                CallActionCard(
-                    action = message.callAction
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-            }
 
             val effectiveText = when {
                 message.text.isNotEmpty() -> message.text
@@ -2158,6 +2135,24 @@ fun MessageBubble(
                     MarkdownText(text = effectiveText, isUser = false, searchResults = message.searchResults)
                 }
             }
+
+                // Search Images Carousel & In-App Preview (ChatGPT style)
+                var previewImage by remember { mutableStateOf<SearchImage?>(null) }
+                if (message.searchImages.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    SearchImagesCarousel(
+                        images = message.searchImages,
+                        onImageClick = { img ->
+                            previewImage = img
+                        }
+                    )
+                }
+                if (previewImage != null) {
+                    InAppImagePreviewDialog(
+                        image = previewImage!!,
+                        onDismiss = { previewImage = null }
+                    )
+                }
 
                 // Profile & Link Cards (ChatGPT interactive cards with Open Profile action)
                 if (!message.isStreaming && effectiveText.isNotEmpty() && message.searchResults.isNotEmpty()) {
@@ -3181,6 +3176,300 @@ fun ChatGptSourcesPill(
     }
 }
 
+// ==========================================
+// ChatGPT-Style Web Search Images & Carousel
+// ==========================================
+
+@Composable
+fun SearchImagesCarousel(
+    images: List<SearchImage>,
+    onImageClick: (SearchImage) -> Unit
+) {
+    if (images.isEmpty()) return
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(bottom = 6.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Image,
+                contentDescription = null,
+                tint = Color(0xFF9E9EA4),
+                modifier = Modifier.size(13.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "Images (${images.size})",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFF9E9EA4)
+            )
+        }
+
+        LazyRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(vertical = 2.dp)
+        ) {
+            items(images) { img ->
+                SearchImageThumbnail(
+                    image = img,
+                    onClick = { onImageClick(img) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun SearchImageThumbnail(
+    image: SearchImage,
+    onClick: () -> Unit
+) {
+    var thumbBitmap by remember(image.imageUrl) {
+        mutableStateOf<Bitmap?>(ProfileAvatarLoader.getCachedImage(image.imageUrl))
+    }
+    LaunchedEffect(image.imageUrl) {
+        if (thumbBitmap == null) {
+            withContext(Dispatchers.IO) {
+                val bmp = ProfileAvatarLoader.loadImage(image.imageUrl)
+                thumbBitmap = bmp
+            }
+        }
+    }
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = Color(0xFF212124),
+        border = BorderStroke(0.8.dp, Color(0xFF323238)),
+        modifier = Modifier
+            .width(155.dp)
+            .height(105.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            if (thumbBitmap != null) {
+                androidx.compose.foundation.Image(
+                    bitmap = thumbBitmap!!.asImageBitmap(),
+                    contentDescription = image.title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(
+                        color = Color(0xFF555558),
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+
+            // Bottom gradient overlay with source domain
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color.Transparent, Color(0xCC000000))
+                        )
+                    )
+                    .padding(horizontal = 6.dp, vertical = 4.dp)
+            ) {
+                val domain = remember(image.sourceDomain, image.sourceUrl) {
+                    image.sourceDomain.ifBlank { extractDomain(image.sourceUrl) }
+                }
+                Text(
+                    text = domain.ifBlank { image.title },
+                    color = Color.White,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+// ==========================================
+// In-App Image Preview Dialog (ChatGPT Style)
+// ==========================================
+
+@Composable
+fun InAppImagePreviewDialog(
+    image: SearchImage,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    var fullBitmap by remember(image.imageUrl) {
+        mutableStateOf<Bitmap?>(ProfileAvatarLoader.getCachedImage(image.imageUrl))
+    }
+    var isLoading by remember(image.imageUrl) { mutableStateOf(fullBitmap == null) }
+
+    LaunchedEffect(image.imageUrl) {
+        if (fullBitmap == null) {
+            withContext(Dispatchers.IO) {
+                val bmp = ProfileAvatarLoader.downloadBitmap(image.imageUrl, maxDimension = 1280)
+                fullBitmap = bmp
+                isLoading = false
+            }
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF0F0F11))
+                .statusBarsPadding()
+                .navigationBarsPadding()
+        ) {
+            // Top Bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .background(Color(0xFF212124), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Close preview",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
+                val domain = remember(image.sourceUrl, image.sourceDomain) {
+                    image.sourceDomain.ifBlank { extractDomain(image.sourceUrl) }
+                }
+                if (domain.isNotBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = Color(0xFF212124),
+                        border = BorderStroke(0.8.dp, Color(0xFF333336))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            DomainFaviconBadge(url = image.sourceUrl, size = 16.dp)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = domain,
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Image Content
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 64.dp, bottom = 90.dp, start = 12.dp, end = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                if (fullBitmap != null) {
+                    androidx.compose.foundation.Image(
+                        bitmap = fullBitmap!!.asImageBitmap(),
+                        contentDescription = image.title,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(12.dp))
+                    )
+                } else if (isLoading) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            strokeWidth = 2.5.dp,
+                            modifier = Modifier.size(36.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Loading high-resolution image...",
+                            color = Color(0xFF8E8E93),
+                            fontSize = 13.sp
+                        )
+                    }
+                } else {
+                    Text(
+                        text = "Unable to load preview",
+                        color = Color(0xFF8E8E93),
+                        fontSize = 13.sp
+                    )
+                }
+            }
+
+            // Bottom Caption Bar
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .background(Color(0xFF18181A))
+                    .padding(horizontal = 20.dp, vertical = 14.dp)
+            ) {
+                if (image.title.isNotBlank()) {
+                    Text(
+                        text = image.title,
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+                if (image.sourceUrl.isNotBlank()) {
+                    Text(
+                        text = image.sourceUrl,
+                        color = Color(0xFF8E8E93),
+                        fontSize = 11.5.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// ChatGPT Sources ModalBottomSheet
+// Matching media_1791441433580.jpg AMOLED overlay
+// ==========================================
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SourcesBottomSheet(
     visible: Boolean,
@@ -3189,125 +3478,196 @@ fun SourcesBottomSheet(
 ) {
     if (!visible) return
     val context = LocalContext.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    AlertDialog(
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF171717),
-        shape = RoundedCornerShape(18.dp),
-        title = {
+        sheetState = sheetState,
+        containerColor = Color(0xFF212124),
+        dragHandle = {
+            BottomSheetDefaults.DragHandle(
+                color = Color(0xFF555558),
+                width = 36.dp,
+                height = 4.dp
+            )
+        },
+        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+        ) {
+            // Header: "Sources" with Close Button
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Sources",
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    fontSize = 18.sp
+                )
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.size(32.dp)
+                ) {
                     Icon(
-                        imageVector = Icons.Default.Language,
-                        contentDescription = null,
-                        tint = Color(0xFF10A37F),
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Close",
+                        tint = Color(0xFF8E8E93),
                         modifier = Modifier.size(18.dp)
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Sources (${searchResults.size})",
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White,
-                        fontSize = 16.sp
-                    )
-                }
-                IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
-                    Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = Color(0xFF8E8E93))
                 }
             }
-        },
-        text = {
+
             LazyColumn(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(searchResults) { res ->
-                    val domain = remember(res.url) { extractDomain(res.url).ifBlank { res.title } }
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = Color(0xFF212121),
-                        border = BorderStroke(1.dp, Color(0xFF2C2C2C)),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable {
-                                try {
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(res.url))
-                                    context.startActivity(intent)
-                                } catch (_: Exception) {}
-                            }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            DomainFaviconBadge(url = res.url, size = 22.dp)
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = res.title.ifBlank { domain },
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = Color.White,
-                                    fontSize = 13.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                if (res.snippet.isNotBlank()) {
-                                    Text(
-                                        text = res.snippet,
-                                        color = Color(0xFF8E8E93),
-                                        fontSize = 11.sp,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.padding(top = 2.dp)
-                                    )
+                val primary = searchResults.firstOrNull()
+                if (primary != null) {
+                    item {
+                        val primaryDomain = remember(primary.url) { extractDomain(primary.url).ifBlank { primary.title } }
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = Color(0xFF2A2A2E),
+                            border = BorderStroke(0.8.dp, Color(0xFF38383E)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable {
+                                    try {
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(primary.url))
+                                        context.startActivity(intent)
+                                    } catch (_: Exception) {}
                                 }
-                                Text(
-                                    text = domain,
-                                    color = Color(0xFF10A37F),
-                                    fontSize = 10.5.sp,
-                                    modifier = Modifier.padding(top = 2.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            val isProfile = res.url.contains("linkedin.com/in", ignoreCase = true) || res.url.contains("github.com/", ignoreCase = true)
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = Color(0xFF2C2C32),
-                                border = BorderStroke(0.8.dp, Color(0xFF44444C))
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp)
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
+                                    DomainFaviconBadge(url = primary.url, size = 22.dp)
+                                    Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = if (isProfile) "Open profile" else "Open link",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                                        text = primaryDomain,
+                                        color = Color(0xFF9E9EA4),
+                                        fontSize = 12.sp,
                                         fontWeight = FontWeight.Medium,
-                                        color = Color(0xFFE2E2E8)
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Icon(
-                                        imageVector = Icons.Default.ArrowUpward,
-                                        contentDescription = "Open",
-                                        tint = Color(0xFF10A37F),
-                                        modifier = Modifier
-                                            .size(11.dp)
-                                            .graphicsLayer { rotationZ = 45f }
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = primary.title.ifBlank { primaryDomain },
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color.White,
+                                    fontSize = 14.5.sp,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (primary.snippet.isNotBlank()) {
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        text = primary.snippet,
+                                        color = Color(0xFFB0B0B8),
+                                        fontSize = 12.5.sp,
+                                        lineHeight = 17.sp,
+                                        maxLines = 3,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
                             }
                         }
                     }
                 }
+
+                val moreResults = if (searchResults.size > 1) searchResults.drop(1) else emptyList()
+                if (moreResults.isNotEmpty()) {
+                    item {
+                        HorizontalDivider(
+                            color = Color(0xFF333338),
+                            thickness = 0.6.dp,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                        Text(
+                            text = "More",
+                            color = Color(0xFF8E8E93),
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(start = 4.dp, top = 2.dp, bottom = 4.dp)
+                        )
+                    }
+
+                    items(moreResults) { res ->
+                        val domain = remember(res.url) { extractDomain(res.url).ifBlank { res.title } }
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFF242427),
+                            border = BorderStroke(0.6.dp, Color(0xFF303036)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable {
+                                    try {
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(res.url))
+                                        context.startActivity(intent)
+                                    } catch (_: Exception) {}
+                                }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                DomainFaviconBadge(url = res.url, size = 20.dp)
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = domain,
+                                        color = Color(0xFF8E8E93),
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        text = res.title.ifBlank { domain },
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color.White,
+                                        fontSize = 13.sp,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.padding(top = 2.dp)
+                                    )
+                                    if (res.snippet.isNotBlank()) {
+                                        Text(
+                                            text = res.snippet,
+                                            color = Color(0xFF9E9EA4),
+                                            fontSize = 11.5.sp,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.padding(top = 3.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Spacer(modifier = Modifier.height(20.dp))
+                }
             }
-        },
-        confirmButton = {}
-    )
+        }
+    }
 }
 
 private enum class ActionButtonState {
