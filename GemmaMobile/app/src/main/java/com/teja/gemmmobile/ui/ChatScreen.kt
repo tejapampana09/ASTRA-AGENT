@@ -247,6 +247,13 @@ fun ChatScreen(
     val focusManager = LocalFocusManager.current
     val isImeVisible = WindowInsets.isImeVisible
 
+    var inputDockHeightPx by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
+    val navBarBottomDp = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val inputDockHeightDp = with(density) {
+        if (inputDockHeightPx > 0) inputDockHeightPx.toDp() else 74.dp
+    }
+
     val sessions by viewModel.sessions.collectAsState()
     val currentSessionId by viewModel.currentSessionId.collectAsState()
     val activeGeneratingSessionId by viewModel.activeGeneratingSessionId.collectAsState()
@@ -382,7 +389,6 @@ fun ChatScreen(
 
     // ChatGPT-style Drag Up at end of page to Start New Chat
     val pullOffsetAnim = remember { Animatable(0f) }
-    val density = LocalDensity.current
     val pullTriggerThresholdPx = with(density) { 76.dp.toPx() }
     val pullMaxOffsetPx = with(density) { 130.dp.toPx() }
     var hasTriggeredThresholdHaptic by remember { mutableStateOf(false) }
@@ -905,7 +911,7 @@ fun ChatScreen(
                                 start = 16.dp,
                                 end = 16.dp,
                                 top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 58.dp,
-                                bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 92.dp
+                                bottom = navBarBottomDp + inputDockHeightDp + 24.dp
                             ),
                             verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
@@ -1277,33 +1283,39 @@ fun ChatScreen(
 
             // Bottom Vignette & Floating Input Dock
             if (installState is ModelInstallState.Installed && (engineState is EngineState.Ready || engineState is EngineState.Generating)) {
-                var inputDockHeightPx by remember { mutableIntStateOf(0) }
-                val density = LocalDensity.current
-                val inputDockHeightDp = with(density) {
-                    if (inputDockHeightPx > 0) inputDockHeightPx.toDp() else 74.dp
-                }
+                // 1. Full-bleed Bottom Vignette extending seamlessly to the screen's bottom physical edge
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(inputDockHeightDp + navBarBottomDp + 40.dp)
+                        .align(Alignment.BottomCenter)
+                        .background(
+                            Brush.verticalGradient(
+                                0.0f to Color.Transparent,
+                                0.30f to currentTheme.background.copy(alpha = 0.50f),
+                                0.65f to currentTheme.background.copy(alpha = 0.92f),
+                                1.0f to currentTheme.background
+                            )
+                        )
+                )
 
+                // 2. Solid color fill directly behind the navigation bar area (ensures zero transparent gap)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(navBarBottomDp + 18.dp)
+                        .align(Alignment.BottomCenter)
+                        .background(currentTheme.background)
+                )
+
+                // 3. Floating Input Dock and Actions (safely padded above system navigation bar)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .align(Alignment.BottomCenter)
                         .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
+                        .padding(bottom = 8.dp)
                 ) {
-                    // Smooth Bottom Vignette Gradient (Transparent -> Theme background)
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(inputDockHeightDp + 48.dp)
-                            .background(
-                                Brush.verticalGradient(
-                                    0.0f to Color.Transparent,
-                                    0.25f to currentTheme.background.copy(alpha = 0.40f),
-                                    0.65f to currentTheme.background.copy(alpha = 0.90f),
-                                    1.0f to currentTheme.background
-                                )
-                            )
-                            .align(Alignment.BottomCenter)
-                    )
 
                     // Independent Floating ChatGPT style Memory Updated Notification
                     AnimatedVisibility(

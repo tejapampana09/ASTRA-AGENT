@@ -488,13 +488,16 @@ open class SearchManager(
 
         for ((idx, res) in results.take(3).withIndex()) {
             val itemSb = StringBuilder()
-            itemSb.appendLine("[${idx + 1}] Title: ${res.title.take(80)}")
-            itemSb.appendLine("Source URL: ${res.url}")
-            val cleanSnippet = res.snippet.take(160).trim()
+            val cleanTitle = res.title.take(70).replace(Regex("""[\x00-\x1F\x7F]"""), " ").trim()
+            val cleanUrl = res.url.replace(Regex("""[\x00-\x1F\x7F]"""), "").trim()
+            val cleanSnippet = res.snippet.take(130).replace(Regex("""[\x00-\x1F\x7F]"""), " ").trim()
+
+            itemSb.appendLine("[${idx + 1}] Title: $cleanTitle")
+            itemSb.appendLine("Source URL: $cleanUrl")
             itemSb.appendLine("Search Snippet: $cleanSnippet")
 
             if (res.fetchSucceeded && res.pageContent.isNotBlank()) {
-                val boundedPageContent = res.pageContent.take(180).trim()
+                val boundedPageContent = res.pageContent.take(140).replace(Regex("""[\x00-\x1F\x7F]"""), " ").trim()
                 itemSb.appendLine("Webpage Text: $boundedPageContent")
             } else {
                 itemSb.appendLine("Webpage Text: [Not fetched; relying on search snippet above]")

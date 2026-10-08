@@ -823,7 +823,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     prompt = effectivePrompt,
                     systemInstruction = effectiveSystemPrompt,
                     imageBytes = imageBytes,
-                    enableThinkingOverride = if (useWebSearch) false else null
+                    enableThinkingOverride = if (useWebSearch) false else null,
+                    dynamicMaxOutputOverride = if (useWebSearch) 400 else null
                 )
                     .catch { error ->
                         Log.e(TAG, "[$TAG] Stream error", error)
@@ -890,7 +891,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val calledToolsHistory = mutableListOf<com.teja.gemmmobile.tools.ToolCallRequest>()
                 var currentSearchImages = emptyList<SearchImage>()
 
-                val allowToolCalls = _isWebSearchEnabled.value && !isDocument && !hasDocInSession && imageBytes == null
+                val allowToolCalls = _isWebSearchEnabled.value && !isDocument && !hasDocInSession && imageBytes == null && searchResults.isEmpty()
                 while (allowToolCalls && currentToolStep < MAX_TOOL_STEPS) {
                     var detectedToolCall = toolRegistry.parseToolCall(currentGenerationText) ?: break
 
@@ -977,7 +978,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         var toolUiUpdate = 0L
                         eng.sendMessage(
                             prompt = nextTurnPrompt,
-                            systemInstruction = effectiveSystemPrompt
+                            systemInstruction = effectiveSystemPrompt,
+                            dynamicMaxOutputOverride = 350
                         ).collect { chunk ->
                             if (chunk.thought.isNotEmpty()) thoughtBuilder.append(chunk.thought)
                             val clean = chunk.text.replace("<thought>", "").replace("</thought>", "")

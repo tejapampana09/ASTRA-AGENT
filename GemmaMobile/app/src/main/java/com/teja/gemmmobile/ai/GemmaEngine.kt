@@ -324,7 +324,8 @@ data class EngineChunk(
         prompt: String,
         systemInstruction: String? = null,
         imageBytes: ByteArray? = null,
-        enableThinkingOverride: Boolean? = null
+        enableThinkingOverride: Boolean? = null,
+        dynamicMaxOutputOverride: Int? = null
     ): Flow<EngineChunk> = flow {
         if (prompt.isBlank() && imageBytes == null) return@flow
 
@@ -338,24 +339,27 @@ data class EngineChunk(
 
         val effectiveSysPrompt = systemInstruction ?: currentConfig.systemPrompt
         val sysTokens = com.teja.gemmmobile.context.ContextManager.estimateTokens(effectiveSysPrompt)
-        val maxAllowedPromptTokens = 1200
+        val maxAllowedPromptTokens = 1050
         val rawPromptTokens = com.teja.gemmmobile.context.ContextManager.estimateTokens(prompt)
         val safePrompt = if (rawPromptTokens > maxAllowedPromptTokens) {
-            val excessChars = (rawPromptTokens - maxAllowedPromptTokens) * 3
+            val excessChars = (rawPromptTokens - maxAllowedPromptTokens) * 2
             if (prompt.length > excessChars + 300) {
-                prompt.substring(excessChars)
+                prompt.takeLast(prompt.length - excessChars)
             } else {
-                prompt.takeLast(1000)
+                prompt.takeLast(1100)
             }
         } else {
             prompt
         }
-        val basePromptTokens = com.teja.gemmmobile.context.ContextManager.estimateTokens(safePrompt) + sysTokens
+
+        // Sanitize string against null bytes / control codes before passing to JNI / LiteRT-LM C++
+        val jniSafePrompt = safePrompt.filter { it.code >= 32 || it == '\n' || it == '\t' || it == '\r' }
+        val basePromptTokens = com.teja.gemmmobile.context.ContextManager.estimateTokens(jniSafePrompt) + sysTokens
         val effectiveThinking = enableThinkingOverride ?: currentConfig.enableThinking
         val effectiveThinkingBudget = if (effectiveThinking) minOf(currentConfig.thinkingBudget, 160) else 0
 
         val totalModelMaxContext = 2048
-        val safetyMargin = 32
+        val safetyMargin = 64
 
         try {
             var attempt = 0
@@ -385,7 +389,8 @@ data class EngineChunk(
                     throw IllegalStateException(errorMsg)
                 }
 
-                val dynamicMaxOutput = minOf(currentConfig.maxTokens, maxOf(128, availableForOutput))
+                val requestedOutput = dynamicMaxOutputOverride ?: currentConfig.maxTokens
+                val dynamicMaxOutput = minOf(requestedOutput, maxOf(128, availableForOutput))
                 Log.d(TAG, "[$TAG] Starting attempt $attempt with promptTokens=$totalPromptTokens, maxOutput=$dynamicMaxOutput, thinking=$currentThinking, thinkBudget=$currentThinkBudget, hasImage=${currentImageBytes != null}")
 
                 val thinkingConfig = ThinkingConfig(
@@ -420,7 +425,7 @@ data class EngineChunk(
                         try {
                             val contents = Contents.of(
                                 Content.ImageBytes(visionBytes!!),
-                                Content.Text(prompt)
+                                Content.Text(jniSafePrompt)
                             )
                             visionFlow = targetConv.sendMessageAsync(contents = contents, thinkingConfig = thinkingConfig)
                             Log.d(TAG, "[$TAG] Vision: sending JPEG bytes (${visionBytes.size} bytes)")
@@ -435,7 +440,7 @@ data class EngineChunk(
                                     val pngBytes = pngStream.toByteArray()
                                     val contents = Contents.of(
                                         Content.ImageBytes(pngBytes),
-                                        Content.Text(prompt)
+                                        Content.Text(jniSafePrompt)
                                     )
                                     visionFlow = targetConv.sendMessageAsync(contents = contents, thinkingConfig = thinkingConfig)
                                     Log.d(TAG, "[$TAG] Vision: PNG re-encode succeeded (${pngBytes.size} bytes)")
@@ -450,9 +455,9 @@ data class EngineChunk(
                             }
                         }
 
-                        visionFlow ?: targetConv.sendMessageAsync(text = safePrompt, thinkingConfig = thinkingConfig)
+                        visionFlow ?: targetConv.sendMessageAsync(text = jniSafePrompt, thinkingConfig = thinkingConfig)
                     } else {
-                        targetConv.sendMessageAsync(text = safePrompt, thinkingConfig = thinkingConfig)
+                        targetConv.sendMessageAsync(text = jniSafePrompt, thinkingConfig = thinkingConfig)
                     }
 
                     var emittedAny = false

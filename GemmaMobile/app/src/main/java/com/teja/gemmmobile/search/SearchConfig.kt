@@ -22,12 +22,13 @@ object SearchConfig {
     // Content Length & Concurrency Caps
     const val MAX_PAGE_CONTENT_CHARS = 5000
     const val MAX_REDIRECTS = 4
-    const val DEFAULT_MAX_SEARCH_RESULTS = 5
-    const val MAX_PAGES_TO_FETCH = 4
+    const val DEFAULT_MAX_SEARCH_RESULTS = 4
+    const val MAX_PAGES_TO_FETCH = 3
     const val MAX_CONCURRENT_FETCHES = 3
 
-    // Context Window Safety (aligned with ContextManager 1000 token KV-cache budget)
-    const val MAX_WEB_CONTEXT_CHARS = 750
+    // Context Window Safety (strictly bounded to fit LiteRT-LM 2048 KV-cache limit)
+    const val MAX_WEB_CONTEXT_CHARS = 650
+    const val MAX_WEB_OUTPUT_TOKENS = 400
     const val MAX_TOOL_ARG_STRING_CHARS = 500
-    const val MAX_TOOL_STEPS = 3
+    const val MAX_TOOL_STEPS = 2
 }
