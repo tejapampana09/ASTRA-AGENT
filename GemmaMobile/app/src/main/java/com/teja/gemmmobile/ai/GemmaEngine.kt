@@ -154,55 +154,55 @@ class GemmaEngine(
 
             if (preferCpu) {
                 // Initialize directly on CPU: Smooth, responsive, zero GPU lockups, zero phone freezing!
+                // Try GPU vision first (Google recommended: fast image processing even with CPU text)
+                var cpuEngineLoaded = false
                 try {
-                    Log.d(TAG, "[$TAG] Initializing directly on CPU with 4 threads and 2048 token budget...")
+                    Log.d(TAG, "[$TAG] Initializing CPU model with GPU vision backend and 2048 token budget...")
                     val config = EngineConfig(
                         modelPath = modelPath,
                         backend = Backend.CPU(threadCount = 4),
+                        visionBackend = Backend.GPU(),
                         maxNumTokens = 2048,
+                        maxNumImages = 1,
                         cacheDir = effectiveCacheDir
                     )
                     testEngine = Engine(config)
                     testEngine.initialize()
                     loadedEngine = testEngine
                     backendChosen = BackendType.CPU
-                    Log.i(TAG, "[$TAG] Model loaded successfully on CPU (smooth & stable)")
-                } catch (cpuError: Throwable) {
+                    cpuEngineLoaded = true
+                    Log.i(TAG, "[$TAG] Model loaded successfully on CPU with GPU vision backend")
+                } catch (gpuVisionErr: Throwable) {
                     try { testEngine?.close() } catch (_: Throwable) {}
                     testEngine = null
-                    if (cpuError is CancellationException) throw cpuError
-                    val fatalMsg = "Failed to load model on CPU: ${cpuError.localizedMessage}"
-                    Log.e(TAG, "[$TAG] $fatalMsg", cpuError)
-                    _engineState.value = EngineState.Error(fatalMsg)
-                    return@withContext Result.failure(Exception(fatalMsg, cpuError))
+                    Log.w(TAG, "[$TAG] GPU vision failed: ${gpuVisionErr.message}. Trying CPU vision backend...")
                 }
-            } else {
-                // User explicitly selected GPU: try GPU with fallback
-                var lastGpuError: String? = null
-                try {
-                    Log.d(TAG, "[$TAG] Attempting GPU initialization with cacheDir: $effectiveCacheDir...")
-                    val config = EngineConfig(
-                        modelPath = modelPath,
-                        backend = Backend.GPU(),
-                        maxNumTokens = 2048,
-                        cacheDir = effectiveCacheDir
-                    )
-                    testEngine = Engine(config)
-                    testEngine.initialize()
-                    loadedEngine = testEngine
-                    backendChosen = BackendType.GPU
-                    Log.i(TAG, "[$TAG] Model loaded successfully on GPU")
-                } catch (eGpu: Throwable) {
-                    lastGpuError = eGpu.message ?: "GPU unsupported or out of memory"
-                    Log.w(TAG, "[$TAG] GPU initialization failed: $lastGpuError. Cleaning up before CPU fallback...")
-                    try { testEngine?.close() } catch (_: Throwable) {}
-                    testEngine = null
-                    System.gc()
-                    kotlinx.coroutines.delay(300)
 
-                    Log.i(TAG, "[$TAG] Falling back to CPU with 4 threads and 2048 token budget...")
-                    _engineState.value = EngineState.Loading("Falling back to CPU...")
+                if (!cpuEngineLoaded) {
+                    try {
+                        Log.d(TAG, "[$TAG] Initializing CPU model with CPU vision backend...")
+                        val config = EngineConfig(
+                            modelPath = modelPath,
+                            backend = Backend.CPU(threadCount = 4),
+                            visionBackend = Backend.CPU(threadCount = 4),
+                            maxNumTokens = 2048,
+                            maxNumImages = 1,
+                            cacheDir = effectiveCacheDir
+                        )
+                        testEngine = Engine(config)
+                        testEngine.initialize()
+                        loadedEngine = testEngine
+                        backendChosen = BackendType.CPU
+                        cpuEngineLoaded = true
+                        Log.i(TAG, "[$TAG] Model loaded successfully on CPU with CPU vision backend")
+                    } catch (cpuVisionErr: Throwable) {
+                        try { testEngine?.close() } catch (_: Throwable) {}
+                        testEngine = null
+                        Log.w(TAG, "[$TAG] CPU vision failed: ${cpuVisionErr.message}. Trying text-only fallback...")
+                    }
+                }
 
+                if (!cpuEngineLoaded) {
                     try {
                         val config = EngineConfig(
                             modelPath = modelPath,
@@ -213,8 +213,61 @@ class GemmaEngine(
                         testEngine = Engine(config)
                         testEngine.initialize()
                         loadedEngine = testEngine
+                        backendChosen = BackendType.CPU
+                        Log.i(TAG, "[$TAG] Model loaded successfully on CPU (text-only fallback)")
+                    } catch (fatal: Throwable) {
+                        try { testEngine?.close() } catch (_: Throwable) {}
+                        testEngine = null
+                        if (fatal is CancellationException) throw fatal
+                        val fatalMsg = "Failed to load model on CPU: ${fatal.localizedMessage}"
+                        Log.e(TAG, "[$TAG] $fatalMsg", fatal)
+                        _engineState.value = EngineState.Error(fatalMsg)
+                        return@withContext Result.failure(Exception(fatalMsg, fatal))
+                    }
+                }
+            } else {
+                // User explicitly selected GPU: try GPU with GPU vision
+                var lastGpuError: String? = null
+                try {
+                    Log.d(TAG, "[$TAG] Attempting GPU initialization with GPU vision backend...")
+                    val config = EngineConfig(
+                        modelPath = modelPath,
+                        backend = Backend.GPU(),
+                        visionBackend = Backend.GPU(),
+                        maxNumTokens = 2048,
+                        maxNumImages = 1,
+                        cacheDir = effectiveCacheDir
+                    )
+                    testEngine = Engine(config)
+                    testEngine.initialize()
+                    loadedEngine = testEngine
+                    backendChosen = BackendType.GPU
+                    Log.i(TAG, "[$TAG] Model loaded successfully on GPU with GPU vision")
+                } catch (eGpu: Throwable) {
+                    lastGpuError = eGpu.message ?: "GPU unsupported or out of memory"
+                    Log.w(TAG, "[$TAG] GPU initialization failed: $lastGpuError. Cleaning up before CPU fallback...")
+                    try { testEngine?.close() } catch (_: Throwable) {}
+                    testEngine = null
+                    System.gc()
+                    kotlinx.coroutines.delay(300)
+
+                    Log.i(TAG, "[$TAG] Falling back to CPU with 4 threads and CPU vision...")
+                    _engineState.value = EngineState.Loading("Falling back to CPU...")
+
+                    try {
+                        val config = EngineConfig(
+                            modelPath = modelPath,
+                            backend = Backend.CPU(threadCount = 4),
+                            visionBackend = Backend.CPU(threadCount = 4),
+                            maxNumTokens = 2048,
+                            maxNumImages = 1,
+                            cacheDir = effectiveCacheDir
+                        )
+                        testEngine = Engine(config)
+                        testEngine.initialize()
+                        loadedEngine = testEngine
                         backendChosen = BackendType.CPU_FALLBACK
-                        Log.i(TAG, "[$TAG] Model loaded successfully on CPU fallback")
+                        Log.i(TAG, "[$TAG] Model loaded successfully on CPU fallback with CPU vision")
                     } catch (fatal: Throwable) {
                         try { testEngine?.close() } catch (_: Throwable) {}
                         testEngine = null
@@ -230,14 +283,19 @@ class GemmaEngine(
 
             // Create initial conversation session
             try {
-                engine = loadedEngine
+                val nonNullEngine = loadedEngine ?: run {
+                    val errorMsg = "Engine initialization failed: no backend could be loaded."
+                    _engineState.value = EngineState.Error(errorMsg)
+                    return@withContext Result.failure(IllegalStateException(errorMsg))
+                }
+                engine = nonNullEngine
                 activeBackend = backendChosen
                 val convConfig = buildConversationConfig(currentConfig)
                 conversation = try {
-                    loadedEngine.createConversation(convConfig)
+                    nonNullEngine.createConversation(convConfig)
                 } catch (convFallback: Throwable) {
                     Log.w(TAG, "[$TAG] Custom conversation config failed, falling back to default: ${convFallback.message}")
-                    loadedEngine.createConversation()
+                    nonNullEngine.createConversation()
                 }
                 _engineState.value = EngineState.Ready(activeBackend)
                 Result.success(activeBackend)
