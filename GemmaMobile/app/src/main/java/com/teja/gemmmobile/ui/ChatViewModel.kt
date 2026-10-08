@@ -605,13 +605,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 var searchResults: List<SearchResult> = emptyList()
                 var searchImages: List<SearchImage> = emptyList()
                 var searchContext = ""
+                val cleanQuery = extractSearchQuery(prompt)
 
                 val isVisual = shouldQueryImages(prompt) && imageBytes == null
 
                 if (useWebSearch || isVisual) {
-                    val cleanQuery = extractSearchQuery(prompt)
-
                     if (isVisual) {
+                        val visualSearchQuery = searchManager.cleanVisualQuery(prompt)
+
                         // 1. Direct Visual Media Execution
                         updateSessionMessages(targetSessionId) { msgs ->
                             msgs.map { msg ->
@@ -624,7 +625,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         }
                         try {
                             searchImages = kotlinx.coroutines.withTimeoutOrNull(8000L) {
-                                searchManager.searchImages(cleanQuery, maxImages = 6)
+                                searchManager.searchImages(visualSearchQuery, maxImages = 6)
                             } ?: emptyList()
                         } catch (e: Exception) {
                             Log.w(TAG, "[$TAG] Visual search error", e)
@@ -632,8 +633,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                         // Also fetch concise factual page snippets so model can explain the diagram/topic
                         try {
-                            val enrichedResults = kotlinx.coroutines.withTimeoutOrNull(5000L) {
-                                searchManager.searchAndRead(cleanQuery, maxResults = 3)
+                            val enrichedResults = kotlinx.coroutines.withTimeoutOrNull(8000L) {
+                                searchManager.searchAndRead(visualSearchQuery, maxResults = 3)
                             }
                             if (!enrichedResults.isNullOrEmpty()) {
                                 searchResults = enrichedResults.map { it.toSearchResult() }
@@ -709,13 +710,19 @@ You are provided with real-time web search results and extracted webpage content
                 val effectivePrompt = if (imageBytes != null) {
                     prompt
                 } else {
+                    val promptToUse = if (isVisual) {
+                        val visualSubject = searchManager.cleanVisualQuery(prompt).replace(Regex("""\s+diagram""", RegexOption.IGNORE_CASE), "").trim()
+                        "Please provide a comprehensive explanation of the architecture, key components, and workflow of $visualSubject in detail. Structure your answer with clear headings and bullet points."
+                    } else {
+                        prompt
+                    }
                     val historyTurns = targetMsgs.filter { it.id != assistantMessageId }.dropLast(1)
                     contextManager.buildPrompt(
                         systemPrompt = "", // Handled natively in ConversationConfig
-                        toolsDocumentation = if (useWebSearch) "" else toolRegistry.getToolsDocumentation(),
+                        toolsDocumentation = if (useWebSearch || isVisual) "" else toolRegistry.getToolsDocumentation(),
                         memoryContext = memoryContext,
                         conversationHistory = historyTurns,
-                        currentPrompt = prompt,
+                        currentPrompt = promptToUse,
                         searchContext = searchContext
                     )
                 }
@@ -847,12 +854,19 @@ You are provided with real-time web search results and extracted webpage content
                     }
 
                     // Feed tool result back to the model as evidence (NOT in system prompt to prevent prompt injection)
+                    val isImageTool = detectedToolCall.name == "image_search"
+                    val nextTurnSubject = if (isImageTool) {
+                        (detectedToolCall.arguments["query"] as? String)?.let { searchManager.cleanVisualQuery(it) } ?: cleanQuery
+                    } else {
+                        cleanQuery
+                    }
+
                     val nextTurnPrompt = contextManager.buildPrompt(
-                        systemPrompt = "You are a helpful, accurate AI assistant. Use the tool results below as factual evidence. Provide a direct, natural explanation. NEVER output JSON or robotic assumption phrases.",
-                        toolsDocumentation = if (currentToolStep < MAX_TOOL_STEPS) toolRegistry.getToolsDocumentation() else "",
+                        systemPrompt = "You are a helpful, accurate AI assistant. Use the tool results below as factual evidence. Provide a direct, natural explanation. Do not call any further tools or output JSON.",
+                        toolsDocumentation = if (isImageTool) "" else if (currentToolStep < MAX_TOOL_STEPS) toolRegistry.getToolsDocumentation() else "",
                         memoryContext = memoryContext,
                         conversationHistory = targetMsgs.filter { it.id != assistantMessageId },
-                        currentPrompt = prompt,
+                        currentPrompt = if (isImageTool) "Explain the architecture, components, and workflow of $nextTurnSubject in detail based on the images above." else prompt,
                         toolResultsContext = accumulatedToolResults.toString().take(1000)
                     )
 
@@ -902,18 +916,16 @@ You are provided with real-time web search results and extracted webpage content
                 val finalText = responseBuilder.toString()
 
                 // Finalize assistant message and update session history once
+                val cleanedFinal = stripAssumedToolText(finalText)
+                val cleanedRaw = stripAssumedToolText(rawFinalText)
                 val resolvedText = when {
-                    finalText.isNotBlank() -> stripAssumedToolText(finalText)
-                    rawFinalText.isNotBlank() -> stripAssumedToolText(rawFinalText)
+                    cleanedFinal.isNotBlank() -> cleanedFinal
+                    cleanedRaw.isNotBlank() -> cleanedRaw
                     finalThought.isNotBlank() -> finalThought
-                    currentSearchImages.isNotEmpty() || searchImages.isNotEmpty() -> {
-                        "Here are the images and visual diagrams for **$prompt**."
-                    }
                     searchResults.isNotEmpty() -> {
                         // Fallback synthesis directly from search results if model silently stopped or choked on prompt
                         buildString {
-                            appendLine("Based on web search results, here is what I found:")
-                            appendLine()
+                            appendLine("Based on search results, here is an overview of **$cleanQuery**:\n")
                             searchResults.take(3).forEach { res ->
                                 val cleanTitle = res.title.substringBefore("-").substringBefore("|").trim()
                                 appendLine("• **$cleanTitle**: ${res.snippet.trim()}")
@@ -921,6 +933,10 @@ You are provided with real-time web search results and extracted webpage content
                             appendLine()
                             appendLine("Please let me know if you would like more details!")
                         }.trim()
+                    }
+                    currentSearchImages.isNotEmpty() || searchImages.isNotEmpty() -> {
+                        val visualSubject = searchManager.cleanVisualQuery(prompt).replace(Regex("""\s+diagram""", RegexOption.IGNORE_CASE), "").trim()
+                        "Here are the diagrams and visual figures for **$visualSubject**."
                     }
                     else -> "I couldn't generate a response. Please try again with a shorter prompt."
                 }

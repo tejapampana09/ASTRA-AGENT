@@ -265,6 +265,29 @@ open class SearchManager(
     }
 
     /**
+     * Cleans query specifically for visual image search engines by stripping filler/intent words,
+     * while guaranteeing keywords like 'diagram' remain for architectural and technical searches.
+     */
+    fun cleanVisualQuery(raw: String): String {
+        val q = sanitizeQuery(raw).trim()
+        val wordsToStrip = setOf(
+            "images", "image", "photos", "photo", "pictures", "picture", "pics", "pic",
+            "wallpapers", "wallpaper", "diagrams", "diagram", "show me", "chupinchu",
+            "chudu", "bomma", "bommalu", "hd", "4k", "of"
+        )
+        val tokens = q.split(Regex("""\s+""")).filter { it.lowercase() !in wordsToStrip }
+        var cleaned = tokens.joinToString(" ").trim()
+        if (cleaned.isBlank()) cleaned = q
+
+        val lowerRaw = raw.lowercase()
+        if ((lowerRaw.contains("architecture") || lowerRaw.contains("diagram") || lowerRaw.contains("flowchart") || lowerRaw.contains("workflow")) &&
+            !cleaned.lowercase().contains("diagram")) {
+            cleaned = "$cleaned diagram"
+        }
+        return cleaned
+    }
+
+    /**
      * Extracts and retrieves high-signal search images for inline chat display (ChatGPT style).
      * Strictly distinct from web search: focuses exclusively on visual diagrams, photos, and figures.
      */
@@ -273,13 +296,13 @@ open class SearchManager(
         enrichedPages: List<EnrichedSearchResult> = emptyList(),
         maxImages: Int = 8
     ): List<SearchImage> = withContext(Dispatchers.IO) {
-        val clean = sanitizeQuery(query)
+        val clean = cleanVisualQuery(query)
         if (clean.isBlank()) return@withContext emptyList()
 
         val images = mutableListOf<SearchImage>()
         val seenUrls = mutableSetOf<String>()
 
-        // 1. Primary zero-cost engine: High-resolution Bing Images
+        // 1. Primary zero-cost engine: High-resolution Bing Images Async API
         val bingImages = fetchBingImages(clean, maxImages)
         for (img in bingImages) {
             if (seenUrls.add(img.imageUrl)) {
@@ -321,13 +344,13 @@ open class SearchManager(
     fun fetchBingImages(query: String, limit: Int): List<SearchImage> {
         if (query.isBlank() || limit <= 0) return emptyList()
         return try {
-            val endpoint = URL("https://www.bing.com/images/search?q=" + URLEncoder.encode(query, "UTF-8"))
+            val endpoint = URL("https://www.bing.com/images/async?q=" + URLEncoder.encode(query, "UTF-8") + "&first=0&count=25&mmasync=1")
             val conn = (endpoint.openConnection() as HttpURLConnection).apply {
                 connectTimeout = SearchConfig.IMAGE_CONNECT_TIMEOUT_MS
                 readTimeout = SearchConfig.IMAGE_READ_TIMEOUT_MS
                 requestMethod = "GET"
                 setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-                setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                setRequestProperty("Accept", "*/*")
                 setRequestProperty("Accept-Language", "en-US,en;q=0.9")
             }
 

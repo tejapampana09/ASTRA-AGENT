@@ -115,6 +115,12 @@ class GemmaEngine(
                 return@withContext Result.success(activeBackend)
             }
 
+            // Lower thread priority to background so that reading 2.58 GB weights and shader compilation
+            // does NOT starve the Android Main/RenderThread, preventing system UI hangs and stutters.
+            try {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            } catch (_: Throwable) {}
+
             val file = File(modelPath)
             if (!file.exists() || file.length() == 0L) {
                 val errorMsg = "Gemma model is not installed at: $modelPath"
@@ -134,7 +140,12 @@ class GemmaEngine(
             _engineState.value = EngineState.Loading("Initializing model on GPU...")
             Log.i(TAG, "[$TAG] Trying GPU backend from $modelPath (${file.length()} bytes)...")
 
+            // Brief yield so the UI Composables can render the loading state smoothly
+            kotlinx.coroutines.delay(100)
+            kotlinx.coroutines.yield()
+
             val effectiveCacheDir = cacheDirPath ?: File(File(modelPath).parentFile ?: File("."), "litert_cache").apply { mkdirs() }.absolutePath
+            File(effectiveCacheDir).mkdirs()
             var loadedEngine: Engine? = null
             var backendChosen = BackendType.GPU
             var lastGpuError: String? = null
