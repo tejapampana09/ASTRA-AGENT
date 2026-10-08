@@ -286,7 +286,7 @@ fun ChatScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let {
-            scope.launch {
+            scope.launch(Dispatchers.IO) {
                 isOcrProcessing = true
                 try {
                     val mime = context.contentResolver.getType(it) ?: ""
@@ -299,9 +299,13 @@ fun ChatScreen(
                     }
                     viewModel.attachDocument(doc)
                     val info = if (doc.isImage) "" else " (${doc.wordCount} words)"
-                    Toast.makeText(context, "Attached ${doc.fileName}$info", Toast.LENGTH_SHORT).show()
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Attached ${doc.fileName}$info", Toast.LENGTH_SHORT).show()
+                    }
                 } catch (e: Exception) {
-                    Toast.makeText(context, "Error reading file: ${e.message}", Toast.LENGTH_LONG).show()
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Error reading file: ${e.message}", Toast.LENGTH_LONG).show()
+                    }
                 } finally {
                     isOcrProcessing = false
                 }

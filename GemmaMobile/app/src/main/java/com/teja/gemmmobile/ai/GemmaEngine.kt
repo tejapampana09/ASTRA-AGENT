@@ -154,14 +154,14 @@ class GemmaEngine(
 
             if (preferCpu) {
                 // Initialize directly on CPU: Smooth, responsive, zero GPU lockups, zero phone freezing!
-                // Try GPU vision first (Google recommended: fast image processing even with CPU text)
+                // Uses CPU vision with 2 threads to leave UI/SurfaceFlinger cores free
                 var cpuEngineLoaded = false
                 try {
-                    Log.d(TAG, "[$TAG] Initializing CPU model with GPU vision backend and 2048 token budget...")
+                    Log.d(TAG, "[$TAG] Initializing CPU model with CPU vision backend (2 threads) and 2048 token budget...")
                     val config = EngineConfig(
                         modelPath = modelPath,
                         backend = Backend.CPU(threadCount = 4),
-                        visionBackend = Backend.GPU(),
+                        visionBackend = Backend.CPU(threadCount = 2),
                         maxNumTokens = 2048,
                         maxNumImages = 1,
                         cacheDir = effectiveCacheDir
@@ -171,20 +171,20 @@ class GemmaEngine(
                     loadedEngine = testEngine
                     backendChosen = BackendType.CPU
                     cpuEngineLoaded = true
-                    Log.i(TAG, "[$TAG] Model loaded successfully on CPU with GPU vision backend")
-                } catch (gpuVisionErr: Throwable) {
+                    Log.i(TAG, "[$TAG] Model loaded successfully on CPU with CPU vision backend")
+                } catch (cpuVisionErr: Throwable) {
                     try { testEngine?.close() } catch (_: Throwable) {}
                     testEngine = null
-                    Log.w(TAG, "[$TAG] GPU vision failed: ${gpuVisionErr.message}. Trying CPU vision backend...")
+                    Log.w(TAG, "[$TAG] CPU vision (2 threads) failed: ${cpuVisionErr.message}. Trying GPU vision backend...")
                 }
 
                 if (!cpuEngineLoaded) {
                     try {
-                        Log.d(TAG, "[$TAG] Initializing CPU model with CPU vision backend...")
+                        Log.d(TAG, "[$TAG] Initializing CPU model with GPU vision backend...")
                         val config = EngineConfig(
                             modelPath = modelPath,
                             backend = Backend.CPU(threadCount = 4),
-                            visionBackend = Backend.CPU(threadCount = 4),
+                            visionBackend = Backend.GPU(),
                             maxNumTokens = 2048,
                             maxNumImages = 1,
                             cacheDir = effectiveCacheDir
@@ -194,11 +194,11 @@ class GemmaEngine(
                         loadedEngine = testEngine
                         backendChosen = BackendType.CPU
                         cpuEngineLoaded = true
-                        Log.i(TAG, "[$TAG] Model loaded successfully on CPU with CPU vision backend")
-                    } catch (cpuVisionErr: Throwable) {
+                        Log.i(TAG, "[$TAG] Model loaded successfully on CPU with GPU vision backend")
+                    } catch (gpuVisionErr: Throwable) {
                         try { testEngine?.close() } catch (_: Throwable) {}
                         testEngine = null
-                        Log.w(TAG, "[$TAG] CPU vision failed: ${cpuVisionErr.message}. Trying text-only fallback...")
+                        Log.w(TAG, "[$TAG] GPU vision failed: ${gpuVisionErr.message}. Trying text-only fallback...")
                     }
                 }
 
@@ -327,6 +327,11 @@ data class EngineChunk(
         enableThinkingOverride: Boolean? = null
     ): Flow<EngineChunk> = flow {
         if (prompt.isBlank() && imageBytes == null) return@flow
+
+        // Ensure generation threads run with background priority so Android UI / SurfaceFlinger never lags or freezes
+        try {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+        } catch (_: Throwable) {}
 
         val eng = engine
         check(eng != null && eng.isInitialized()) { "Model is not initialized. Please install model first." }

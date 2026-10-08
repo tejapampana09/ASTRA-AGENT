@@ -40,15 +40,8 @@ object DocumentOcrHelper {
 
     suspend fun processImageUri(context: Context, uri: Uri): ExtractedDocument = withContext(Dispatchers.IO) {
         val fileName = getFileName(context, uri) ?: "Image.jpg"
-        val rawBytes = try {
-            context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-        } catch (_: Exception) { null }
-
-        // Automatically compress & scale for lightweight memory and disk footprint
-        val bytes = rawBytes?.let { com.teja.gemmmobile.storage.StorageManagerHelper.compressForVision(it) } ?: rawBytes
-        val bitmap = if (bytes != null) {
-            try { android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size) } catch (_: Exception) { null }
-        } else null
+        // Uses fast inSampleSize decode: 0 memory spike even for 50MP camera photos
+        val (bitmap, bytes) = com.teja.gemmmobile.storage.StorageManagerHelper.decodeSampledFromUri(context, uri, 768)
 
         ExtractedDocument(
             fileName = fileName,
@@ -62,7 +55,7 @@ object DocumentOcrHelper {
     }
 
     suspend fun processImageBitmap(bitmap: Bitmap, name: String = "Photo"): ExtractedDocument = withContext(Dispatchers.IO) {
-        val scaled = com.teja.gemmmobile.storage.StorageManagerHelper.scaleBitmapDown(bitmap, 1024)
+        val scaled = com.teja.gemmmobile.storage.StorageManagerHelper.scaleBitmapDown(bitmap, 768)
         val stream = java.io.ByteArrayOutputStream()
         scaled.compress(Bitmap.CompressFormat.JPEG, 80, stream)
         val bytes = stream.toByteArray()

@@ -38,6 +38,56 @@ object StorageManagerHelper {
     }
 
     /**
+     * Efficiently decodes and downsamples an image directly from a URI using inSampleSize.
+     * Prevents loading multi-megapixel (e.g. 50MP) bitmaps into memory:
+     * - Pass 1: decodes bounds only (0 memory used)
+     * - Pass 2: decodes downsampled image directly to maxDimension (takes <2MB of RAM)
+     * Returns downscaled preview Bitmap and lightweight JPEG bytes.
+     */
+    fun decodeSampledFromUri(
+        context: Context,
+        uri: android.net.Uri,
+        maxDimension: Int = 768
+    ): Pair<Bitmap?, ByteArray?> {
+        return try {
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, options)
+            }
+            val origWidth = options.outWidth
+            val origHeight = options.outHeight
+            if (origWidth <= 0 || origHeight <= 0) return Pair(null, null)
+
+            var inSampleSize = 1
+            var maxDim = maxOf(origWidth, origHeight)
+            while (maxDim > maxDimension * 1.5) {
+                inSampleSize *= 2
+                maxDim /= 2
+            }
+
+            options.inJustDecodeBounds = false
+            options.inSampleSize = inSampleSize
+            options.inPreferredConfig = Bitmap.Config.ARGB_8888
+            val sampledBitmap = context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, options)
+            } ?: return Pair(null, null)
+
+            val finalBitmap = scaleBitmapDown(sampledBitmap, maxDimension)
+            if (finalBitmap != sampledBitmap) {
+                try { sampledBitmap.recycle() } catch (_: Throwable) {}
+            }
+
+            val stream = ByteArrayOutputStream()
+            finalBitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, stream)
+            val bytes = stream.toByteArray()
+            Pair(finalBitmap, bytes)
+        } catch (e: Exception) {
+            Log.e(TAG, "[$TAG] Error decoding sampled bitmap from URI", e)
+            Pair(null, null)
+        }
+    }
+
+    /**
      * Synchronous version of compressAndSaveImage for direct non-suspend calls.
      */
     fun compressAndSaveImageSync(
@@ -50,14 +100,14 @@ object StorageManagerHelper {
             val dir = File(context.filesDir, "chat_images").apply { mkdirs() }
             val targetFile = File(dir, "${messageId}.jpg")
 
-            val sourceBitmap = previewBitmap ?: rawBytes?.let { bytes ->
-                try {
-                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                } catch (e: Exception) {
-                    null
-                }
-            } ?: return null
+            // Fast path: if we already have compressed JPEG bytes, write them directly to file (0.5ms)
+            if (rawBytes != null && rawBytes.isNotEmpty()) {
+                targetFile.writeBytes(rawBytes)
+                Log.d(TAG, "[$TAG] Saved image directly from bytes to ${targetFile.absolutePath} (${targetFile.length() / 1024} KB)")
+                return targetFile.absolutePath
+            }
 
+            val sourceBitmap = previewBitmap ?: return null
             val scaledBitmap = scaleBitmapDown(sourceBitmap, MAX_IMAGE_DIMENSION)
             FileOutputStream(targetFile).use { outStream ->
                 scaledBitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, outStream)
@@ -78,7 +128,7 @@ object StorageManagerHelper {
     /**
      * Downscales image bytes into standard-dimension JPEG bytes for optimal LiteRT vision encoding.
      */
-    fun compressForVision(rawBytes: ByteArray?, maxDimension: Int = MAX_IMAGE_DIMENSION): ByteArray? {
+    fun compressForVision(rawBytes: ByteArray?, maxDimension: Int = 768): ByteArray? {
         if (rawBytes == null || rawBytes.isEmpty()) return null
         return try {
             val bitmap = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size) ?: return rawBytes
