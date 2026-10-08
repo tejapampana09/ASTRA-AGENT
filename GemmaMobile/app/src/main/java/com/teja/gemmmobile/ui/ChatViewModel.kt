@@ -25,6 +25,8 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 import com.teja.gemmmobile.memory.MemoryItem
 import com.teja.gemmmobile.memory.MemoryManager
+import com.teja.gemmmobile.memory.AutonomousBrainMemoryHelper
+import com.teja.gemmmobile.memory.MemoryBrainAction
 import com.teja.gemmmobile.search.SearchResult
 import com.teja.gemmmobile.search.SearchImage
 import com.teja.gemmmobile.search.WebSearchClient
@@ -90,6 +92,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val currentSessionId: StateFlow<String> = _currentSessionId.asStateFlow()
 
     val memories: StateFlow<List<MemoryItem>> = memoryManager.memories
+
+    private val _memoryUpdatedEvent = MutableStateFlow<String?>(null)
+    val memoryUpdatedEvent: StateFlow<String?> = _memoryUpdatedEvent.asStateFlow()
 
     private val _inputText = MutableStateFlow("")
     val inputText: StateFlow<String> = _inputText.asStateFlow()
@@ -353,6 +358,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun clearMemoryUpdatedEvent() {
+        _memoryUpdatedEvent.value = null
+    }
+
     fun toggleWebSearch() {
         _isWebSearchEnabled.value = !_isWebSearchEnabled.value
     }
@@ -389,6 +398,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun shouldAutoSearch(prompt: String): Boolean {
         val p = prompt.lowercase().trim()
 
+        // Documents, PDFs, and uploaded files must NEVER trigger web search
+        if (p.contains("pdf") || p.contains("document") || p.contains("this file") || p.contains("my file") || p.contains("my notes") || p.contains("in the notes")) {
+            return false
+        }
+
         // 1. Explicit search command from user
         if (p.startsWith("search ") || p.startsWith("web search ") || p.startsWith("browse ") ||
             p.contains("search web") || p.contains("search the web") || p.contains("search for ") ||
@@ -402,20 +416,33 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             "live score", "match score", "weather", "forecast", "live update", "election",
             "release date", "who is ", "who was ", "when is ", "where is ", "how much is ",
             "cutoff", "results", "winner", "prime minister", "president", "ceo of",
-            "gurinchi", "varthalu", "eeroju", "ippudu", "photos of", "images of", "diagram of"
+            "varthalu", "eeroju", "ippudu"
         )
         return realTimeKeywords.any { keyword -> p.contains(keyword) }
     }
 
     fun shouldQueryImages(prompt: String): Boolean {
         val p = prompt.lowercase().trim()
-        val visualKeywords = listOf(
-            "image", "images", "photo", "photos", "picture", "pictures", "pic", "pics",
-            "diagram", "diagrams", "figure", "figures", "chart", "charts", "illustration",
-            "wallpaper", "wallpapers", "look like", "how does it look", "visualize", "visual",
-            "show me", "chupinchu", "chudu", "bomma", "bommalu"
+
+        // Documents, PDFs, and uploaded files must NEVER trigger image search
+        if (p.contains("pdf") || p.contains("document") || p.contains("this file") || p.contains("my file") || p.contains("my notes")) {
+            return false
+        }
+
+        // Whole-word matching only — prevents "topics" matching "pics" or "pic"!
+        val words = p.split(Regex("""[^a-zA-Z0-9]+""")).filter { it.isNotBlank() }.toSet()
+        val singleWordVisual = setOf(
+            "image", "images", "photo", "photos", "picture", "pictures",
+            "pic", "pics", "diagram", "diagrams", "figure", "figures",
+            "chart", "charts", "illustration", "illustrations", "wallpaper", "wallpapers",
+            "bomma", "bommalu"
         )
-        return visualKeywords.any { keyword -> p.contains(keyword) }
+        if (words.any { it in singleWordVisual }) return true
+
+        val visualPhrases = listOf(
+            "look like", "how does it look", "visualize", "show me", "chupinchu", "chudu", "photos of", "images of", "diagram of"
+        )
+        return visualPhrases.any { p.contains(it) }
     }
 
     fun isContinueRequest(prompt: String): Boolean {
@@ -497,12 +524,27 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // Automatic memory detection: if user says "remember that..." or "remember:..."
-        val lowerPrompt = rawInput.lowercase()
-        if (lowerPrompt.startsWith("remember:") || lowerPrompt.startsWith("remember that ") || lowerPrompt.startsWith("remember my ") || lowerPrompt.startsWith("remember ")) {
-            val factToSave = rawInput.substringAfter("remember:").substringAfter("remember that ").substringAfter("remember ").trim()
-            if (factToSave.isNotBlank()) {
-                viewModelScope.launch { memoryManager.addMemory(factToSave) }
+        // Autonomous Brain & Memory Detection (ChatGPT-style auto memory extraction & forget)
+        val memoryAction = AutonomousBrainMemoryHelper.evaluateUserUtterance(rawInput, memoryManager.memories.value)
+        if (memoryAction != null) {
+            when (memoryAction) {
+                is MemoryBrainAction.Add -> {
+                    viewModelScope.launch {
+                        memoryManager.addMemory(memoryAction.fact)
+                        _memoryUpdatedEvent.value = "Memory updated: ${memoryAction.fact}"
+                    }
+                }
+                is MemoryBrainAction.Forget -> {
+                    viewModelScope.launch {
+                        val matching = memoryManager.memories.value.find {
+                            it.fact.contains(memoryAction.keyword, ignoreCase = true)
+                        }
+                        if (matching != null) {
+                            memoryManager.removeMemory(matching.id)
+                            _memoryUpdatedEvent.value = "Memory updated: Forgot '${matching.fact}'"
+                        }
+                    }
+                }
             }
         }
 
@@ -511,10 +553,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val isImage = doc != null && doc.isImage
         val promptForGemma = when {
             isImage -> {
+                val ocrText = doc.text.trim()
+                val ocrContext = if (ocrText.isNotBlank()) {
+                    "\n\n[Extracted Text from Image (OCR)]:\n${ocrText.take(1800)}"
+                } else ""
                 if (rawInput.isBlank()) {
-                    "Examine this image in full detail. Transcribe and extract all visible text, numbers, headings, tables, labels, or data exactly as shown. If tabular data is present, format it into clean Markdown tables with column headers. Answer clearly, accurately, and thoroughly."
+                    "Examine this image in full detail. Transcribe and extract all visible text, numbers, headings, tables, labels, or data exactly as shown. If tabular data is present, format it into clean Markdown tables with column headers. Answer clearly, accurately, and thoroughly.$ocrContext"
                 } else {
-                    rawInput
+                    "$rawInput$ocrContext"
                 }
             }
             doc != null -> {
@@ -534,8 +580,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             else -> rawInput
         }
 
-        val isVisualRequest = shouldQueryImages(rawInput) && !isImage && doc == null
-        val useWebSearch = (_isWebSearchEnabled.value || (shouldAutoSearch(rawInput) && doc == null) || isVisualRequest) && !isImage
+        val isDocument = doc != null && !doc.isImage
+        val isVisualRequest = shouldQueryImages(rawInput) && !isImage && !isDocument
+        val useWebSearch = (_isWebSearchEnabled.value || (shouldAutoSearch(rawInput) && !isDocument) || isVisualRequest) && !isImage && !isDocument
 
         _attachedDocument.value = null
         val userMessageId = UUID.randomUUID().toString()
@@ -587,8 +634,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             assistantMessageId = assistantMessageId,
             eng = eng,
             useWebSearch = useWebSearch,
-            allowFallback = !useWebSearch,
-            imageBytes = imageBytesToSend
+            allowFallback = !useWebSearch && !isDocument,
+            imageBytes = imageBytesToSend,
+            isVisual = isVisualRequest,
+            isDocument = isDocument
         )
     }
 
@@ -601,7 +650,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         eng: GemmaEngine,
         useWebSearch: Boolean,
         allowFallback: Boolean,
-        imageBytes: ByteArray? = null
+        imageBytes: ByteArray? = null,
+        isVisual: Boolean = false,
+        isDocument: Boolean = false
     ) {
         activeGenerationJob?.cancel()
         activeGeneratingSessionId.value = targetSessionId
@@ -622,10 +673,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 var searchContext = ""
                 val cleanQuery = extractSearchQuery(prompt)
 
-                val isVisual = shouldQueryImages(prompt) && imageBytes == null
+                val sessionSnapshot = _sessions.value.find { it.id == targetSessionId }
+                val targetMsgs = sessionSnapshot?.messages ?: _messages.value
+                val hasDocInSession = isDocument || targetMsgs.any { it.text.contains("📄 **[") || it.isImageAnalysis }
 
-                if (useWebSearch || isVisual) {
-                    if (isVisual) {
+                val isVisualQuery = isVisual && imageBytes == null && !isDocument && !hasDocInSession
+                val effectiveUseWebSearch = useWebSearch && !isDocument && !hasDocInSession
+
+                if (effectiveUseWebSearch || isVisualQuery) {
+                    if (isVisualQuery) {
                         val visualSearchQuery = searchManager.cleanVisualQuery(prompt)
 
                         // 1. Direct Visual Media Execution
@@ -691,8 +747,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                 // Retrieve persistent memories and history using ContextManager
                 val memoryContext = memoryManager.getFormattedMemoryPrompt()
-                val sessionSnapshot = _sessions.value.find { it.id == targetSessionId }
-                val targetMsgs = sessionSnapshot?.messages ?: _messages.value
 
                 val baseSystemPrompt = _config.value.systemPrompt.ifBlank { GemmaConfig.DEFAULT_SYSTEM_PROMPT }
                 val effectiveSystemPrompt = if (searchContext.isNotBlank()) {
@@ -727,7 +781,7 @@ You are provided with real-time web search results and extracted webpage content
                 } else {
                     val isContinue = isContinueRequest(prompt)
                     val promptToUse = when {
-                        isVisual -> {
+                        isVisualQuery -> {
                             val visualSubject = searchManager.cleanVisualQuery(prompt).replace(Regex("""\s+diagram""", RegexOption.IGNORE_CASE), "").trim()
                             "Please provide a comprehensive explanation of the architecture, key components, and workflow of $visualSubject in detail. Structure your answer with clear headings and bullet points."
                         }
@@ -746,7 +800,7 @@ You are provided with real-time web search results and extracted webpage content
                     val historyTurns = targetMsgs.filter { it.id != assistantMessageId }.dropLast(1)
                     contextManager.buildPrompt(
                         systemPrompt = "", // Handled natively in ConversationConfig
-                        toolsDocumentation = if (useWebSearch || isVisual) "" else toolRegistry.getToolsDocumentation(),
+                        toolsDocumentation = if (effectiveUseWebSearch || isVisualQuery || isDocument || hasDocInSession || !_isWebSearchEnabled.value) "" else toolRegistry.getToolsDocumentation(),
                         memoryContext = memoryContext,
                         conversationHistory = historyTurns,
                         currentPrompt = promptToUse,
@@ -830,7 +884,8 @@ You are provided with real-time web search results and extracted webpage content
                 val calledToolsHistory = mutableListOf<com.teja.gemmmobile.tools.ToolCallRequest>()
                 var currentSearchImages = emptyList<SearchImage>()
 
-                while (imageBytes == null && currentToolStep < MAX_TOOL_STEPS) {
+                val allowToolCalls = _isWebSearchEnabled.value && !isDocument && !hasDocInSession && imageBytes == null
+                while (allowToolCalls && currentToolStep < MAX_TOOL_STEPS) {
                     var detectedToolCall = toolRegistry.parseToolCall(currentGenerationText) ?: break
 
                     // Duplicate tool-call and infinite loop protection
@@ -1165,6 +1220,7 @@ You are provided with real-time web search results and extracted webpage content
 
         val useSearch = (_isWebSearchEnabled.value || shouldAutoSearch(prompt)) && imageBytesToSend == null
 
+        val isVisual = shouldQueryImages(prompt) && imageBytesToSend == null
         startGeneration(
             targetSessionId = currSessionId,
             prompt = prompt,
@@ -1172,7 +1228,9 @@ You are provided with real-time web search results and extracted webpage content
             eng = eng,
             useWebSearch = useSearch,
             allowFallback = !useSearch,
-            imageBytes = imageBytesToSend
+            imageBytes = imageBytesToSend,
+            isVisual = isVisual,
+            isDocument = false
         )
     }
 
@@ -1210,6 +1268,7 @@ You are provided with real-time web search results and extracted webpage content
         updateSessionMessages(currSessionId) { prefixMessages + updatedUserMsg + newAssistantMessage }
         _isGenerating.value = true
 
+        val isVisual = shouldQueryImages(newText) && imageBytesToSend == null
         startGeneration(
             targetSessionId = currSessionId,
             prompt = newText,
@@ -1217,7 +1276,9 @@ You are provided with real-time web search results and extracted webpage content
             eng = eng,
             useWebSearch = useSearch,
             allowFallback = !useSearch,
-            imageBytes = imageBytesToSend
+            imageBytes = imageBytesToSend,
+            isVisual = isVisual,
+            isDocument = false
         )
     }
 

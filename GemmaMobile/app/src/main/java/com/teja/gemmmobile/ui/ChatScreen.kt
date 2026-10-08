@@ -205,6 +205,7 @@ fun ChatScreen(
     val errorMessage by viewModel.errorMessage.collectAsState()
     val config by viewModel.config.collectAsState()
     val memories by viewModel.memories.collectAsState()
+    val memoryUpdatedEvent by viewModel.memoryUpdatedEvent.collectAsState()
     val isWebSearchEnabled by viewModel.isWebSearchEnabled.collectAsState()
 
     var showSettingsPage by remember { mutableStateOf(false) }
@@ -247,6 +248,13 @@ fun ChatScreen(
     LaunchedEffect(Unit) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
             contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+        }
+    }
+
+    LaunchedEffect(memoryUpdatedEvent) {
+        if (memoryUpdatedEvent != null) {
+            kotlinx.coroutines.delay(3500L)
+            viewModel.clearMemoryUpdatedEvent()
         }
     }
 
@@ -500,6 +508,9 @@ fun ChatScreen(
         SettingsScreen(
             currentConfig = config,
             isWebSearchEnabled = isWebSearchEnabled,
+            memories = memories,
+            onDeleteMemory = { viewModel.removeMemory(it) },
+            onClearAllMemories = { viewModel.clearMemories() },
             onToggleWebSearch = { viewModel.toggleWebSearch() },
             onApplyConfig = { newConfig ->
                 viewModel.updateConfig(newConfig)
@@ -1328,6 +1339,53 @@ fun ChatScreen(
                                                 }
                                         )
                                     }
+                                }
+                            }
+                        }
+
+                        // Floating ChatGPT style Memory Updated Notification
+                        AnimatedVisibility(
+                            visible = memoryUpdatedEvent != null,
+                            enter = fadeIn() + slideInVertically { it / 2 },
+                            exit = fadeOut() + slideOutVertically { it / 2 },
+                            modifier = Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .padding(bottom = 6.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(20.dp),
+                                color = Color(0xFF1E1E1E),
+                                border = BorderStroke(1.dp, Color(0xFF333333)),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .clickable { showMemoryDialog = true }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "🧠",
+                                        fontSize = 13.sp
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = memoryUpdatedEvent ?: "Memory updated",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = Color(0xFFECECEC),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Dismiss memory notification",
+                                        tint = Color(0xFF8E8E93),
+                                        modifier = Modifier
+                                            .size(13.dp)
+                                            .clickable { viewModel.clearMemoryUpdatedEvent() }
+                                    )
                                 }
                             }
                         }

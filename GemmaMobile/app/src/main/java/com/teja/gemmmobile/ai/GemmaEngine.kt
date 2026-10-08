@@ -311,6 +311,7 @@ data class EngineChunk(
         try {
             var attempt = 0
             var succeeded = false
+            var currentImageBytes = imageBytes
             while (attempt < 2 && !succeeded) {
                 attempt++
                 try {
@@ -332,16 +333,23 @@ data class EngineChunk(
                         cur
                     }
 
-                    val messageFlow = if (imageBytes != null && imageBytes.isNotEmpty()) {
-                        val contents = Contents.of(
-                            Content.ImageBytes(imageBytes),
-                            Content.Text(prompt)
-                        )
-                        targetConv.sendMessageAsync(contents = contents, thinkingConfig = thinkingConfig)
+                    val messageFlow = if (currentImageBytes != null && currentImageBytes.isNotEmpty()) {
+                        try {
+                            val contents = Contents.of(
+                                Content.ImageBytes(currentImageBytes),
+                                Content.Text(prompt)
+                            )
+                            targetConv.sendMessageAsync(contents = contents, thinkingConfig = thinkingConfig)
+                        } catch (e: Throwable) {
+                            Log.w(TAG, "[$TAG] Model does not accept image bytes, falling back to text prompt: ${e.message}")
+                            currentImageBytes = null
+                            targetConv.sendMessageAsync(text = prompt, thinkingConfig = thinkingConfig)
+                        }
                     } else {
                         targetConv.sendMessageAsync(text = prompt, thinkingConfig = thinkingConfig)
                     }
 
+                    var emittedAny = false
                     messageFlow.collect { message: Message ->
                         val thoughtChannel = message.channels["thought"]
                             ?: message.channels["thinking"]
@@ -349,9 +357,17 @@ data class EngineChunk(
                         val textContent = message.toString()
 
                         if (thoughtChannel.isNotEmpty() || textContent.isNotEmpty()) {
+                            emittedAny = true
                             emit(EngineChunk(text = textContent, thought = thoughtChannel))
                         }
                     }
+
+                    if (!emittedAny && currentImageBytes != null) {
+                        Log.w(TAG, "[$TAG] Vision input yielded 0 tokens, retrying as text prompt...")
+                        currentImageBytes = null
+                        continue
+                    }
+
                     succeeded = true
                     Log.d(TAG, "[$TAG] Generation complete")
                 } catch (e: Throwable) {
@@ -366,6 +382,11 @@ data class EngineChunk(
                         Log.i(TAG, "[$TAG] Reached KV cache capacity limit cleanly. Finalizing generated response without error.")
                         succeeded = true
                         break
+                    }
+                    if (currentImageBytes != null && attempt < 2) {
+                        Log.w(TAG, "[$TAG] Vision generation failed ($errStr), retrying attempt $attempt with text prompt.")
+                        currentImageBytes = null
+                        continue
                     }
                     Log.e(TAG, "[$TAG] Generation failure", e)
                     throw e

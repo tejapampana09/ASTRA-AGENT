@@ -32,12 +32,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
+import com.teja.gemmmobile.memory.MemoryItem
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -90,6 +92,9 @@ import com.teja.gemmmobile.ai.GemmaConfig
 fun SettingsScreen(
     currentConfig: GemmaConfig,
     isWebSearchEnabled: Boolean,
+    memories: List<MemoryItem> = emptyList(),
+    onDeleteMemory: (String) -> Unit = {},
+    onClearAllMemories: () -> Unit = {},
     onToggleWebSearch: () -> Unit,
     onApplyConfig: (GemmaConfig) -> Unit,
     onResetDefaults: () -> Unit,
@@ -630,6 +635,124 @@ fun SettingsScreen(
                 }
 
 
+
+                // SECTION 6.5: Personal Brain & Memory (ChatGPT Style)
+                item {
+                    SettingsSectionHeader(
+                        icon = Icons.Default.Psychology,
+                        title = "Personal Brain & Memory (ChatGPT Style)"
+                    )
+                }
+
+                item {
+                    SettingsCard {
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Autonomous Memory",
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 14.sp,
+                                        color = Color.White
+                                    )
+                                    Text(
+                                        text = "ASTRA automatically learns facts & preferences from your chat and applies them across all conversations.",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF8E8E93)
+                                    )
+                                }
+                                SettingsBadge(text = "${memories.size} Saved")
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+                            SettingsDivider()
+
+                            if (memories.isEmpty()) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0xFF1C1C1E),
+                                    border = BorderStroke(1.dp, Color(0xFF2C2C2E)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 6.dp)
+                                ) {
+                                    Text(
+                                        text = "No memories stored yet. Talk naturally with ASTRA (e.g., \"My name is Teja\", \"I live in Hyderabad\", \"Naaku Kotlin ishtam\") and it will automatically remember!",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF8E8E93),
+                                        modifier = Modifier.padding(12.dp)
+                                    )
+                                }
+                            } else {
+                                Column(
+                                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.padding(vertical = 4.dp)
+                                ) {
+                                    memories.forEach { item ->
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = Color(0xFF1E1E1E),
+                                            border = BorderStroke(0.5.dp, Color(0xFF2E2E2E)),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Text(
+                                                    text = "• ${item.fact}",
+                                                    fontSize = 12.sp,
+                                                    color = Color(0xFFECECEC),
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                                IconButton(
+                                                    onClick = {
+                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                        onDeleteMemory(item.id)
+                                                    },
+                                                    modifier = Modifier.size(28.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Delete,
+                                                        contentDescription = "Delete memory",
+                                                        tint = Color(0xFFFF5252),
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End
+                                    ) {
+                                        Text(
+                                            text = "Clear All Memories",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color(0xFFFF5252),
+                                            modifier = Modifier
+                                                .clickable {
+                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                    onClearAllMemories()
+                                                }
+                                                .padding(vertical = 4.dp, horizontal = 6.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // SECTION 7: Hardware & Engine Telemetry
                 item {

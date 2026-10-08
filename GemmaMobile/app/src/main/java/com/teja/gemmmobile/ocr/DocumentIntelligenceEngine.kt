@@ -138,25 +138,26 @@ object DocumentIntelligenceEngine {
                 }
 
                 val prompt = buildString {
-                    appendLine("You are an expert document analyzer. Below are the structural headings and table of contents extracted from the document \"${doc.fileName}\" (${doc.pageCount} Pages).")
+                    appendLine("Document: \"${doc.fileName}\" (${doc.pageCount} Pages)")
+                    appendLine("Task: Extract and list all academic/subject topics, chapters, and sections found inside this document.")
+                    appendLine("CRITICAL RULE: Directly present the subject topics from the text. Do NOT discuss software, pipelines, AI, or document analysis architecture.")
                     appendLine()
                     if (headingLines.isNotEmpty()) {
-                        appendLine("### Extracted Headings & Sections:")
+                        appendLine("### Document Headings & Sections:")
                         headingLines.take(30).forEach { appendLine("• $it") }
                         appendLine()
                     }
                     if (indexExcerpts.isNotBlank()) {
-                        appendLine("### Document Opening & Index Pages:")
+                        appendLine("### Document Opening Pages Excerpt:")
                         appendLine(indexExcerpts.take(1200))
                         appendLine()
                     }
-                    appendLine("### User Request:")
-                    appendLine(if (rawUserQuery.isNotBlank()) rawUserQuery else "Please extract and organize all topics, chapters, and sections from this document.")
+                    appendLine("### Request: " + (if (rawUserQuery.isNotBlank()) rawUserQuery else "Extract all topics and sections from this document."))
                     appendLine()
                     appendLine("### Instructions:")
-                    appendLine("1. Present a clear, hierarchically organized Table of Contents / Topic Syllabus.")
-                    appendLine("2. Group related topics into clean bullet points with chapter headings.")
-                    appendLine("3. Include page numbers where visible.")
+                    appendLine("1. Present a clear, hierarchically organized Table of Contents / Topic Syllabus based on the document's content.")
+                    appendLine("2. Group topics under clear section/chapter headers with page citations (e.g. [Page X]).")
+                    appendLine("3. Provide a brief 1-line summary of what each topic covers in the document.")
                     appendLine("4. Conclude by asking which topic the user would like to dive into first.")
                 }.trim()
 
@@ -178,18 +179,20 @@ object DocumentIntelligenceEngine {
                 val allHeadings = pages.flatMap { p -> p.headings.map { "Page ${p.pageNumber}: $it" } }.take(15)
 
                 val prompt = buildString {
-                    appendLine("You are analyzing the document \"${doc.fileName}\" (${doc.pageCount} Pages).")
+                    appendLine("Document: \"${doc.fileName}\" (${doc.pageCount} Pages)")
+                    appendLine("Task: Provide a comprehensive executive summary of this document.")
+                    appendLine("CRITICAL RULE: Directly summarize the subject matter of the document. Do NOT discuss document processing systems, OCR, or analysis pipelines.")
                     appendLine()
-                    appendLine("### Introduction & Overview:")
+                    appendLine("### Introduction Excerpt:")
                     appendLine(introText)
                     appendLine()
                     if (allHeadings.isNotEmpty()) {
-                        appendLine("### Major Topics & Chapters Covered:")
+                        appendLine("### Key Headings Covered:")
                         allHeadings.forEach { appendLine("• $it") }
                         appendLine()
                     }
                     if (conclusionText.isNotBlank()) {
-                        appendLine("### Conclusion & Summary Excerpt:")
+                        appendLine("### Conclusion / Summary Excerpt:")
                         appendLine(conclusionText)
                         appendLine()
                     }
