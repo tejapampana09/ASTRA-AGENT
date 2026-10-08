@@ -980,8 +980,7 @@ fun ChatScreen(
                         modifier = Modifier
                             .size(38.dp)
                             .clip(CircleShape)
-                            .clickable {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            .liquidBounceClick(scaleDown = 0.90f) {
                                 scope.launch { drawerState.open() }
                             }
                     ) {
@@ -1028,8 +1027,7 @@ fun ChatScreen(
                                     modifier = Modifier
                                         .size(34.dp)
                                         .clip(CircleShape)
-                                        .clickable {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        .liquidBounceClick(scaleDown = 0.88f) {
                                             viewModel.createNewChat()
                                         },
                                     contentAlignment = Alignment.Center
@@ -1048,6 +1046,7 @@ fun ChatScreen(
                                         .width(1.dp)
                                         .height(16.dp)
                                         .background(Color(0x33FFFFFF))
+                                        .clip(CircleShape)
                                 )
                                 Spacer(modifier = Modifier.width(2.dp))
 
@@ -1056,8 +1055,7 @@ fun ChatScreen(
                                     modifier = Modifier
                                         .size(34.dp)
                                         .clip(CircleShape)
-                                        .clickable {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        .liquidBounceClick(scaleDown = 0.88f) {
                                             showTopMenu = true
                                         },
                                     contentAlignment = Alignment.Center
@@ -1289,7 +1287,7 @@ fun ChatScreen(
                             border = BorderStroke(1.dp, Color(0xFF333333)),
                             modifier = Modifier
                                 .clip(RoundedCornerShape(20.dp))
-                                .clickable { showMemoryDialog = true }
+                                .liquidBounceClick(scaleDown = 0.94f) { showMemoryDialog = true }
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
@@ -1343,8 +1341,7 @@ fun ChatScreen(
                             modifier = Modifier
                                 .size(36.dp)
                                 .clip(CircleShape)
-                                .clickable {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                .liquidBounceClick(scaleDown = 0.86f) {
                                     scope.launch {
                                         listState.animateScrollToItem(messages.size)
                                     }
@@ -1389,7 +1386,7 @@ fun ChatScreen(
                                         shape = RoundedCornerShape(12.dp),
                                         color = Color(0xFF1E1E24),
                                         border = BorderStroke(1.dp, Color(0xFF33333E)),
-                                        modifier = Modifier.clickable {
+                                        modifier = Modifier.liquidBounceClick(scaleDown = 0.95f) {
                                             if (actionPrompt.isNotBlank()) {
                                                 viewModel.onInputTextChanged(actionPrompt)
                                                 viewModel.sendMessage()
@@ -1849,7 +1846,7 @@ fun RecentChatsDrawer(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
-                            .clickable { onSelectSession(session.id) }
+                            .liquidBounceClick(scaleDown = 0.98f) { onSelectSession(session.id) }
                     ) {
                         Row(
                             modifier = Modifier
@@ -1927,7 +1924,7 @@ fun RecentChatsDrawer(
                 color = Color(0xFFF43F5E),
                 modifier = Modifier
                     .clip(RoundedCornerShape(22.dp))
-                    .clickable { onNewChat() }
+                    .liquidBounceClick(scaleDown = 0.94f) { onNewChat() }
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
@@ -1961,7 +1958,7 @@ fun RecentChatsDrawer(
                     modifier = Modifier
                         .size(36.dp)
                         .clip(CircleShape)
-                        .clickable { onOpenSettings() }
+                        .liquidBounceClick(scaleDown = 0.90f) { onOpenSettings() }
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Text(
@@ -1981,7 +1978,7 @@ fun RecentChatsDrawer(
                     modifier = Modifier
                         .size(36.dp)
                         .clip(CircleShape)
-                        .clickable { onLaunchVoice() }
+                        .liquidBounceClick(scaleDown = 0.90f) { onLaunchVoice() }
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
@@ -2010,7 +2007,7 @@ private fun DrawerShortcutRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
+            .liquidBounceClick(scaleDown = 0.98f, onClick = onClick)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
@@ -2101,7 +2098,7 @@ fun EmptyChatHero(
                 border = BorderStroke(1.dp, Color(0xFF2E2E2E)),
                 modifier = Modifier
                     .clip(RoundedCornerShape(20.dp))
-                    .clickable { onExamineSelected() }
+                    .liquidBounceClick(scaleDown = 0.96f) { onExamineSelected() }
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp),
@@ -2129,7 +2126,7 @@ fun EmptyChatHero(
                 border = BorderStroke(1.dp, Color(0xFF2E2E2E)),
                 modifier = Modifier
                     .clip(RoundedCornerShape(20.dp))
-                    .clickable { onPromptSelected("Explain how quantum computing works with a simple analogy") }
+                    .liquidBounceClick(scaleDown = 0.96f) { onPromptSelected("Explain how quantum computing works with a simple analogy") }
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp),
@@ -2512,16 +2509,18 @@ fun MessageBubble(
                         // Left icons (Copy, Like, Dislike, Speaker, Share, Regenerate)
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             // Copy
-                            IconButton(
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    clipboardManager.setText(AnnotatedString(effectiveText))
-                                    Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
-                                },
-                                modifier = Modifier.size(28.dp)
+                            Box(
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .liquidBounceClick(scaleDown = 0.85f, alphaDown = 0.75f) {
+                                        clipboardManager.setText(AnnotatedString(effectiveText))
+                                        Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+                                    },
+                                contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.ContentCopy,
@@ -2531,12 +2530,14 @@ fun MessageBubble(
                                 )
                             }
                             // Like
-                            IconButton(
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    Toast.makeText(context, "Good response", Toast.LENGTH_SHORT).show()
-                                },
-                                modifier = Modifier.size(28.dp)
+                            Box(
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .liquidBounceClick(scaleDown = 0.85f, alphaDown = 0.75f) {
+                                        Toast.makeText(context, "Good response", Toast.LENGTH_SHORT).show()
+                                    },
+                                contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.ThumbUp,
@@ -2546,12 +2547,14 @@ fun MessageBubble(
                                 )
                             }
                             // Dislike
-                            IconButton(
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    Toast.makeText(context, "Bad response", Toast.LENGTH_SHORT).show()
-                                },
-                                modifier = Modifier.size(28.dp)
+                            Box(
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .liquidBounceClick(scaleDown = 0.85f, alphaDown = 0.75f) {
+                                        Toast.makeText(context, "Bad response", Toast.LENGTH_SHORT).show()
+                                    },
+                                contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.ThumbDown,
@@ -2561,12 +2564,14 @@ fun MessageBubble(
                                 )
                             }
                             // Speak / stop
-                            IconButton(
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onSpeak()
-                                },
-                                modifier = Modifier.size(28.dp)
+                            Box(
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .liquidBounceClick(scaleDown = 0.85f, alphaDown = 0.75f) {
+                                        onSpeak()
+                                    },
+                                contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = if (isSpeaking) Icons.Default.Stop else Icons.Default.VolumeUp,
@@ -2576,12 +2581,14 @@ fun MessageBubble(
                                 )
                             }
                             // Share
-                            IconButton(
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onShare()
-                                },
-                                modifier = Modifier.size(28.dp)
+                            Box(
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .liquidBounceClick(scaleDown = 0.85f, alphaDown = 0.75f) {
+                                        onShare()
+                                    },
+                                contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Share,
@@ -2591,12 +2598,14 @@ fun MessageBubble(
                                 )
                             }
                             // Regenerate
-                            IconButton(
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onRegenerate()
-                                },
-                                modifier = Modifier.size(28.dp)
+                            Box(
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .liquidBounceClick(scaleDown = 0.85f, alphaDown = 0.75f) {
+                                        onRegenerate()
+                                    },
+                                contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Refresh,
@@ -2931,6 +2940,61 @@ fun extractDomain(url: String): String {
     }
 }
 
+/**
+ * iOS-inspired Liquid Spring Touch Feedback modifier.
+ * Provides organic squish-on-press with elastic spring bounce on release,
+ * subtle alpha dip, and crisp tactile haptic feedback (no boxy Android ripple).
+ */
+@Composable
+fun Modifier.liquidBounceClick(
+    enabled: Boolean = true,
+    scaleDown: Float = 0.94f,
+    alphaDown: Float = 0.88f,
+    hapticFeedback: Boolean = true,
+    onClick: () -> Unit
+): Modifier {
+    val haptic = LocalHapticFeedback.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+
+    LaunchedEffect(isPressed) {
+        if (isPressed && enabled && hapticFeedback) {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
+    }
+
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed && enabled) scaleDown else 1f,
+        animationSpec = spring(
+            dampingRatio = if (isPressed) Spring.DampingRatioNoBouncy else 0.65f,
+            stiffness = if (isPressed) Spring.StiffnessHigh else Spring.StiffnessMediumLow
+        ),
+        label = "liquidScale"
+    )
+
+    val alpha by animateFloatAsState(
+        targetValue = if (isPressed && enabled) alphaDown else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "liquidAlpha"
+    )
+
+    return this
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+            this.alpha = alpha
+        }
+        .clickable(
+            interactionSource = interactionSource,
+            indication = null,
+            enabled = enabled,
+            onClick = onClick
+        )
+}
+
 @Composable
 fun ChatGptSurfaceButton(
     onClick: () -> Unit,
@@ -2942,27 +3006,15 @@ fun ChatGptSurfaceButton(
     shadowElevation: androidx.compose.ui.unit.Dp = 0.dp,
     content: @Composable () -> Unit
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.92f else 1f,
-        animationSpec = tween(durationMillis = 80),
-        label = "pressScale"
-    )
-
     Box(
         modifier = modifier
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            }
             .clip(shape)
             .background(color)
             .then(if (border != null) Modifier.border(border, shape) else Modifier)
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
+            .liquidBounceClick(
                 enabled = enabled,
+                scaleDown = 0.92f,
+                alphaDown = 0.88f,
                 onClick = onClick
             ),
         contentAlignment = Alignment.Center
@@ -3492,7 +3544,7 @@ fun ChatGptSourcesPill(
         border = BorderStroke(1.dp, Color(0xFF2E2E2E)),
         modifier = Modifier
             .clip(RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick)
+            .liquidBounceClick(scaleDown = 0.94f, onClick = onClick)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -3570,7 +3622,7 @@ fun SearchImageThumbnail(
             .width(230.dp)
             .height(150.dp)
             .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
+            .liquidBounceClick(scaleDown = 0.95f, onClick = onClick)
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             if (thumbBitmap != null) {
@@ -4052,7 +4104,7 @@ fun ChatInputBar(
     val cornerRadius by animateDpAsState(
         targetValue = if (isMultiLine) 20.dp else 28.dp,
         animationSpec = spring(
-            dampingRatio = Spring.DampingRatioNoBouncy,
+            dampingRatio = 0.75f,
             stiffness = Spring.StiffnessMedium
         ),
         label = "inputCornerRadius"
@@ -4064,8 +4116,8 @@ fun ChatInputBar(
     val widthFraction by animateFloatAsState(
         targetValue = if (isExpanded) 1f else 0.80f,
         animationSpec = spring(
-            dampingRatio = 0.82f,
-            stiffness = Spring.StiffnessMedium
+            dampingRatio = 0.72f,
+            stiffness = Spring.StiffnessMediumLow
         ),
         label = "inputWidthFraction"
     )
@@ -4073,8 +4125,8 @@ fun ChatInputBar(
     val horizontalPadding by animateDpAsState(
         targetValue = if (isExpanded) 10.dp else 14.dp,
         animationSpec = spring(
-            dampingRatio = 0.82f,
-            stiffness = Spring.StiffnessMedium
+            dampingRatio = 0.72f,
+            stiffness = Spring.StiffnessMediumLow
         ),
         label = "inputHorizontalPadding"
     )
@@ -4082,8 +4134,8 @@ fun ChatInputBar(
     val bottomPadding by animateDpAsState(
         targetValue = if (isExpanded) 2.dp else 4.dp,
         animationSpec = spring(
-            dampingRatio = 0.82f,
-            stiffness = Spring.StiffnessMedium
+            dampingRatio = 0.72f,
+            stiffness = Spring.StiffnessMediumLow
         ),
         label = "inputBottomPadding"
     )
@@ -4418,7 +4470,7 @@ fun FloatingMenuItem(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
+            .liquidBounceClick(scaleDown = 0.97f, onClick = onClick)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -4454,7 +4506,7 @@ fun FloatingMenuItemWithToggle(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onToggle)
+            .liquidBounceClick(scaleDown = 0.98f, onClick = onToggle)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
