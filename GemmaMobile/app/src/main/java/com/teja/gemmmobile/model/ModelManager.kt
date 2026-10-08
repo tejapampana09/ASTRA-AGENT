@@ -77,15 +77,27 @@ class ModelManager(private val context: Context) {
             com.teja.gemmmobile.ai.PreferredBackend.CPU
         }
 
+        val savedPrompt = prefs.getString("config_system_prompt", null)
+        val effectivePrompt = if (savedPrompt.isNullOrBlank() ||
+            savedPrompt.contains("CONVERSATIONAL RESPONSE STYLE") ||
+            savedPrompt.contains("LANGUAGE RULE (CRITICAL)")
+        ) {
+            GemmaConfig.DEFAULT_SYSTEM_PROMPT
+        } else {
+            savedPrompt
+        }
+
+        val savedTokens = prefs.getInt("config_tokens", GemmaConfig.DEFAULT.maxTokens)
+        val effectiveTokens = if (savedTokens < 1200) 1200 else savedTokens
+
         return GemmaConfig(
             temperature = prefs.getFloat("config_temp", 0.65f),
-            maxTokens = prefs.getInt("config_tokens", 1024),
+            maxTokens = effectiveTokens,
             topP = prefs.getFloat("config_topp", 0.90f),
             topK = prefs.getInt("config_topk", 40),
             enableThinking = prefs.getBoolean("config_thinking", false),
             thinkingBudget = prefs.getInt("config_thinking_budget", 0),
-            systemPrompt = prefs.getString("config_system_prompt", GemmaConfig.DEFAULT_SYSTEM_PROMPT)
-                ?: GemmaConfig.DEFAULT_SYSTEM_PROMPT,
+            systemPrompt = effectivePrompt,
             preferredBackend = preferred
         )
     }
