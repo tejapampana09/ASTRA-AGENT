@@ -518,15 +518,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             doc != null -> {
-                val userQuery = if (rawInput.isBlank()) "Please analyze, summarize, and highlight the key points of this document." else rawInput
-                """
-                [Attached Document: ${doc.fileName}]
-                Extracted Content:
-                ${doc.text}
-
-                User Request:
-                $userQuery
-                """.trimIndent()
+                val promptResult = com.teja.gemmmobile.ocr.DocumentIntelligenceEngine.buildDocumentPrompt(doc, rawInput)
+                promptResult.promptForModel
             }
             else -> rawInput
         }
@@ -534,13 +527,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val userBubbleText = when {
             isImage -> rawInput.trim() // Clean: NO forced predefined text in user chat bubble!
             doc != null -> {
-                if (rawInput.isNotBlank()) "📄 **[${doc.fileName}]**\n\n$rawInput" else "📄 **[${doc.fileName}]**"
+                val pageInfo = if (doc.pageCount > 1) " (${doc.pageCount} Pages)" else ""
+                val cleanUserPrompt = if (rawInput.isNotBlank()) rawInput.trim() else "📄 Summarize document"
+                "📄 **[${doc.fileName}]**$pageInfo\n\n$cleanUserPrompt"
             }
             else -> rawInput
         }
 
-        val isVisualRequest = shouldQueryImages(rawInput) && !isImage
-        val useWebSearch = (_isWebSearchEnabled.value || shouldAutoSearch(rawInput) || isVisualRequest) && !isImage
+        val isVisualRequest = shouldQueryImages(rawInput) && !isImage && doc == null
+        val useWebSearch = (_isWebSearchEnabled.value || (shouldAutoSearch(rawInput) && doc == null) || isVisualRequest) && !isImage
 
         _attachedDocument.value = null
         val userMessageId = UUID.randomUUID().toString()

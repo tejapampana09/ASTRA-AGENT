@@ -1227,13 +1227,13 @@ fun ChatScreen(
                                                 modifier = Modifier.size(16.dp)
                                             )
                                             Text(
-                                                text = doc.fileName,
+                                                text = if (doc.pageCount > 1) "${doc.fileName} (${doc.pageCount}p)" else doc.fileName,
                                                 style = MaterialTheme.typography.labelMedium,
                                                 fontWeight = FontWeight.Medium,
                                                 color = Color.White,
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis,
-                                                modifier = Modifier.widthIn(max = 200.dp)
+                                                modifier = Modifier.widthIn(max = 220.dp)
                                             )
                                             Icon(
                                                 imageVector = Icons.Default.Close,
@@ -1243,6 +1243,41 @@ fun ChatScreen(
                                                     .size(16.dp)
                                                     .clip(CircleShape)
                                                     .clickable { viewModel.clearAttachedDocument() }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (!doc.isImage) {
+                                androidx.compose.foundation.lazy.LazyRow(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = 16.dp, end = 16.dp, bottom = 4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    val docChips = listOf(
+                                        "📑 Summarize document",
+                                        "📚 Extract all topics",
+                                        "🎯 Key takeaways",
+                                        "❓ What is this about?"
+                                    )
+                                    items(docChips) { chip ->
+                                        Surface(
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = Color(0xFF1E1E1E),
+                                            border = BorderStroke(1.dp, Color(0xFF333333)),
+                                            modifier = Modifier.clickable {
+                                                val cleanQuery = chip.substring(2).trim()
+                                                viewModel.onInputTextChanged(cleanQuery)
+                                                viewModel.sendMessage()
+                                            }
+                                        ) {
+                                            Text(
+                                                text = chip,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = Color(0xFFD1D1D1),
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                                             )
                                         }
                                     }

@@ -12,6 +12,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
+data class DocumentPage(
+    val pageNumber: Int,
+    val text: String,
+    val headings: List<String> = emptyList()
+)
+
 data class ExtractedDocument(
     val fileName: String,
     val text: String,
@@ -19,7 +25,9 @@ data class ExtractedDocument(
     val previewBitmap: Bitmap? = null,
     val isImage: Boolean = false,
     val imageUri: android.net.Uri? = null,
-    val imageBytes: ByteArray? = null
+    val imageBytes: ByteArray? = null,
+    val pageCount: Int = 1,
+    val pages: List<DocumentPage> = emptyList()
 )
 
 object DocumentOcrHelper {
@@ -60,10 +68,11 @@ object DocumentOcrHelper {
         ExtractedDocument(name, text, words, previewBitmap = bitmap)
     }
 
-    suspend fun processPdfUri(context: Context, uri: Uri, maxPages: Int = 10): ExtractedDocument = withContext(Dispatchers.IO) {
+    suspend fun processPdfUri(context: Context, uri: Uri, maxPages: Int = 30): ExtractedDocument = withContext(Dispatchers.IO) {
         val fileName = getFileName(context, uri) ?: "Document.pdf"
         val sb = StringBuilder()
         var firstPageBitmap: Bitmap? = null
+        val pagesList = mutableListOf<DocumentPage>()
 
         val pfd = context.contentResolver.openFileDescriptor(uri, "r")
         if (pfd != null) {
@@ -72,13 +81,11 @@ object DocumentOcrHelper {
                     val totalPages = minOf(renderer.pageCount, maxPages)
                     for (i in 0 until totalPages) {
                         renderer.openPage(i).use { page ->
-                            // Scale 2x for crisp OCR readability
                             val scale = 2
                             val width = page.width * scale
                             val height = page.height * scale
                             val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
                             
-                            // Fill background with white before rendering
                             val canvas = android.graphics.Canvas(bitmap)
                             canvas.drawColor(android.graphics.Color.WHITE)
 
@@ -97,6 +104,9 @@ object DocumentOcrHelper {
                                     sb.append("--- Page ${i + 1} ---\n")
                                 }
                                 sb.append(pageContent).append("\n\n")
+
+                                val headings = DocumentIntelligenceEngine.extractHeadings(pageContent)
+                                pagesList.add(DocumentPage(pageNumber = i + 1, text = pageContent, headings = headings))
                             }
                         }
                     }
@@ -106,7 +116,14 @@ object DocumentOcrHelper {
 
         val text = sb.toString().trim()
         val words = if (text.isBlank()) 0 else text.split(Regex("""\s+""")).size
-        ExtractedDocument(fileName, text, words, previewBitmap = firstPageBitmap)
+        ExtractedDocument(
+            fileName = fileName,
+            text = text,
+            wordCount = words,
+            previewBitmap = firstPageBitmap,
+            pageCount = if (pagesList.isNotEmpty()) pagesList.size else 1,
+            pages = pagesList
+        )
     }
 
     suspend fun processTextUri(context: Context, uri: Uri): ExtractedDocument = withContext(Dispatchers.IO) {
