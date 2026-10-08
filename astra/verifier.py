@@ -153,6 +153,10 @@ class IndependentVerifier:
             should_run_tests = True
         elif any("test" in f.name.lower() or "tests" in str(f).lower() for f in resolved_files):
             should_run_tests = True
+        elif (self.workspace_path / "tests").is_dir():
+            should_run_tests = True
+        elif any(self.workspace_path.glob("**/test_*.py")):
+            should_run_tests = True
 
         test_summary = ""
         if should_run_tests:

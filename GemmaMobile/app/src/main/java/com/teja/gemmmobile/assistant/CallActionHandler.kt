@@ -14,12 +14,13 @@ data class CallAction(
     val recipientName: String,
     val matchedNumber: String? = null,
     val candidateContacts: List<ContactMatch> = emptyList(),
-    val status: CallStatus = CallStatus.DIALED
+    val status: CallStatus = CallStatus.AWAITING_CONFIRMATION
 )
 
 enum class CallStatus {
-    DIALED,
+    AWAITING_CONFIRMATION,
     CALLING,
+    DIALED,
     FAILED,
     NO_CONTACT_FOUND,
     CANCELLED
@@ -86,8 +87,16 @@ object CallActionHandler {
      */
     fun makeCall(context: Context, phoneNumber: String): Boolean {
         try {
-            val normalized = ContactHelper.normalizePhoneNumber(phoneNumber).ifBlank { phoneNumber.trim() }
-            if (normalized.isBlank()) return false
+            val raw = phoneNumber.trim()
+            val normalized = ContactHelper.normalizePhoneNumber(raw)
+            val dialNumber = if (normalized.matches(Regex("""^91\d{10}$"""))) {
+                "+$normalized"
+            } else if (raw.isNotBlank()) {
+                raw
+            } else {
+                normalized
+            }
+            if (dialNumber.isBlank()) return false
 
             val hasCallPermission = ContextCompat.checkSelfPermission(
                 context,
@@ -95,7 +104,7 @@ object CallActionHandler {
             ) == PackageManager.PERMISSION_GRANTED
 
             val action = if (hasCallPermission) Intent.ACTION_CALL else Intent.ACTION_DIAL
-            val uri = Uri.parse("tel:${Uri.encode(normalized)}")
+            val uri = Uri.parse("tel:${Uri.encode(dialNumber)}")
 
             val intent = Intent(action, uri).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK

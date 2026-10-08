@@ -30,11 +30,26 @@ object DocumentOcrHelper {
 
     suspend fun processImageUri(context: Context, uri: Uri): ExtractedDocument = withContext(Dispatchers.IO) {
         val fileName = getFileName(context, uri) ?: "Image.jpg"
+        val bytes = try {
+            context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        } catch (_: Exception) { null }
+        val bitmap = if (bytes != null) {
+            try { android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size) } catch (_: Exception) { null }
+        } else null
+
         val image = InputImage.fromFilePath(context, uri)
         val visionText = recognizer.process(image).await()
         val text = visionText.text.trim()
         val words = if (text.isBlank()) 0 else text.split(Regex("""\s+""")).size
-        ExtractedDocument(fileName, text, words)
+        ExtractedDocument(
+            fileName = fileName,
+            text = text,
+            wordCount = words,
+            previewBitmap = bitmap,
+            isImage = true,
+            imageUri = uri,
+            imageBytes = bytes
+        )
     }
 
     suspend fun processImageBitmap(bitmap: Bitmap, name: String = "Photo"): ExtractedDocument = withContext(Dispatchers.IO) {

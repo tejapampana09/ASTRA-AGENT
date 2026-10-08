@@ -83,18 +83,18 @@ export const ModelCatalogModal: React.FC<ModelCatalogModalProps> = ({
   });
 
   return (
-    <div className="fixed inset-0 bg-slate-900/30 backdrop-blur-xs flex items-center justify-center z-50 p-4 select-none">
-      <div className="bg-white border border-slate-200 rounded-2xl max-w-3xl w-full p-6 shadow-xl space-y-5 animate-in fade-in zoom-in duration-150">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 select-none">
+      <div className="bg-[#161b22] border border-[#30363d] rounded-2xl max-w-3xl w-full p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in duration-150 text-[#c9d1d9]">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-200 pb-4">
+        <div className="flex items-center justify-between border-b border-[#21262d] pb-4">
           <div>
-            <h2 className="text-base font-bold text-slate-900 flex items-center space-x-2">
-              <Cpu className="w-5 h-5 text-slate-800" />
+            <h2 className="text-base font-bold text-[#f0f6fc] flex items-center space-x-2">
+              <Cpu className="w-5 h-5 text-[#58a6ff]" />
               <span>Model Catalog</span>
             </h2>
-            <p className="text-xs text-slate-500 mt-0.5">Explore leading AI models, enhanced by ASTRA AI</p>
+            <p className="text-xs text-[#8b949e] mt-0.5">Explore leading AI models, enhanced by ASTRA AI</p>
           </div>
-          <button onClick={onClose} className="p-1 rounded-md hover:bg-slate-100 text-slate-500 hover:text-slate-800">
+          <button onClick={onClose} className="p-1 rounded-md hover:bg-[#21262d] text-[#8b949e] hover:text-[#f0f6fc]">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -107,8 +107,8 @@ export const ModelCatalogModal: React.FC<ModelCatalogModalProps> = ({
               onClick={() => setFilter(tab)}
               className={`px-3 py-1.5 rounded-full font-medium transition-colors ${
                 filter === tab
-                  ? 'bg-slate-900 text-white shadow-xs'
-                  : 'bg-slate-100 text-slate-600 hover:text-slate-900'
+                  ? 'bg-[#21262d] text-[#f0f6fc] border border-[#30363d] shadow-xs'
+                  : 'bg-[#0d1117] text-[#8b949e] hover:text-[#f0f6fc] border border-[#21262d]'
               }`}
             >
               {tab}
@@ -129,23 +129,23 @@ export const ModelCatalogModal: React.FC<ModelCatalogModalProps> = ({
                 }}
                 className={`p-3.5 rounded-xl cursor-pointer border transition-all ${
                   isSelected
-                    ? 'bg-slate-50 border-slate-900 shadow-xs'
-                    : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
+                    ? 'bg-[#1f6feb]/15 border-[#58a6ff] shadow-xs'
+                    : 'bg-[#0d1117] border-[#30363d] hover:border-[#8b949e]/40 hover:bg-[#21262d]/50'
                 }`}
               >
                 <div className="flex items-center justify-between mb-1.5">
                   <div className="flex items-center space-x-2">
-                    <span className="w-4 h-4 rounded-md bg-slate-900 flex items-center justify-center text-white text-[9px] font-bold">
+                    <span className="w-4 h-4 rounded-md bg-[#21262d] border border-[#30363d] flex items-center justify-center text-[#58a6ff] text-[9px] font-bold">
                       ✦
                     </span>
-                    <span className="font-semibold text-slate-900 text-xs">{m.name}</span>
+                    <span className="font-semibold text-[#f0f6fc] text-xs">{m.name}</span>
                   </div>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-mono border border-slate-200">
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#21262d] text-[#8b949e] font-mono border border-[#30363d]">
                     {m.badge}
                   </span>
                 </div>
-                <p className="text-slate-600 text-[11px] line-clamp-2 leading-relaxed">{m.desc}</p>
-                <div className="mt-2 text-[10px] text-slate-400 font-mono">{m.provider}</div>
+                <p className="text-[#8b949e] text-[11px] line-clamp-2 leading-relaxed">{m.desc}</p>
+                <div className="mt-2 text-[10px] text-[#6e7681] font-mono">{m.provider}</div>
               </div>
             );
           })}

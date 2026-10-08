@@ -43,8 +43,8 @@ class ModelManager(private val context: Context) {
         const val HF_MODEL_URL = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
         private const val PREFS_NAME = "gemma_prefs"
         private const val KEY_HF_TOKEN = "hf_token"
-        // Default token provided in project environment
-        const val DEFAULT_HF_TOKEN = "" // Set your Hugging Face token in the app settings
+        const val DEFAULT_HF_TOKEN = ""
+        const val MIN_VALID_MODEL_SIZE_BYTES = 1_900_000_000L // Minimum valid size (~1.9 GB; full model is 2.58 GB)
     }
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -59,11 +59,14 @@ class ModelManager(private val context: Context) {
         get() = File(modelsDir, MODEL_FILENAME)
 
     fun getSavedHfToken(): String {
-        return prefs.getString(KEY_HF_TOKEN, null) ?: DEFAULT_HF_TOKEN
+        val saved = prefs.getString(KEY_HF_TOKEN, null)
+        return if (!saved.isNullOrBlank()) saved else DEFAULT_HF_TOKEN
     }
 
     fun saveHfToken(token: String) {
-        prefs.edit().putString(KEY_HF_TOKEN, token.trim()).apply()
+        if (token.isNotBlank()) {
+            prefs.edit().putString(KEY_HF_TOKEN, token.trim()).apply()
+        }
     }
 
     fun loadConfig(): GemmaConfig {
@@ -92,54 +95,97 @@ class ModelManager(private val context: Context) {
     }
 
     /**
-     * Checks if a valid Gemma 4 E2B model exists in the app-private storage.
+     * Checks if a valid Gemma 4 E2B model exists on the device.
+     * Automatically cleans up any corrupted or partially-downloaded files (< 1.9 GB).
      */
     suspend fun checkModelAvailability(): ModelInstallState = withContext(Dispatchers.IO) {
         _installState.value = ModelInstallState.Checking("Verifying model availability...")
-        Log.d(TAG, "[$TAG] Checking model availability...")
+        Log.d(TAG, "[$TAG] Checking model availability across local storage...")
 
-        // 1. Primary app-private storage (the official in-app location)
+        // 1. Primary app-private storage
         val internalModel = defaultModelFile
-        if (internalModel.exists() && internalModel.length() > 1_000_000L) {
-            Log.d(TAG, "[$TAG] Found model in app-private storage: ${internalModel.absolutePath} (${formatSize(internalModel.length())})")
-            val state = ModelInstallState.Installed(internalModel, internalModel.length())
+        if (internalModel.exists()) {
+            if (internalModel.length() >= MIN_VALID_MODEL_SIZE_BYTES) {
+                Log.d(TAG, "[$TAG] Found valid model in app-private storage: ${internalModel.absolutePath} (${formatSize(internalModel.length())})")
+                val state = ModelInstallState.Installed(internalModel, internalModel.length())
+                _installState.value = state
+                return@withContext state
+            } else {
+                Log.w(TAG, "[$TAG] Detected corrupted/partial internal model (${formatSize(internalModel.length())}). Deleting to unblock fresh install...")
+                try { internalModel.delete() } catch (e: Exception) { Log.w(TAG, "Failed to delete corrupted file", e) }
+            }
+        }
+
+        // 2. Check external app-specific storage (/sdcard/Android/data/<package>/files/models/)
+        val externalDir = context.getExternalFilesDir("models")
+        if (externalDir != null) {
+            val externalModel = File(externalDir, MODEL_FILENAME)
+            if (externalModel.exists()) {
+                if (externalModel.length() >= MIN_VALID_MODEL_SIZE_BYTES && externalModel.canRead()) {
+                    Log.d(TAG, "[$TAG] Found valid model in external app storage: ${externalModel.absolutePath} (${formatSize(externalModel.length())})")
+                    val state = ModelInstallState.Installed(externalModel, externalModel.length())
+                    _installState.value = state
+                    return@withContext state
+                } else if (externalModel.length() < MIN_VALID_MODEL_SIZE_BYTES) {
+                    Log.w(TAG, "[$TAG] Detected corrupted/partial external model. Deleting...")
+                    try { externalModel.delete() } catch (_: Exception) {}
+                }
+            }
+        }
+
+        // Also check direct external package models dir
+        val rawExternalDir = File("/sdcard/Android/data/${context.packageName}/files/models")
+        if (rawExternalDir.exists()) {
+            val candidate = File(rawExternalDir, MODEL_FILENAME)
+            if (candidate.exists() && candidate.canRead() && candidate.length() >= MIN_VALID_MODEL_SIZE_BYTES) {
+                Log.d(TAG, "[$TAG] Found valid model in raw external storage: ${candidate.absolutePath}")
+                val state = ModelInstallState.Installed(candidate, candidate.length())
+                _installState.value = state
+                return@withContext state
+            }
+        }
+
+        // 3. Check /data/local/tmp (ADB pushed path - directly readable by LiteRT-LM without 2.58 GB duplication!)
+        val adbTempFile = File("/data/local/tmp/$MODEL_FILENAME")
+        if (adbTempFile.exists() && adbTempFile.canRead() && adbTempFile.length() >= MIN_VALID_MODEL_SIZE_BYTES) {
+            Log.d(TAG, "[$TAG] Found complete model in /data/local/tmp: ${adbTempFile.absolutePath} (${formatSize(adbTempFile.length())})")
+            val state = ModelInstallState.Installed(adbTempFile, adbTempFile.length())
             _installState.value = state
             return@withContext state
         }
 
-        // 2. Check external app-specific storage
-        val externalDir = context.getExternalFilesDir("models")
-        if (externalDir != null) {
-            val externalModel = File(externalDir, MODEL_FILENAME)
-            if (externalModel.exists() && externalModel.length() > 1_000_000L) {
-                Log.d(TAG, "[$TAG] Found model in external app storage: ${externalModel.absolutePath}")
-                val state = ModelInstallState.Installed(externalModel, externalModel.length())
+        // 4. Check common Downloads directories on device
+        val downloadDirs = listOfNotNull(
+            File("/sdcard/Download"),
+            File("/sdcard/Download/models"),
+            File("/storage/emulated/0/Download"),
+            File("/storage/emulated/0/Download/models"),
+            android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+        )
+        for (dir in downloadDirs) {
+            if (!dir.exists()) continue
+            val candidate = File(dir, MODEL_FILENAME)
+            if (candidate.exists() && candidate.canRead() && candidate.length() >= MIN_VALID_MODEL_SIZE_BYTES) {
+                Log.d(TAG, "[$TAG] Found valid model in Download directory: ${candidate.absolutePath} (${formatSize(candidate.length())})")
+                val state = ModelInstallState.Installed(candidate, candidate.length())
                 _installState.value = state
                 return@withContext state
             }
-        }
 
-        // 3. Check /data/local/tmp and copy to app-private directory so it's stored in app!
-        val adbTempFile = File("/data/local/tmp/$MODEL_FILENAME")
-        if (adbTempFile.exists() && adbTempFile.canRead() && adbTempFile.length() > 1_000_000L) {
-            Log.d(TAG, "[$TAG] Found model in adb path, storing in app-private directory...")
-            try {
-                if (!internalModel.exists() || internalModel.length() == 0L) {
-                    adbTempFile.copyTo(internalModel, overwrite = true)
+            // Also check for any .litertlm file >= 1.9 GB in Download folder
+            val litertFiles = dir.listFiles { f -> f.extension.equals("litertlm", ignoreCase = true) && f.length() >= MIN_VALID_MODEL_SIZE_BYTES }
+            if (!litertFiles.isNullOrEmpty()) {
+                val found = litertFiles.first()
+                if (found.canRead()) {
+                    Log.d(TAG, "[$TAG] Found valid .litertlm model in Download directory: ${found.absolutePath} (${formatSize(found.length())})")
+                    val state = ModelInstallState.Installed(found, found.length())
+                    _installState.value = state
+                    return@withContext state
                 }
-                val finalFile = if (internalModel.exists()) internalModel else adbTempFile
-                val state = ModelInstallState.Installed(finalFile, finalFile.length())
-                _installState.value = state
-                return@withContext state
-            } catch (e: Exception) {
-                Log.w(TAG, "[$TAG] Using model from ${adbTempFile.absolutePath}", e)
-                val state = ModelInstallState.Installed(adbTempFile, adbTempFile.length())
-                _installState.value = state
-                return@withContext state
             }
         }
 
-        Log.d(TAG, "[$TAG] Model not installed in app private directory.")
+        Log.d(TAG, "[$TAG] Model not installed or valid model not found on device.")
         val state = ModelInstallState.NotInstalled
         _installState.value = state
         state

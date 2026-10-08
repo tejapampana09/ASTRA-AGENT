@@ -76,19 +76,29 @@ class GemmaEngine(
         }
     }
 
-    private fun buildConversationConfig(cfg: GemmaConfig): ConversationConfig {
+    private fun buildConversationConfig(
+        cfg: GemmaConfig,
+        effectiveThinking: Boolean = cfg.enableThinking,
+        dynamicMaxOutput: Int? = null,
+        systemInstructionText: String? = null
+    ): ConversationConfig {
+        val thinkBudget = if (effectiveThinking) minOf(cfg.thinkingBudget, 160) else 0
+        val maxOut = dynamicMaxOutput ?: maxOf(400, minOf(cfg.maxTokens, 1024))
+        val sysContent = if (!systemInstructionText.isNullOrBlank()) {
+            Contents.of(Content.Text(systemInstructionText))
+        } else null
         return ConversationConfig(
-            systemInstruction = if (cfg.systemPrompt.isNotBlank()) Contents.of(cfg.systemPrompt) else null,
+            systemInstruction = sysContent,
             samplerConfig = SamplerConfig(
                 topK = cfg.topK,
                 topP = cfg.topP.toDouble(),
                 temperature = cfg.temperature.toDouble(),
                 seed = 0
             ),
-            maxOutputToken = cfg.maxTokens,
+            maxOutputToken = maxOut,
             thinkingConfig = ThinkingConfig(
-                enableThinking = cfg.enableThinking,
-                thinkingTokenBudget = if (cfg.enableThinking) cfg.thinkingBudget else 0
+                enableThinking = effectiveThinking,
+                thinkingTokenBudget = thinkBudget
             )
         )
     }
@@ -112,37 +122,96 @@ class GemmaEngine(
                 return@withContext Result.failure(IllegalStateException(errorMsg))
             }
 
-            _engineState.value = EngineState.Loading("Initializing model on CPU...")
-            Log.d(TAG, "[$TAG] Initializing model with CPU backend (4 threads)...")
+            if (file.length() < 1_900_000_000L) {
+                val currentMb = file.length() / (1024 * 1024)
+                val errorMsg = "Model file is incomplete ($currentMb MB). Expected ~2.58 GB (2588 MB). Please re-download or push complete model."
+                Log.e(TAG, "[$TAG] $errorMsg")
+                _engineState.value = EngineState.Error(errorMsg)
+                return@withContext Result.failure(IllegalStateException(errorMsg))
+            }
+
+            _engineState.value = EngineState.Loading("Initializing model on GPU...")
+            Log.i(TAG, "[$TAG] Trying GPU backend from $modelPath (${file.length()} bytes)...")
 
             var loadedEngine: Engine? = null
-            var backendChosen = BackendType.CPU
+            var backendChosen = BackendType.GPU
+            var lastGpuError: String? = null
+            // Cap thread count to at most 4 to prevent heavy multi-core CPU thermal throttling & overheating
+            val threadCount = minOf(4, Runtime.getRuntime().availableProcessors().coerceAtLeast(2))
 
+            // Attempt 1: GPU with Vision
             try {
-                val cpuConfig = try {
-                    EngineConfig(
-                        modelPath = modelPath,
-                        backend = Backend.CPU(threadCount = 4),
-                        visionBackend = Backend.CPU(threadCount = 4),
-                        maxNumImages = 1
-                    )
-                } catch (t: Throwable) {
-                    EngineConfig(
-                        modelPath = modelPath,
-                        backend = Backend.CPU(threadCount = 4)
-                    )
-                }
-                val testEngine = Engine(cpuConfig)
+                Log.d(TAG, "[$TAG] Attempting GPU + Vision...")
+                val config = EngineConfig(
+                    modelPath = modelPath,
+                    backend = Backend.GPU(),
+                    visionBackend = Backend.GPU(),
+                    maxNumImages = 1
+                )
+                val testEngine = Engine(config)
                 testEngine.initialize()
                 loadedEngine = testEngine
-                backendChosen = BackendType.CPU
-                Log.d(TAG, "[$TAG] Model loaded successfully on CPU (with visionBackend configured)")
-            } catch (cpuException: Throwable) {
-                if (cpuException is CancellationException) throw cpuException
-                val fatalMsg = "Failed to load Gemma 4 model on CPU: ${cpuException.localizedMessage ?: "Unknown initialization error"}"
-                Log.e(TAG, "[$TAG] $fatalMsg", cpuException)
-                _engineState.value = EngineState.Error(fatalMsg)
-                return@withContext Result.failure(cpuException)
+                backendChosen = BackendType.GPU
+                Log.i(TAG, "[$TAG] Model loaded successfully on GPU (Vision + Text)")
+            } catch (e1: Throwable) {
+                lastGpuError = e1.message ?: "Unknown GPU error"
+                Log.w(TAG, "[$TAG] GPU + Vision failed: ${e1.message}. Attempting pure GPU text...")
+                // Attempt 2: Pure GPU text
+                try {
+                    val config = EngineConfig(
+                        modelPath = modelPath,
+                        backend = Backend.GPU()
+                    )
+                    val testEngine = Engine(config)
+                    testEngine.initialize()
+                    loadedEngine = testEngine
+                    backendChosen = BackendType.GPU
+                    Log.i(TAG, "[$TAG] Model loaded successfully on GPU (Text only)")
+                } catch (e2: Throwable) {
+                    lastGpuError = e2.message ?: lastGpuError
+                    Log.w(TAG, "[$TAG] GPU initialization failed: $lastGpuError")
+                    Log.i(TAG, "[$TAG] Falling back to CPU")
+                    _engineState.value = EngineState.Loading("Falling back to CPU...")
+
+                    // Attempt 3: CPU with Vision
+                    try {
+                        val config = EngineConfig(
+                            modelPath = modelPath,
+                            backend = Backend.CPU(threadCount = threadCount),
+                            visionBackend = Backend.CPU(threadCount = threadCount),
+                            maxNumImages = 1
+                        )
+                        val testEngine = Engine(config)
+                        testEngine.initialize()
+                        loadedEngine = testEngine
+                        backendChosen = BackendType.CPU_FALLBACK
+                        Log.i(TAG, "[$TAG] Model loaded successfully on CPU fallback (Vision + Text)")
+                    } catch (e3: Throwable) {
+                        Log.w(TAG, "[$TAG] CPU + Vision failed: ${e3.message}. Attempting pure CPU text...")
+                        // Attempt 4: Pure CPU text
+                        try {
+                            val config = EngineConfig(
+                                modelPath = modelPath,
+                                backend = Backend.CPU(threadCount = threadCount)
+                            )
+                            val testEngine = Engine(config)
+                            testEngine.initialize()
+                            loadedEngine = testEngine
+                            backendChosen = BackendType.CPU_FALLBACK
+                            Log.i(TAG, "[$TAG] Model loaded successfully on CPU fallback (Text only)")
+                        } catch (fatal: Throwable) {
+                            if (fatal is CancellationException) throw fatal
+                            val fatalMsg = if (lastGpuError != null) {
+                                "Failed to load model: GPU error: [$lastGpuError]. CPU error: [${fatal.localizedMessage}]"
+                            } else {
+                                "Failed to load model: ${fatal.localizedMessage ?: "Unknown initialization error"}"
+                            }
+                            Log.e(TAG, "[$TAG] $fatalMsg", fatal)
+                            _engineState.value = EngineState.Error(fatalMsg)
+                            return@withContext Result.failure(Exception(fatalMsg, fatal))
+                        }
+                    }
+                }
             }
 
             // Create initial conversation session
@@ -150,7 +219,12 @@ class GemmaEngine(
                 engine = loadedEngine
                 activeBackend = backendChosen
                 val convConfig = buildConversationConfig(currentConfig)
-                conversation = loadedEngine.createConversation(convConfig)
+                conversation = try {
+                    loadedEngine.createConversation(convConfig)
+                } catch (convFallback: Throwable) {
+                    Log.w(TAG, "[$TAG] Custom conversation config failed, falling back to default: ${convFallback.message}")
+                    loadedEngine.createConversation()
+                }
                 _engineState.value = EngineState.Ready(activeBackend)
                 Result.success(activeBackend)
             } catch (convError: Throwable) {
@@ -174,17 +248,30 @@ data class EngineChunk(
     /**
      * Sends a prompt (and optional image bytes) and streams the generated tokens (both thoughts and final answer) back incrementally.
      */
-    fun sendMessage(prompt: String, imageBytes: ByteArray? = null): Flow<EngineChunk> = flow {
+    fun sendMessage(
+        prompt: String,
+        systemInstruction: String? = null,
+        imageBytes: ByteArray? = null,
+        enableThinkingOverride: Boolean? = null
+    ): Flow<EngineChunk> = flow {
         if (prompt.isBlank() && imageBytes == null) return@flow
 
         val eng = engine
         check(eng != null && eng.isInitialized()) { "Model is not initialized. Please install model first." }
 
-        Log.d(TAG, "[$TAG] Starting generation with thinking=${currentConfig.enableThinking}, budget=${currentConfig.thinkingBudget}, hasImage=${imageBytes != null}")
+        val effectiveSysPrompt = systemInstruction ?: currentConfig.systemPrompt
+        val promptTokens = com.teja.gemmmobile.context.ContextManager.estimateTokens(prompt) +
+            com.teja.gemmmobile.context.ContextManager.estimateTokens(effectiveSysPrompt)
+        val effectiveThinking = enableThinkingOverride ?: currentConfig.enableThinking
+        val effectiveThinkingBudget = if (effectiveThinking) minOf(currentConfig.thinkingBudget, 160) else 0
+
+        // Dynamically compute the maximum possible output token budget that fits safely within the 2048 KV cache.
+        val dynamicMaxOutput = maxOf(300, minOf(currentConfig.maxTokens, 2048 - promptTokens - effectiveThinkingBudget - 64))
+        Log.d(TAG, "[$TAG] Starting generation with promptTokens=$promptTokens, maxOutput=$dynamicMaxOutput, thinking=$effectiveThinking, thinkBudget=$effectiveThinkingBudget, hasImage=${imageBytes != null}")
 
         val thinkingConfig = ThinkingConfig(
-            enableThinking = currentConfig.enableThinking,
-            thinkingTokenBudget = if (currentConfig.enableThinking) currentConfig.thinkingBudget else 0
+            enableThinking = effectiveThinking,
+            thinkingTokenBudget = effectiveThinkingBudget
         )
 
         try {
@@ -194,8 +281,19 @@ data class EngineChunk(
                 attempt++
                 try {
                     val targetConv = mutex.withLock {
-                        val cur = conversation
-                        check(cur != null && cur.isAlive) { "Model is not initialized or conversation is closed." }
+                        // Always create a fresh, clean conversation session per turn so LiteRT-LM's
+                        // native KV cache never accumulates old turns and exceeds the 2048 token limit.
+                        // Context and history are managed strictly within budget by ContextManager.
+                        try { conversation?.close() } catch (_: Throwable) {}
+                        val cur = eng.createConversation(
+                            buildConversationConfig(
+                                currentConfig,
+                                effectiveThinking,
+                                dynamicMaxOutput,
+                                systemInstructionText = effectiveSysPrompt
+                            )
+                        )
+                        conversation = cur
                         _engineState.value = EngineState.Generating(activeBackend)
                         cur
                     }
@@ -210,11 +308,9 @@ data class EngineChunk(
                         targetConv.sendMessageAsync(text = prompt, thinkingConfig = thinkingConfig)
                     }
 
-                    // LiteRT-LM async flow streaming with thinking configuration
                     messageFlow.collect { message: Message ->
                         val thoughtChannel = message.channels["thought"]
                             ?: message.channels["thinking"]
-                            ?: message.channels.values.firstOrNull { it.isNotEmpty() }
                             ?: ""
                         val textContent = message.toString()
 
@@ -230,15 +326,12 @@ data class EngineChunk(
                         throw e
                     }
                     val errStr = e.message.orEmpty()
-                    if (attempt == 1 && (errStr.contains("exceeds available state entries", ignoreCase = true) ||
-                            errStr.contains("Status Code: 9", ignoreCase = true) ||
-                            errStr.contains("capacity", ignoreCase = true))) {
-                        Log.w(TAG, "[$TAG] KV Cache state entries limit reached. Resetting conversation and retrying once...")
-                        mutex.withLock {
-                            try { conversation?.close() } catch (_: Throwable) {}
-                            conversation = eng.createConversation(buildConversationConfig(currentConfig))
-                        }
-                        continue
+                    if (errStr.contains("exceeds available state entries", ignoreCase = true) ||
+                        errStr.contains("Status Code: 9", ignoreCase = true) ||
+                        errStr.contains("capacity", ignoreCase = true)) {
+                        Log.i(TAG, "[$TAG] Reached KV cache capacity limit cleanly. Finalizing generated response without error.")
+                        succeeded = true
+                        break
                     }
                     Log.e(TAG, "[$TAG] Generation failure", e)
                     throw e
@@ -252,6 +345,12 @@ data class EngineChunk(
             }
         }
     }.flowOn(Dispatchers.IO)
+
+    fun resetToReady() {
+        if (_engineState.value is EngineState.Generating) {
+            _engineState.value = EngineState.Ready(activeBackend)
+        }
+    }
 
     /**
      * Clears in-memory conversation history and resets the KV-cache.

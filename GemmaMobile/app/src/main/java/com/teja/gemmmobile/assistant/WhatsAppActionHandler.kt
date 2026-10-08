@@ -13,8 +13,14 @@ data class WhatsAppAction(
     val rawIntent: String = "",
     val matchedNumber: String? = null,
     val candidateContacts: List<ContactMatch> = emptyList(),
+    val platform: MessagePlatform = MessagePlatform.BACKGROUND_SMS,
     val status: WhatsAppStatus = WhatsAppStatus.AWAITING_CONFIRMATION
 )
+
+enum class MessagePlatform {
+    BACKGROUND_SMS,
+    WHATSAPP
+}
 
 enum class WhatsAppStatus {
     IDLE,
@@ -163,35 +169,47 @@ object WhatsAppActionHandler {
             if (contact.isNotBlank() && message.isNotBlank()) return Pair(contact, message)
         }
 
-        // 6. Short natural form: "send <message> to <contact>"
-        // e.g. "send hi to teja", "send hello to manoj"
-        val pattern4 = Regex("""^(?:please\s+)?send\s+(.+?)\s+to\s+([a-zA-Z0-9_]+)$""", RegexOption.IGNORE_CASE)
-        pattern4.find(trimmed)?.let { match ->
-            val message = match.groupValues[1].trim('\'', '"', ' ')
-            val contact = match.groupValues[2].trim()
-            if (contact.isNotBlank() && message.isNotBlank()) return Pair(contact, message)
-        }
-
-        // 7. Short Telugu form: "<contact> ki <message> pettu" e.g. "teja ki hi pettu"
-        val teluguPattern3 = Regex("""^([a-zA-Z0-9_]+)\s*(?:ki|ku)\s+(.+?)\s*(?:pettu|cheppu|send\s*cheyi|pampinchu)$""", RegexOption.IGNORE_CASE)
-        teluguPattern3.find(trimmed)?.let { match ->
-            val contact = match.groupValues[1].trim()
-            val message = match.groupValues[2].trim()
-            if (contact.isNotBlank() && message.isNotBlank()) return Pair(contact, message)
-        }
-
         return null
     }
 
     /**
      * Executes the WhatsApp action directly using contact number and accessibility auto-send.
      */
+    fun getGatewayUrl(context: Context): String {
+        val prefs = context.getSharedPreferences("whatsapp_config", Context.MODE_PRIVATE)
+        return prefs.getString("gateway_url", "") ?: ""
+    }
+
+    fun getGatewayApiKey(context: Context): String {
+        val prefs = context.getSharedPreferences("whatsapp_config", Context.MODE_PRIVATE)
+        return prefs.getString("gateway_api_key", "") ?: ""
+    }
+
+    fun setGatewayConfig(context: Context, url: String, apiKey: String) {
+        val prefs = context.getSharedPreferences("whatsapp_config", Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString("gateway_url", url.trim())
+            .putString("gateway_api_key", apiKey.trim())
+            .apply()
+    }
+
+    /**
+     * Executes the WhatsApp action directly.
+     * If a Connected App / Gateway URL is configured, dispatches directly over HTTP in the background!
+     * Otherwise, executes on-device with the Gemma Accessibility Shield Overlay so WhatsApp UI stays 100% invisible.
+     */
     fun sendWhatsAppDirect(
         context: Context,
         phoneNumber: String,
         message: String,
-        autoSend: Boolean = true
+        autoSend: Boolean = true,
+        recipientName: String = ""
     ): Boolean {
+        val gatewayUrl = getGatewayUrl(context)
+        if (gatewayUrl.isNotBlank()) {
+            return sendViaConnectedGateway(gatewayUrl, getGatewayApiKey(context), phoneNumber, message)
+        }
+
         try {
             val normalized = ContactHelper.normalizePhoneNumber(phoneNumber)
             if (normalized.isBlank()) return false
@@ -200,12 +218,12 @@ object WhatsAppActionHandler {
             val uri = Uri.parse("https://api.whatsapp.com/send?phone=$normalized&text=$encodedMsg")
 
             if (autoSend && GemmaAccessibilityService.isAccessibilityEnabled(context)) {
-                GemmaAccessibilityService.armAutoSend(normalized)
+                GemmaAccessibilityService.armAutoSend(normalized, recipientName)
             }
 
             val intent = Intent(Intent.ACTION_VIEW, uri).apply {
                 setPackage("com.whatsapp")
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION
             }
 
             // Fallback to general intent if WhatsApp package is business or unpinned
@@ -220,5 +238,41 @@ object WhatsAppActionHandler {
             Log.e(TAG, "[$TAG] Failed to send WhatsApp message", e)
             return false
         }
+    }
+
+    private fun sendViaConnectedGateway(
+        gatewayUrl: String,
+        apiKey: String,
+        phoneNumber: String,
+        message: String
+    ): Boolean {
+        Thread {
+            try {
+                val normalized = ContactHelper.normalizePhoneNumber(phoneNumber)
+                val url = java.net.URL(gatewayUrl)
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/json; utf-8")
+                if (apiKey.isNotBlank()) {
+                    conn.setRequestProperty("Authorization", "Bearer $apiKey")
+                    conn.setRequestProperty("X-Api-Key", apiKey)
+                }
+                conn.doOutput = true
+                conn.connectTimeout = 8000
+                conn.readTimeout = 8000
+
+                val jsonPayload = """{"chatId":"$normalized@c.us","phone":"$normalized","message":${org.json.JSONObject.quote(message)}}"""
+                conn.outputStream.use { os ->
+                    val input = jsonPayload.toByteArray(Charsets.UTF_8)
+                    os.write(input, 0, input.size)
+                }
+
+                val responseCode = conn.responseCode
+                Log.d(TAG, "[$TAG] Connected Gateway responded with code $responseCode")
+            } catch (e: Exception) {
+                Log.e(TAG, "[$TAG] Connected Gateway request failed", e)
+            }
+        }.start()
+        return true
     }
 }

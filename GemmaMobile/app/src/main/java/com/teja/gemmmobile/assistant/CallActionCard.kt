@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
@@ -81,6 +82,7 @@ fun CallActionCard(
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = when (action.status) {
+                        CallStatus.AWAITING_CONFIRMATION -> Color(0xFFE3F2FD)
                         CallStatus.DIALED, CallStatus.CALLING -> CallBlue.copy(alpha = 0.15f)
                         CallStatus.NO_CONTACT_FOUND, CallStatus.FAILED -> Color(0xFFFFEBEE)
                         CallStatus.CANCELLED -> Color(0xFFEEEEEE)
@@ -101,6 +103,7 @@ fun CallActionCard(
                         }
                         Text(
                             text = when (action.status) {
+                                CallStatus.AWAITING_CONFIRMATION -> "Confirm Call"
                                 CallStatus.CALLING -> "Calling..."
                                 CallStatus.DIALED -> "Call Placed"
                                 CallStatus.NO_CONTACT_FOUND -> "Contact Not Found"
@@ -110,7 +113,7 @@ fun CallActionCard(
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.SemiBold,
                             color = when (action.status) {
-                                CallStatus.CALLING, CallStatus.DIALED -> CallBlue
+                                CallStatus.AWAITING_CONFIRMATION, CallStatus.CALLING, CallStatus.DIALED -> CallBlue
                                 CallStatus.NO_CONTACT_FOUND, CallStatus.FAILED -> Color(0xFFD32F2F)
                                 CallStatus.CANCELLED -> Color(0xFF757575)
                             }
@@ -203,27 +206,86 @@ fun CallActionCard(
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Button(
-                        onClick = { onCallNow(action) },
-                        colors = ButtonDefaults.buttonColors(containerColor = CallBlue),
-                        shape = RoundedCornerShape(20.dp),
-                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Call,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(15.dp)
+                    if (action.status == CallStatus.AWAITING_CONFIRMATION) {
+                        OutlinedButton(
+                            onClick = { onCancel(action) },
+                            shape = RoundedCornerShape(20.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            border = BorderStroke(1.dp, Color(0xFFCCCCCC))
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = null,
+                                tint = Color(0xFF757575),
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Cancel",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color(0xFF616161)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        Button(
+                            onClick = { onCallNow(action) },
+                            colors = ButtonDefaults.buttonColors(containerColor = CallBlue),
+                            shape = RoundedCornerShape(20.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Call,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Call",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                    } else if (action.status == CallStatus.CALLING) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = CallBlue
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Call Now",
+                            text = "Calling...",
                             style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
+                            color = CallBlue,
+                            fontWeight = FontWeight.SemiBold
                         )
+                    } else {
+                        Button(
+                            onClick = { onCallNow(action) },
+                            colors = ButtonDefaults.buttonColors(containerColor = CallBlue),
+                            shape = RoundedCornerShape(20.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Call,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Call Again",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
                     }
                 }
             }

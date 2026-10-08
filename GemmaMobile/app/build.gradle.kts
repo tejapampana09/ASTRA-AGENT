@@ -73,6 +73,13 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
 
+    // CameraX for in-app ChatGPT-style camera overlay
+    val cameraxVersion = "1.3.4"
+    implementation("androidx.camera:camera-core:$cameraxVersion")
+    implementation("androidx.camera:camera-camera2:$cameraxVersion")
+    implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
+    implementation("androidx.camera:camera-view:$cameraxVersion")
+
     // LiteRT-LM Android Official Runtime
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.17.1")
 
@@ -81,6 +88,9 @@ dependencies {
 
     // Google ML Kit Text Recognition (On-device OCR)
     implementation("com.google.mlkit:text-recognition:16.0.1")
+
+    // Vosk Offline On-Device Speech / Wake-Word Recognition (Zero cloud, continuous AudioRecord stream)
+    implementation("com.alphacephei:vosk-android:0.3.75")
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")

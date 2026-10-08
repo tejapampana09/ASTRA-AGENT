@@ -2,6 +2,9 @@ package com.teja.gemmmobile.search
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -23,20 +26,213 @@ data class SearchResult(
 
 /**
  * Fast, lightweight on-device web search client using DuckDuckGo Lite.
+ * Supports multi-query deep search (like ChatGPT) to fetch rich profiles, projects, and activities.
  * Requires 0 API keys and runs on background IO dispatcher.
  */
 class WebSearchClient {
 
-    suspend fun search(query: String, maxResults: Int = 3): List<SearchResult> = withContext(Dispatchers.IO) {
-        if (query.isBlank()) return@withContext emptyList()
+    fun sanitizeQuery(raw: String): String {
+        var query = raw.trim()
+        val prefixes = listOf(
+            "search the web for ", "search the web ", "search web for ", "search web ",
+            "browse the web for ", "please search for ", "please search ", "search for ",
+            "search ", "who is ", "who was ", "what is ", "what was ", "tell me about ",
+            "look up ", "google for ", "google ", "find "
+        )
+        for (p in prefixes) {
+            if (query.startsWith(p, ignoreCase = true)) {
+                val candidate = query.substring(p.length).trim()
+                if (candidate.isNotBlank()) {
+                    query = candidate
+                    break
+                }
+            }
+        }
+
+        // Strip conversational fillers in Telugu and English so the search engine queries the pure subject
+        val suffixes = listOf(
+            " gurinchi cheppu", " gurinchi", " cheppu", " ante enti", " enti", " telusu",
+            " vivarana", " in telugu", " telugu lo", " please", " explain"
+        )
+        for (s in suffixes) {
+            if (query.endsWith(s, ignoreCase = true)) {
+                val candidate = query.dropLast(s.length).trim()
+                if (candidate.isNotBlank()) {
+                    query = candidate
+                }
+            }
+        }
+
+        return query
+    }
+
+    private fun generateSubqueries(cleanQuery: String): List<String> {
+        val q = cleanQuery.trim()
+        if (q.isBlank()) return emptyList()
+        val lower = q.lowercase()
+
+        val subqueries = mutableListOf<String>()
+        subqueries.add(q)
+
+        // Only add specific platform subqueries if user asked or if looking up a person/entity
+        if (lower.contains("linkedin") || lower.contains("profile")) {
+            if (!lower.contains("linkedin")) subqueries.add("$q linkedin")
+        } else if (lower.startsWith("who is ") || lower.startsWith("tell me about ")) {
+            subqueries.add("$q profile")
+        }
+
+        if (lower.contains("github") || lower.contains("repo") || lower.contains("code")) {
+            if (!lower.contains("github")) subqueries.add("$q github")
+        }
+
+        if (lower.contains("latest") || lower.contains("news") || lower.contains("today")) {
+            subqueries.add("$q latest news")
+        }
+
+        return subqueries.distinct()
+    }
+
+    private fun cleanSnippetText(raw: String): String {
+        var s = raw
+        // Strip follower / connection counters so model doesn't hallucinate conflicting stats
+        s = s.replace(Regex("""\b\d+(?:,\d+)?\+?\s+(?:connections?|followers?|following|friends?)\b""", RegexOption.IGNORE_CASE), "")
+        s = s.replace(Regex("""\bView (?:the )?profile of [^.]+ on LinkedIn\b""", RegexOption.IGNORE_CASE), "")
+        s = s.replace(Regex("""\bSign up to view[^.]*\b""", RegexOption.IGNORE_CASE), "")
+        s = s.replace(Regex("""\bJoin to view[^.]*\b""", RegexOption.IGNORE_CASE), "")
+        s = s.replace(Regex("""\bSee photos and videos[^.]*\b""", RegexOption.IGNORE_CASE), "")
+        s = s.replace(Regex("""\s{2,}"""), " ").trim()
+        return s
+    }
+
+    suspend fun search(query: String, maxResults: Int = 10): List<SearchResult> = withContext(Dispatchers.IO) {
+        val clean = sanitizeQuery(query)
+        if (clean.isBlank()) return@withContext emptyList()
 
         try {
-            Log.d(TAG, "[$TAG] Querying live web search for: $query")
+            Log.d(TAG, "[$TAG] Initiating search for: '$clean'")
+            val subqueries = generateSubqueries(clean)
+            val (allResults, instantAnswer) = coroutineScope {
+                val resultsDeferred = async {
+                    subqueries.map { sq ->
+                        async { fetchSingleQuery(sq, 6) }
+                    }.awaitAll().flatten()
+                }
+                val instantDeferred = async { fetchInstantAnswer(clean) }
+                Pair(resultsDeferred.await(), instantDeferred.await())
+            }
+
+            // Deduplicate and filter out low-quality social directory spam and conflicting duplicates
+            val seenUrls = mutableSetOf<String>()
+            val seenTitles = mutableSetOf<String>()
+            val domainCounts = mutableMapOf<String, Int>()
+            val filtered = mutableListOf<SearchResult>()
+
+            // If Instant Answer is available, prepend it as high-confidence top summary
+            if (instantAnswer != null && instantAnswer.snippet.isNotBlank()) {
+                seenUrls.add(instantAnswer.url.trimEnd('/'))
+                seenTitles.add(instantAnswer.title.lowercase().replace(Regex("""[^a-z0-9]"""), ""))
+                filtered.add(instantAnswer)
+            }
+
+            val queryWords = clean.lowercase().split(Regex("""\s+""")).filter { it.length > 2 }
+
+            for (res in allResults) {
+                val normalizedUrl = res.url.trimEnd('/')
+                val normTitle = res.title.lowercase().replace(Regex("""[^a-z0-9]"""), "")
+                if (normalizedUrl in seenUrls || normTitle in seenTitles) continue
+
+                val domain = try {
+                    java.net.URI(res.url).host?.removePrefix("www.")?.lowercase() ?: ""
+                } catch (_: Exception) { "" }
+
+                // Cap results from any single social domain to avoid mixing up multiple different people
+                val isSocialOrProfile = domain.contains("linkedin") || domain.contains("facebook") || domain.contains("instagram")
+                val currentDomainCount = domainCounts.getOrDefault(domain, 0)
+                if (isSocialOrProfile && currentDomainCount >= 2) {
+                    continue
+                }
+
+                // Filter out useless social directory boilerplate
+                val snipLower = res.snippet.lowercase()
+                if (snipLower.contains("11 friends") ||
+                    snipLower.contains("facebook gives people the power") ||
+                    snipLower.contains("photos and videos from friends on instagram") ||
+                    snipLower.contains("see photos and videos") ||
+                    res.title.equals("facebook", ignoreCase = true) ||
+                    res.title.contains("instagram photos", ignoreCase = true)
+                ) {
+                    continue
+                }
+
+                // If query has specific words, ensure at least some token overlap in title or snippet
+                if (queryWords.isNotEmpty()) {
+                    val combinedText = "${res.title} ${res.snippet}".lowercase()
+                    val hasTokenMatch = queryWords.any { word -> combinedText.contains(word) }
+                    if (!hasTokenMatch) continue
+                }
+
+                seenUrls.add(normalizedUrl)
+                seenTitles.add(normTitle)
+                domainCounts[domain] = currentDomainCount + 1
+
+                val cleanedSnippet = cleanSnippetText(res.snippet)
+                filtered.add(res.copy(snippet = cleanedSnippet.ifBlank { res.snippet }))
+            }
+
+            if (filtered.isNotEmpty()) {
+                val finalResults = filtered.take(maxResults)
+                Log.d(TAG, "[$TAG] Curated ${finalResults.size} search results")
+                return@withContext finalResults
+            }
+
+            // Fallback to single query if nothing matched
+            fetchSingleQuery(clean, maxResults)
+        } catch (t: Throwable) {
+            Log.e(TAG, "[$TAG] Search failed, attempting fallback", t)
+            fetchHtmlFallback(clean, maxResults)
+        }
+    }
+
+    private fun fetchInstantAnswer(query: String): SearchResult? {
+        return try {
+            val endpoint = URL("https://api.duckduckgo.com/?q=" + URLEncoder.encode(query, "UTF-8") + "&format=json&no_html=1&skip_disambig=1")
+            val conn = endpoint.openConnection() as HttpURLConnection
+            conn.requestMethod = "GET"
+            conn.connectTimeout = 3000
+            conn.readTimeout = 3000
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile)")
+            if (conn.responseCode == 200) {
+                val json = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { it.readText() }
+                val root = com.google.gson.JsonParser.parseString(json).asJsonObject
+                val abstractText = root.get("AbstractText")?.asString?.trim() ?: ""
+                val heading = root.get("Heading")?.asString?.trim() ?: ""
+                val abstractUrl = root.get("AbstractURL")?.asString?.trim() ?: ""
+                val source = root.get("AbstractSource")?.asString?.trim() ?: ""
+
+                if (abstractText.isNotBlank()) {
+                    val title = if (heading.isNotBlank()) {
+                        if (source.isNotBlank()) "$heading - $source" else heading
+                    } else query
+                    val url = if (abstractUrl.isNotBlank()) abstractUrl else "https://duckduckgo.com/?q=${URLEncoder.encode(query, "UTF-8")}"
+                    SearchResult(
+                        title = title,
+                        url = url,
+                        snippet = abstractText
+                    )
+                } else null
+            } else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun fetchSingleQuery(query: String, maxResults: Int): List<SearchResult> {
+        return try {
             val endpoint = URL("https://lite.duckduckgo.com/lite/")
             val conn = endpoint.openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
-            conn.connectTimeout = 3000
-            conn.readTimeout = 3000
+            conn.connectTimeout = 4000
+            conn.readTimeout = 4000
             conn.doOutput = true
             conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
             conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
@@ -48,21 +244,33 @@ class WebSearchClient {
                 writer.flush()
             }
 
-            val responseCode = conn.responseCode
-            if (responseCode != 200) {
-                Log.w(TAG, "[$TAG] DuckDuckGo Lite returned HTTP $responseCode")
-                return@withContext emptyList()
+            if (conn.responseCode == 200) {
+                val html = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { it.readText() }
+                parseSearchResults(html, maxResults)
+            } else {
+                fetchHtmlFallback(query, maxResults)
             }
+        } catch (e: Exception) {
+            Log.w(TAG, "[$TAG] Single query failed for '$query'", e)
+            fetchHtmlFallback(query, maxResults)
+        }
+    }
 
-            val html = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { reader ->
-                reader.readText()
-            }
-
-            val results = parseSearchResults(html, maxResults)
-            Log.d(TAG, "[$TAG] Successfully retrieved ${results.size} search snippets")
-            results
-        } catch (t: Throwable) {
-            Log.e(TAG, "[$TAG] Web search failed", t)
+    private fun fetchHtmlFallback(query: String, maxResults: Int): List<SearchResult> {
+        return try {
+            val endpoint = URL("https://html.duckduckgo.com/html/?q=" + URLEncoder.encode(query, "UTF-8"))
+            val conn = endpoint.openConnection() as HttpURLConnection
+            conn.requestMethod = "GET"
+            conn.connectTimeout = 5000
+            conn.readTimeout = 5000
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
+            conn.setRequestProperty("Accept", "text/html,application/xhtml+xml")
+            if (conn.responseCode == 200) {
+                val html = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { it.readText() }
+                parseSearchResults(html, maxResults)
+            } else emptyList()
+        } catch (e: Exception) {
+            Log.w(TAG, "[$TAG] Fallback search also failed", e)
             emptyList()
         }
     }
@@ -70,38 +278,83 @@ class WebSearchClient {
     private fun parseSearchResults(html: String, maxResults: Int): List<SearchResult> {
         val results = mutableListOf<SearchResult>()
 
-        val tagRegex = Regex("""<a\s+([^>]*class=['"][^'"]*result-link[^'"]*['"][^>]*)>(.*?)</a>""", RegexOption.DOT_MATCHES_ALL)
-        val snippetRegex = Regex("""<td[^>]*class=['"][^'"]*result-snippet[^'"]*['"][^>]*>(.*?)</td>""", RegexOption.DOT_MATCHES_ALL)
+        // 1. Try DuckDuckGo Lite markup (table rows with result-link and result-snippet)
+        val liteTagRegex = Regex("""<a\s+([^>]*class=['"][^'"]*result-link[^'"]*['"][^>]*)>(.*?)</a>""", RegexOption.DOT_MATCHES_ALL)
+        val liteSnippetRegex = Regex("""<td[^>]*class=['"][^'"]*result-snippet[^'"]*['"][^>]*>(.*?)</td>""", RegexOption.DOT_MATCHES_ALL)
         val hrefRegex = Regex("""href=['"]([^'"]+)['"]""")
 
-        val linkMatches = tagRegex.findAll(html).toList()
-        val snippetMatches = snippetRegex.findAll(html).toList()
+        val liteLinks = liteTagRegex.findAll(html).toList()
+        val liteSnippets = liteSnippetRegex.findAll(html).toList()
 
-        val count = minOf(linkMatches.size, snippetMatches.size, maxResults)
-        for (i in 0 until count) {
-            val attrs = linkMatches[i].groupValues[1]
-            val rawTitle = linkMatches[i].groupValues[2]
-            val hrefMatch = hrefRegex.find(attrs)
-            val url = hrefMatch?.groupValues?.get(1)?.let { cleanHtml(it) } ?: ""
-            val title = cleanHtml(rawTitle)
-            val snippet = cleanHtml(snippetMatches[i].groupValues[1])
+        if (liteLinks.isNotEmpty()) {
+            val count = minOf(liteLinks.size, maxResults)
+            for (i in 0 until count) {
+                val attrs = liteLinks[i].groupValues[1]
+                val rawTitle = liteLinks[i].groupValues[2]
+                val hrefMatch = hrefRegex.find(attrs)
+                val rawUrl = hrefMatch?.groupValues?.get(1)?.let { cleanHtml(it) } ?: ""
+                val url = cleanUrl(rawUrl)
+                val title = cleanHtml(rawTitle)
+                val snippet = if (i < liteSnippets.size) cleanHtml(liteSnippets[i].groupValues[1]) else ""
 
-            if (title.isNotBlank() && snippet.isNotBlank()) {
-                results.add(SearchResult(title = title, url = url, snippet = snippet))
+                if (title.isNotBlank() && url.isNotBlank()) {
+                    results.add(SearchResult(title = title, url = url, snippet = snippet.ifBlank { title }))
+                }
+            }
+        }
+
+        // 2. If lite returned empty, try DuckDuckGo HTML markup (result__a and result__snippet)
+        if (results.isEmpty()) {
+            val htmlTagRegex = Regex("""<a\s+[^>]*class=['"][^'"]*result__a[^'"]*['"][^>]*href=['"]([^'"]+)['"][^>]*>(.*?)</a>""", RegexOption.DOT_MATCHES_ALL)
+            val htmlSnippetRegex = Regex("""<a\s+[^>]*class=['"][^'"]*(?:result__snippet|snippet)[^'"]*['"][^>]*>(.*?)</a>""", RegexOption.DOT_MATCHES_ALL)
+
+            val htmlLinks = htmlTagRegex.findAll(html).toList()
+            val htmlSnippets = htmlSnippetRegex.findAll(html).toList()
+
+            val count = minOf(htmlLinks.size, maxResults)
+            for (i in 0 until count) {
+                val rawUrl = htmlLinks[i].groupValues[1]
+                val rawTitle = htmlLinks[i].groupValues[2]
+                val url = cleanUrl(cleanHtml(rawUrl))
+                val title = cleanHtml(rawTitle)
+                val snippet = if (i < htmlSnippets.size) cleanHtml(htmlSnippets[i].groupValues[1]) else ""
+
+                if (title.isNotBlank() && url.isNotBlank()) {
+                    results.add(SearchResult(title = title, url = url, snippet = snippet.ifBlank { title }))
+                }
             }
         }
 
         return results
     }
 
+    private fun cleanUrl(raw: String): String {
+        var url = raw.trim()
+        if (url.startsWith("//")) {
+            url = "https:$url"
+        }
+        if (url.contains("uddg=")) {
+            val encoded = url.substringAfter("uddg=").substringBefore("&")
+            try {
+                url = java.net.URLDecoder.decode(encoded, "UTF-8")
+            } catch (_: Exception) {}
+        }
+        return url
+    }
+
     private fun cleanHtml(raw: String): String {
         return raw.replace(Regex("<[^>]+>"), "")
             .replace("&#x27;", "'")
+            .replace("&#39;", "'")
             .replace("&quot;", "\"")
             .replace("&amp;", "&")
             .replace("&lt;", "<")
             .replace("&gt;", ">")
             .replace("&nbsp;", " ")
+            .replace("&bull;", "•")
+            .replace("&ndash;", "-")
+            .replace("&mdash;", "—")
+            .replace("\uFFFD", "·")
             .trim()
     }
 }

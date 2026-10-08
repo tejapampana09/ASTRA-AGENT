@@ -11,6 +11,7 @@ import com.teja.gemmmobile.ai.BackendType
 import com.teja.gemmmobile.ai.EngineState
 import com.teja.gemmmobile.ai.GemmaConfig
 import com.teja.gemmmobile.ai.GemmaEngine
+import com.teja.gemmmobile.ai.GemmaRepository
 import com.teja.gemmmobile.model.ModelInstallState
 import com.teja.gemmmobile.model.ModelManager
 import kotlinx.coroutines.CoroutineScope
@@ -40,6 +41,7 @@ enum class MessageRole {
     ASSISTANT
 }
 
+@androidx.compose.runtime.Immutable
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
     val role: MessageRole,
@@ -53,7 +55,9 @@ data class ChatMessage(
     @Transient val imageBitmap: Bitmap? = null,
     val imagePath: String? = null,
     val whatsAppAction: com.teja.gemmmobile.assistant.WhatsAppAction? = null,
-    val callAction: com.teja.gemmmobile.assistant.CallAction? = null
+    val callAction: com.teja.gemmmobile.assistant.CallAction? = null,
+    val isExecutingTool: Boolean = false,
+    val toolExecutionStatus: String? = null
 )
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
@@ -62,11 +66,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val chatStorage = ChatStorage(application.applicationContext)
     private val webSearchClient = WebSearchClient()
     val memoryManager = MemoryManager(application.applicationContext)
-    private var engine: GemmaEngine? = null
+    val toolRegistry = com.teja.gemmmobile.tools.ToolRegistry().apply {
+        register(com.teja.gemmmobile.tools.WebSearchTool(webSearchClient))
+        register(com.teja.gemmmobile.tools.ContactsTool(application.applicationContext))
+        register(com.teja.gemmmobile.tools.WhatsAppTool(application.applicationContext))
+        register(com.teja.gemmmobile.tools.CallTool(application.applicationContext))
+        register(com.teja.gemmmobile.tools.MemoryTool(memoryManager))
+        register(com.teja.gemmmobile.tools.OcrTool(application.applicationContext))
+    }
+    val contextManager = com.teja.gemmmobile.context.ContextManager()
+    private val engine: GemmaEngine? get() = GemmaRepository.getEngine()
 
     val installState: StateFlow<ModelInstallState> = modelManager.installState
 
-    private val _engineState = MutableStateFlow<EngineState>(EngineState.Uninitialized)
+    private val _engineState = MutableStateFlow<EngineState>(GemmaRepository.engineState.value)
     val engineState: StateFlow<EngineState> = _engineState.asStateFlow()
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
@@ -95,6 +108,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _attachedDocument = MutableStateFlow<ExtractedDocument?>(null)
     val attachedDocument: StateFlow<ExtractedDocument?> = _attachedDocument.asStateFlow()
+
+    private val _recentFiles = MutableStateFlow<List<ExtractedDocument>>(emptyList())
+    val recentFiles: StateFlow<List<ExtractedDocument>> = _recentFiles.asStateFlow()
 
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
@@ -130,10 +146,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     init {
         checkModel()
         loadPersistedSessions()
-        // Auto-start engine when model becomes available
+        // Mirror shared engine state across entire app
+        viewModelScope.launch {
+            GemmaRepository.engineState.collect { state ->
+                _engineState.value = state
+                if (state is EngineState.Error) {
+                    _errorMessage.value = state.message
+                } else if (state is EngineState.Ready) {
+                    _errorMessage.value = null
+                }
+            }
+        }
+        // Auto-start engine only when model becomes available in local storage
         viewModelScope.launch {
             installState.collect { state ->
-                if (state is ModelInstallState.Installed && _engineState.value is EngineState.Uninitialized) {
+                if (state is ModelInstallState.Installed && !GemmaRepository.isReady()) {
                     initializeEngine()
                 }
             }
@@ -156,12 +183,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         sessionId: String,
         transform: (List<ChatMessage>) -> List<ChatMessage>
     ) {
+        // 1. Compute updated messages from the most current source
+        val baseMessages = if (_currentSessionId.value == sessionId && _messages.value.isNotEmpty()) {
+            _messages.value
+        } else {
+            _sessions.value.find { it.id == sessionId }?.messages ?: emptyList()
+        }
+        val updatedMessages = transform(baseMessages)
+
+        // 2. Update the displayed messages immediately — this is the source of truth for UI
+        if (_currentSessionId.value == sessionId) {
+            _messages.value = updatedMessages
+        }
+
+        // 3. Update the sessions list (find/create session, update messages, keep order stable)
         val sessionList = _sessions.value.toMutableList()
         val index = sessionList.indexOfFirst { it.id == sessionId }
         val oldSession = if (index != -1) sessionList[index] else {
             ChatSession(id = sessionId, title = "New Chat", messages = emptyList())
         }
-        val updatedMessages = transform(oldSession.messages)
 
         val title = if (oldSession.title != "New Chat") oldSession.title else {
             val firstUser = updatedMessages.firstOrNull { it.role == MessageRole.USER }?.text?.trim()
@@ -179,11 +219,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             sessionList.add(0, updatedSession)
         }
+        // Only sort sessions in the sidebar — do not trigger a _messages reset here
         _sessions.value = sessionList.sortedByDescending { it.updatedAt }
-
-        if (_currentSessionId.value == sessionId) {
-            _messages.value = updatedMessages
-        }
     }
 
     fun persistChat() {
@@ -232,7 +269,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _config.value = newConfig
         modelManager.saveConfig(newConfig)
         viewModelScope.launch {
-            engine?.updateConfig(newConfig)
+            GemmaRepository.updateConfig(newConfig)
         }
     }
 
@@ -264,9 +301,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteModel() {
         viewModelScope.launch {
-            engine?.close()
-            engine = null
-            _engineState.value = EngineState.Uninitialized
+            GemmaRepository.close()
             modelManager.deleteModel()
         }
     }
@@ -291,27 +326,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
-            _engineState.value = EngineState.Loading("Initializing model...")
-            engine?.close()
-
-            val newEngine = GemmaEngine(modelFile.absolutePath, _config.value)
-            engine = newEngine
-
-            // Mirror engine state
-            val stateCollectionJob = launch {
-                newEngine.engineState.collect { state ->
-                    _engineState.value = state
-                    if (state is EngineState.Error) {
-                        _errorMessage.value = state.message
-                    }
-                }
-            }
-
-            val result = newEngine.initialize()
+            val result = GemmaRepository.reinitializeEngine(modelFile, _config.value)
             if (result.isFailure) {
                 val err = result.exceptionOrNull()?.localizedMessage ?: "Model loading failure"
                 _errorMessage.value = err
-                _engineState.value = EngineState.Error(err)
+            } else {
+                _errorMessage.value = null
             }
         }
     }
@@ -345,6 +365,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         activeGeneratingSessionId.value = null
         _isGenerating.value = false
 
+        // Force reset engine state back to Ready immediately so the badge changes
+        GemmaRepository.resetToReady()
+        val backend = (_engineState.value as? EngineState.Generating)?.backend ?: BackendType.GPU
+        _engineState.value = EngineState.Ready(backend)
+
         updateSessionMessages(genSessionId) { msgs ->
             msgs.map { msg ->
                 if (msg.isStreaming || msg.isThinking || msg.isSearchingWeb) {
@@ -359,64 +384,38 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun extractSearchQuery(raw: String): String {
-        var query = raw.trim()
-        val prefixes = listOf(
-            "now search for ",
-            "now search ",
-            "please search for ",
-            "please search ",
-            "search for ",
-            "search ",
-            "google ",
-            "find "
-        )
-        for (p in prefixes) {
-            if (query.startsWith(p, ignoreCase = true)) {
-                val candidate = query.substring(p.length).trim()
-                if (candidate.isNotBlank()) {
-                    query = candidate
-                    break
-                }
-            }
-        }
-        return query
+        return webSearchClient.sanitizeQuery(raw)
     }
 
     private fun shouldAutoSearch(prompt: String): Boolean {
         val p = prompt.lowercase().trim()
-        val searchKeywords = listOf(
-            "search", "find", "who is", "what is", "where is", "when is", "which is",
-            "latest", "recent", "today", "yesterday", "current", "news",
-            "portal", "website", "link", "url", "login", "cutoff", "admissions",
-            "admission", "results", "result", "score", "match", "weather",
-            "price", "cost", "stock", "release date", "movie", "srm", "exam", "syllabus",
-            "hall ticket", "live", "update", "updates", "schedule", "ipl", "cricket",
-            "minister", "president", "ceo", "governor", "university", "college",
-            "online", "official", "fees", "fee"
-        )
-        return searchKeywords.any { keyword ->
-            if (keyword.contains(" ")) p.contains(keyword)
-            else Regex("\\b${Regex.escape(keyword)}\\b", RegexOption.IGNORE_CASE).containsMatchIn(p)
+
+        // 1. Explicit search command from user
+        if (p.startsWith("search ") || p.startsWith("web search ") || p.startsWith("browse ") ||
+            p.contains("search web") || p.contains("search the web") || p.contains("search for ") ||
+            p.contains("google ")) {
+            return true
         }
+
+        // 2. Real-time / live events that an LLM cannot know without search
+        val realTimeKeywords = listOf(
+            "latest news", "today news", "breaking news",
+            "current price", "stock price", "crypto price", "live score", "match score",
+            "today weather", "current weather", "weather forecast",
+            "live update", "live updates", "election result",
+            "login portal", "admission cutoff", "hall ticket download"
+        )
+        return realTimeKeywords.any { keyword -> p.contains(keyword) }
     }
 
-    private fun indicatesLackOfKnowledge(text: String): Boolean {
-        val lower = text.lowercase()
-        val phrases = listOf(
-            "i don't have access to real-time",
-            "i do not have access to real-time",
-            "i don't have access to current",
-            "i do not have access to current",
-            "i cannot access real-time",
-            "i cannot browse the internet",
-            "i can't browse the internet",
-            "i don't have the ability to browse",
-            "my knowledge cutoff",
-            "as an ai, i cannot provide real-time",
-            "i don't have real-time information",
-            "i do not have real-time information"
+    private fun shouldIncludeTools(prompt: String): Boolean {
+        val p = prompt.lowercase().trim()
+        val toolKeywords = listOf(
+            "call ", "dial ", "call to", "whatsapp", "pampu", "send message", "send a message",
+            "search contacts", "contact number", "phone number", "remember that", "remember my", "remember:",
+            "extract text", "read document", "ocr"
         )
-        return phrases.any { lower.contains(it) }
+        return toolKeywords.any { p.contains(it) }
     }
 
     fun onInputTextChanged(text: String) {
@@ -425,6 +424,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun attachDocument(document: ExtractedDocument) {
         _attachedDocument.value = document
+        _recentFiles.value = (listOf(document) + _recentFiles.value.filter { it.fileName != document.fileName }).take(10)
     }
 
     fun clearAttachedDocument() {
@@ -449,6 +449,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         if (rawInput.isEmpty() && doc == null) return
         if (_isGenerating.value) return
+
+        // Clear input text and attached document immediately
+        _inputText.value = ""
+        _attachedDocument.value = null
 
         ttsManager.stop()
 
@@ -538,8 +542,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             else -> rawInput
         }
 
-        // Web search is STRICTLY manual (only if user explicitly clicked the Web toggle, and never on images)
-        val useWebSearch = _isWebSearchEnabled.value && !isImage
+        // Web search: enable if manual toggle is on OR if prompt asks for web search / current info like ChatGPT
+        val useWebSearch = (_isWebSearchEnabled.value || shouldAutoSearch(rawInput)) && !isImage
 
         _attachedDocument.value = null
         val userMessageId = UUID.randomUUID().toString()
@@ -570,7 +574,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             text = "",
             thoughtText = "",
             isStreaming = true,
-            isThinking = _config.value.enableThinking,
+            isThinking = _config.value.enableThinking && !useWebSearch,
             isSearchingWeb = useWebSearch,
             isImageAnalysis = isImage
         )
@@ -851,16 +855,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                     try {
                         val cleanQuery = extractSearchQuery(prompt)
-                        val fetchedResults = kotlinx.coroutines.withTimeoutOrNull(3500L) {
-                            webSearchClient.search(cleanQuery, maxResults = 3)
+                        val fetchedResults = kotlinx.coroutines.withTimeoutOrNull(9000L) {
+                            webSearchClient.search(cleanQuery, maxResults = 12)
                         }
                         if (fetchedResults != null && fetchedResults.isNotEmpty()) {
                             searchResults = fetchedResults
-                            val contextSnippets = searchResults.mapIndexed { idx, res ->
-                                "[${idx + 1}] Title: ${res.title}\nSnippet: ${res.snippet}\nSource URL: ${res.url}"
+                            // Use top 3 highest-signal snippets for the LLM prompt to keep prompt prefill fast and snappy
+                            val contextSnippets = searchResults.take(3).mapIndexed { idx, res ->
+                                "[${idx + 1}] Source: ${res.title}\nURL: ${res.url}\nInfo: ${res.snippet.take(180)}"
                             }.joinToString("\n\n")
 
-                            searchContext = "Live Real-Time Web Search Results:\n$contextSnippets"
+                            searchContext = "Real-Time Internet Search Results:\n$contextSnippets"
                         }
                     } catch (t: Throwable) {
                         Log.w(TAG, "[$TAG] Web search failed", t)
@@ -873,46 +878,64 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-                // Retrieve persistent memories and history from target session
+                // Retrieve persistent memories and history using ContextManager
                 val memoryContext = memoryManager.getFormattedMemoryPrompt()
                 val sessionSnapshot = _sessions.value.find { it.id == targetSessionId }
                 val targetMsgs = sessionSnapshot?.messages ?: _messages.value
-                val previousTurns = targetMsgs
-                    .filter { it.text.isNotBlank() && it.id != assistantMessageId }
-                    .takeLast(4)
 
-                val historyContext = if (previousTurns.isNotEmpty()) {
-                    "Recent Conversation History:\n" + previousTurns.joinToString("\n") {
-                        (if (it.role == MessageRole.USER) "User" else "Assistant") + ": " + it.text
-                    }
-                } else ""
+                val baseSystemPrompt = _config.value.systemPrompt.ifBlank { GemmaConfig.DEFAULT_SYSTEM_PROMPT }
+                val effectiveSystemPrompt = if (searchContext.isNotBlank()) {
+                    """
+$baseSystemPrompt
 
-                val effectivePrompt = buildString {
-                    if (imageBytes == null) {
-                        if (memoryContext.isNotBlank()) {
-                            appendLine(memoryContext)
-                            appendLine()
-                        }
-                        if (historyContext.isNotBlank()) {
-                            appendLine(historyContext)
-                            appendLine()
-                        }
-                    }
-                    if (searchContext.isNotBlank()) {
-                        appendLine(searchContext)
-                        appendLine()
-                    }
-                    appendLine(prompt)
-                    if (searchContext.isNotBlank()) {
-                        appendLine("Important Instructions: You have access to real-time live internet information via the Web Search Results above. Directly answer the user's question with full detail using the search results. Mention relevant facts, names, or URLs. Format all URLs as clickable links. Do NOT say you cannot access the internet, as the live web search results are provided right above.")
-                    }
-                }.trim()
+## WEB SEARCH MODE
+You have been given real-time web search results. Use them as your primary source of truth.
+
+### HOW TO ANSWER:
+1. **Lead with the direct answer** — give the most important fact or answer in the first 1-2 sentences.
+2. **Expand with context** — use the search results to add supporting details, explanations, or recent updates.
+3. **Structure clearly** — use ## headings, bullet points, bold text, and tables where useful.
+4. **Be specific and factual** — include relevant numbers, dates, names, and statistics from the results.
+5. **Do NOT hallucinate** — only use information from the provided search results. Do not invent URLs, links, or facts not present in the results.
+6. **Language** — reply in the SAME language as the user's question.
+
+### FORMATTING BY QUERY TYPE:
+- **News / Events**: Headline summary → Key details (who, what, when, where) → Impact/context
+- **How-to / Tutorial**: Numbered steps → Code block if applicable → Tips
+- **Comparison / "vs"**: Markdown table with pros/cons or key differences
+- **Person / Entity**: Name, Role, Key facts → Recent updates
+- **Price / Score / Stats**: State the exact figure first, then explain context
+- **General knowledge**: Direct answer → Explanation → Follow-up suggestions
+                    """.trimIndent()
+                } else {
+                    baseSystemPrompt
+                }
+
+                val effectivePrompt = if (imageBytes != null) {
+                    prompt
+                } else {
+                    val historyTurns = targetMsgs.filter { it.id != assistantMessageId }.dropLast(1)
+                    contextManager.buildPrompt(
+                        systemPrompt = "", // Handled natively in ConversationConfig
+                        toolsDocumentation = if (useWebSearch || !shouldIncludeTools(prompt)) "" else toolRegistry.getToolsDocumentation(),
+                        memoryContext = memoryContext,
+                        conversationHistory = historyTurns,
+                        currentPrompt = prompt,
+                        searchContext = searchContext
+                    )
+                }
 
                 val responseBuilder = StringBuilder()
                 val thoughtBuilder = StringBuilder()
-                var inThoughtTag = false
+                var lastUiUpdateTime = 0L
+                val UI_THROTTLE_MS = 100L // 10 updates/sec: smooth fluid streaming while freeing CPU cycles
 
-                eng.sendMessage(effectivePrompt, imageBytes)
+                eng.sendMessage(
+                    prompt = effectivePrompt,
+                    systemInstruction = effectiveSystemPrompt,
+                    imageBytes = imageBytes,
+                    enableThinkingOverride = if (useWebSearch) false else null
+                )
                     .catch { error ->
                         Log.e(TAG, "[$TAG] Stream error", error)
                         _errorMessage.value = "Generation failure: ${error.localizedMessage ?: "Unknown error"}"
@@ -937,82 +960,198 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                         val chunkText = chunk.text
                         if (chunkText.isNotEmpty()) {
-                            if (chunkText.contains("<thought>") || inThoughtTag) {
-                                var remaining = chunkText
-                                while (remaining.isNotEmpty()) {
-                                    if (!inThoughtTag) {
-                                        val startIdx = remaining.indexOf("<thought>")
-                                        if (startIdx != -1) {
-                                            responseBuilder.append(remaining.substring(0, startIdx))
-                                            remaining = remaining.substring(startIdx + "<thought>".length)
-                                            inThoughtTag = true
-                                        } else {
-                                            responseBuilder.append(remaining)
-                                            remaining = ""
-                                        }
-                                    } else {
-                                        val endIdx = remaining.indexOf("</thought>")
-                                        if (endIdx != -1) {
-                                            thoughtBuilder.append(remaining.substring(0, endIdx))
-                                            remaining = remaining.substring(endIdx + "</thought>".length)
-                                            inThoughtTag = false
-                                        } else {
-                                            thoughtBuilder.append(remaining)
-                                            remaining = ""
-                                        }
-                                    }
-                                }
-                            } else {
-                                responseBuilder.append(chunkText)
+                            val cleanChunk = chunkText.replace("<thought>", "").replace("</thought>", "")
+                            if (cleanChunk.isNotEmpty()) {
+                                responseBuilder.append(cleanChunk)
                             }
                         }
 
-                        val currentText = responseBuilder.toString()
-                        val currentThought = thoughtBuilder.toString()
-                        val stillThinking = currentText.isEmpty() && currentThought.isNotEmpty()
+                        val now = System.currentTimeMillis()
+                        // Throttle UI recompositions to avoid pegging the Main thread on every token
+                        if (now - lastUiUpdateTime >= UI_THROTTLE_MS) {
+                            lastUiUpdateTime = now
+                            val currentText = responseBuilder.toString()
+                            val currentThought = thoughtBuilder.toString()
+                            val stillThinking = currentText.isEmpty() && currentThought.isNotEmpty()
 
+                            if (_currentSessionId.value == targetSessionId) {
+                                _messages.value = _messages.value.map { msg ->
+                                    if (msg.id == assistantMessageId) {
+                                        msg.copy(
+                                            text = currentText,
+                                            thoughtText = currentThought,
+                                            isStreaming = true,
+                                            isThinking = stillThinking,
+                                            isSearchingWeb = false
+                                        )
+                                    } else msg
+                                }
+                            }
+                        }
+                    }
+
+                val rawFinalText = responseBuilder.toString()
+                val finalThought = thoughtBuilder.toString()
+
+                // Autonomous on-device tool calling loop
+                val detectedToolCall = if (imageBytes == null && !useWebSearch) toolRegistry.parseToolCall(rawFinalText) else null
+                if (detectedToolCall != null) {
+                    Log.d(TAG, "[$TAG] Autonomous tool call detected: ${detectedToolCall.name} with ${detectedToolCall.arguments}")
+                    updateSessionMessages(targetSessionId) { msgs ->
+                        msgs.map { msg ->
+                            if (msg.id == assistantMessageId) {
+                                msg.copy(
+                                    isExecutingTool = true,
+                                    toolExecutionStatus = "Running ${detectedToolCall.name}...",
+                                    isStreaming = false
+                                )
+                            } else msg
+                        }
+                    }
+
+                    val toolResult = toolRegistry.execute(detectedToolCall.name, detectedToolCall.arguments)
+
+                    // 1. WhatsApp Action (Strictly Awaiting User Confirmation)
+                    if (toolResult.data is com.teja.gemmmobile.assistant.WhatsAppAction) {
+                        val action = toolResult.data
                         updateSessionMessages(targetSessionId) { msgs ->
                             msgs.map { msg ->
                                 if (msg.id == assistantMessageId) {
                                     msg.copy(
-                                        text = currentText,
-                                        thoughtText = currentThought,
-                                        isStreaming = true,
-                                        isThinking = stillThinking,
-                                        isSearchingWeb = false
+                                        text = toolResult.content,
+                                        whatsAppAction = action,
+                                        isStreaming = false,
+                                        isThinking = false,
+                                        isExecutingTool = false,
+                                        toolExecutionStatus = null
                                     )
                                 } else msg
                             }
                         }
+                        val completedSession = _sessions.value.find { it.id == targetSessionId }
+                        if (completedSession != null) chatStorage.saveSession(completedSession)
+                        return@launch
                     }
 
-                val finalText = responseBuilder.toString()
+                    // 2. Phone Call Action (Strictly Awaiting User Confirmation)
+                    if (toolResult.data is com.teja.gemmmobile.assistant.CallAction) {
+                        val action = toolResult.data
+                        updateSessionMessages(targetSessionId) { msgs ->
+                            msgs.map { msg ->
+                                if (msg.id == assistantMessageId) {
+                                    msg.copy(
+                                        text = toolResult.content,
+                                        callAction = action,
+                                        isStreaming = false,
+                                        isThinking = false,
+                                        isExecutingTool = false,
+                                        toolExecutionStatus = null
+                                    )
+                                } else msg
+                            }
+                        }
+                        val completedSession = _sessions.value.find { it.id == targetSessionId }
+                        if (completedSession != null) chatStorage.saveSession(completedSession)
+                        return@launch
+                    }
 
-                if (allowFallback && indicatesLackOfKnowledge(finalText)) {
-                    Log.d(TAG, "[$TAG] Model indicated lack of real-time knowledge. Auto-triggering web search fallback...")
+                    // 3. Informational Tools (web_search, search_contacts, manage_memory, ocr_document)
+                    if (detectedToolCall.name == "web_search" && toolResult.data is List<*>) {
+                        val newSearchResults = toolResult.data.filterIsInstance<SearchResult>()
+                        if (newSearchResults.isNotEmpty()) {
+                            searchResults = newSearchResults
+                        }
+                    }
+
+                    val secondTurnPrompt = contextManager.buildPrompt(
+                        systemPrompt = "You are a helpful, accurate AI assistant. Answer the user's request using this verified tool result:\n\n${toolResult.content}",
+                        toolsDocumentation = "",
+                        memoryContext = memoryContext,
+                        conversationHistory = targetMsgs.filter { it.id != assistantMessageId },
+                        currentPrompt = prompt,
+                        toolResultsContext = toolResult.content
+                    )
+
+                    val secondTurnResponseBuilder = StringBuilder()
                     updateSessionMessages(targetSessionId) { msgs ->
                         msgs.map { msg ->
                             if (msg.id == assistantMessageId) {
-                                msg.copy(text = "", thoughtText = "", isSearchingWeb = true, isStreaming = true)
+                                msg.copy(
+                                    searchResults = searchResults,
+                                    isExecutingTool = false,
+                                    toolExecutionStatus = null,
+                                    isStreaming = true
+                                )
                             } else msg
                         }
                     }
-                    startGeneration(
-                        targetSessionId = targetSessionId,
-                        prompt = prompt,
-                        assistantMessageId = assistantMessageId,
-                        eng = eng,
-                        useWebSearch = true,
-                        allowFallback = false
-                    )
-                    return@launch
+
+                    try {
+                        eng.sendMessage(prompt = secondTurnPrompt).collect { chunk ->
+                            if (chunk.thought.isNotEmpty()) thoughtBuilder.append(chunk.thought)
+                            val clean = chunk.text.replace("<thought>", "").replace("</thought>", "")
+                            if (clean.isNotEmpty()) {
+                                secondTurnResponseBuilder.append(clean)
+                                if (_currentSessionId.value == targetSessionId) {
+                                    _messages.value = _messages.value.map { msg ->
+                                        if (msg.id == assistantMessageId) {
+                                            msg.copy(text = secondTurnResponseBuilder.toString(), isStreaming = true)
+                                        } else msg
+                                    }
+                                }
+                            }
+                        }
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "[$TAG] Follow-up tool synthesis error", t)
+                    }
+
+                    if (secondTurnResponseBuilder.isNotBlank() && secondTurnResponseBuilder.length >= rawFinalText.length) {
+                        responseBuilder.clear()
+                        responseBuilder.append(secondTurnResponseBuilder.toString())
+                    } else if (responseBuilder.isEmpty() && toolResult.content.isNotBlank()) {
+                        responseBuilder.append(toolResult.content)
+                    } else if (rawFinalText.isNotBlank()) {
+                        if (_currentSessionId.value == targetSessionId) {
+                            _messages.value = _messages.value.map { msg ->
+                                if (msg.id == assistantMessageId) msg.copy(text = rawFinalText, isStreaming = false) else msg
+                            }
+                        }
+                    }
                 }
 
-                // Finalize assistant message
+                val finalText = responseBuilder.toString()
+
+                // Finalize assistant message and update session history once
+                val resolvedText = when {
+                    finalText.isNotBlank() -> finalText
+                    rawFinalText.isNotBlank() -> rawFinalText
+                    finalThought.isNotBlank() -> finalThought
+                    searchResults.isNotEmpty() -> {
+                        // Fallback synthesis directly from search results if model silently stopped or choked on prompt
+                        buildString {
+                            appendLine("Based on web search results, here is what I found:")
+                            appendLine()
+                            searchResults.take(3).forEach { res ->
+                                val cleanTitle = res.title.substringBefore("-").substringBefore("|").trim()
+                                appendLine("• **$cleanTitle**: ${res.snippet.trim()}")
+                            }
+                            appendLine()
+                            appendLine("Please let me know if you would like more details!")
+                        }.trim()
+                    }
+                    else -> "I couldn't generate a response. Please try again with a shorter prompt."
+                }
+
                 updateSessionMessages(targetSessionId) { msgs ->
                     msgs.map { msg ->
                         if (msg.id == assistantMessageId) {
-                            msg.copy(isStreaming = false, isThinking = false, isSearchingWeb = false)
+                            msg.copy(
+                                text = resolvedText,
+                                thoughtText = if (resolvedText == finalThought) "" else finalThought,
+                                isStreaming = false,
+                                isThinking = false,
+                                isSearchingWeb = false
+                            )
                         } else msg
                     }
                 }
@@ -1050,17 +1189,37 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // Notice: Do NOT cancel activeGenerationJob! Previous chat keeps generating in background
     }
 
-    fun selectSession(sessionId: String) {
-        if (sessionId == _currentSessionId.value) return
-        persistChat()
+    fun refreshSessions(targetSessionId: String? = null) {
+        viewModelScope.launch {
+            val loaded = chatStorage.loadSessions()
+            _sessions.value = loaded
+            if (targetSessionId != null) {
+                val target = loaded.find { it.id == targetSessionId }
+                if (target != null) {
+                    _currentSessionId.value = target.id
+                    _messages.value = target.messages
+                    _isGenerating.value = (activeGeneratingSessionId.value == target.id)
+                    return@launch
+                }
+            }
+            if (_sessions.value.none { it.id == _currentSessionId.value } && loaded.isNotEmpty()) {
+                val latest = loaded.first()
+                _currentSessionId.value = latest.id
+                _messages.value = latest.messages
+            }
+        }
+    }
 
-        val target = _sessions.value.find { it.id == sessionId }
-        if (target != null) {
-            _currentSessionId.value = target.id
-            _messages.value = target.messages
+    fun selectSession(sessionId: String) {
+        persistChat()
+        val inMemory = _sessions.value.find { it.id == sessionId }
+        if (inMemory != null) {
+            _currentSessionId.value = inMemory.id
+            _messages.value = inMemory.messages
             _inputText.value = ""
-            // Reflect generation state if the newly selected session is generating
-            _isGenerating.value = (activeGeneratingSessionId.value == target.id)
+            _isGenerating.value = (activeGeneratingSessionId.value == inMemory.id)
+        } else {
+            refreshSessions(targetSessionId = sessionId)
         }
     }
 
@@ -1150,13 +1309,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         val prompt = if (userMsg.text.isNotBlank()) userMsg.text else "Examine this image in full detail. Transcribe and extract all visible text, numbers, headings, tables, labels, or data exactly as shown. If tabular data is present, format it into clean Markdown tables with column headers. Answer clearly, accurately, and thoroughly."
 
+        val useSearch = (_isWebSearchEnabled.value || shouldAutoSearch(prompt)) && imageBytesToSend == null
+
         startGeneration(
             targetSessionId = currSessionId,
             prompt = prompt,
             assistantMessageId = newAssistantId,
             eng = eng,
-            useWebSearch = _isWebSearchEnabled.value,
-            allowFallback = !_isWebSearchEnabled.value,
+            useWebSearch = useSearch,
+            allowFallback = !useSearch,
             imageBytes = imageBytesToSend
         )
     }
@@ -1176,13 +1337,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         val eng = engine ?: return
         val newAssistantId = UUID.randomUUID().toString()
+        val imageBytesToSend = if (updatedUserMsg.isImageAnalysis && updatedUserMsg.imagePath != null) {
+            try { java.io.File(updatedUserMsg.imagePath).readBytes() } catch (_: Exception) { null }
+        } else null
+        val useSearch = (_isWebSearchEnabled.value || shouldAutoSearch(newText)) && imageBytesToSend == null
+
         val newAssistantMessage = ChatMessage(
             id = newAssistantId,
             role = MessageRole.ASSISTANT,
             text = "",
             isStreaming = true,
             isThinking = _config.value.enableThinking,
-            isSearchingWeb = _isWebSearchEnabled.value,
+            isSearchingWeb = useSearch,
             isImageAnalysis = updatedUserMsg.isImageAnalysis
         )
 
@@ -1190,17 +1356,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         updateSessionMessages(currSessionId) { prefixMessages + updatedUserMsg + newAssistantMessage }
         _isGenerating.value = true
 
-        val imageBytesToSend = if (updatedUserMsg.isImageAnalysis && updatedUserMsg.imagePath != null) {
-            try { java.io.File(updatedUserMsg.imagePath).readBytes() } catch (_: Exception) { null }
-        } else null
-
         startGeneration(
             targetSessionId = currSessionId,
             prompt = newText,
             assistantMessageId = newAssistantId,
             eng = eng,
-            useWebSearch = _isWebSearchEnabled.value,
-            allowFallback = !_isWebSearchEnabled.value,
+            useWebSearch = useSearch,
+            allowFallback = !useSearch,
             imageBytes = imageBytesToSend
         )
     }
@@ -1213,7 +1375,5 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
         activeGenerationJob?.cancel()
         ttsManager.release()
-        engine?.close()
-        engine = null
     }
 }

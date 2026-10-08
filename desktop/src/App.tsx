@@ -10,6 +10,7 @@ import { TerminalPanel } from './components/TerminalPanel';
 import { DiffViewer } from './components/DiffViewer';
 import { ApprovalModal } from './components/ApprovalModal';
 import { SettingsModal } from './components/SettingsModal';
+import { CodePreviewPane } from './components/CodePreviewPane';
 import { ChatMessage } from './components/ChatPanel';
 import {
   AgentEvent,
@@ -21,7 +22,7 @@ import {
   SessionItem,
   SystemHealth,
 } from './types';
-import { Sparkles, Terminal, FileCode, CheckCircle2, RotateCcw } from 'lucide-react';
+import { Sparkles, Terminal, FileCode, CheckCircle2, RotateCcw, ChevronDown } from 'lucide-react';
 
 const getRelativePath = (p: string, wsPath?: string): string => {
   if (!p) return '';
@@ -44,79 +45,135 @@ const getRelativePath = (p: string, wsPath?: string): string => {
   return clean || p;
 };
 
+const getFileIcon = (filename: string): string => {
+  const f = filename.toLowerCase();
+  if (f.endsWith('.py')) return '🐍';
+  if (f.endsWith('.tsx') || f.endsWith('.jsx')) return '⚛️';
+  if (f.endsWith('.ts') || f.endsWith('.js')) return '📜';
+  if (f.endsWith('.css') || f.endsWith('.html')) return '🎨';
+  if (f.endsWith('.json') || f.endsWith('.yaml') || f.endsWith('.yml') || f.endsWith('.toml')) return '⚙️';
+  if (f.endsWith('.md')) return '📄';
+  return '📄';
+};
+
 const formatToolAction = (name: string, args: Record<string, any>, wsPath?: string) => {
-  const relPath = getRelativePath(args?.file_path || '', wsPath);
+  const rawPath = args?.file_path || args?.path || args?.target_path || args?.dir_path || '';
+  const relPath = getRelativePath(rawPath, wsPath);
+  const lineRange = args?.start_line
+    ? `#L${args.start_line}${args.end_line ? `-${args.end_line}` : ''}`
+    : '';
+
   switch (name) {
     case 'create_file':
       return {
         type: 'file' as const,
-        title: `Create ${relPath}`,
+        actionVerb: 'Created' as const,
+        filename: relPath,
+        fileIcon: '📄',
+        title: `Created 📄 ${relPath}`,
         detail: args.content ? `${args.content.split('\n').length} lines` : 'new file',
       };
     case 'write_file':
       return {
         type: 'file' as const,
-        title: `Write ${relPath}`,
+        actionVerb: 'Created' as const,
+        filename: relPath,
+        fileIcon: '📄',
+        title: `Created 📄 ${relPath}`,
         detail: args.content ? `${args.content.split('\n').length} lines` : 'overwrite',
       };
     case 'edit_file':
       return {
         type: 'file' as const,
-        title: `Edit ${relPath}`,
+        actionVerb: 'Edited' as const,
+        filename: relPath,
+        fileIcon: '✏️',
+        lineRange,
+        title: `Edited ✏️ ${relPath}${lineRange ? ' ' + lineRange : ''}`,
         detail: 'surgical edit',
       };
-    case 'read_file':
+    case 'read_file': {
+      const icon = getFileIcon(relPath);
       return {
         type: 'file' as const,
-        title: `Read ${relPath}`,
-        detail: args.start_line ? `lines ${args.start_line}-${args.end_line || ''}` : '',
+        actionVerb: 'Analyzed' as const,
+        filename: relPath,
+        fileIcon: icon,
+        lineRange,
+        title: `Analyzed ${icon} ${relPath}${lineRange ? ' ' + lineRange : ''}`,
+        detail: lineRange,
       };
+    }
     case 'delete_file':
       return {
         type: 'file' as const,
-        title: `Delete ${relPath}`,
+        actionVerb: 'Edited' as const,
+        filename: relPath,
+        fileIcon: '🗑️',
+        title: `Deleted 🗑️ ${relPath}`,
         detail: '',
       };
-    case 'run_command':
+    case 'run_command': {
+      const cleanCmd = (args.command || 'command').replace(/^(\$\s*|ran\s+⚡?\s*)/i, '');
       return {
         type: 'command' as const,
-        title: `$ ${args.command || 'command'}`,
+        actionVerb: 'Ran' as const,
+        command: cleanCmd,
+        title: `Ran ⚡ ${cleanCmd}`,
         detail: '',
       };
+    }
     case 'list_dir':
       return {
         type: 'file' as const,
-        title: `List ${getRelativePath(args.dir_path || '.', wsPath)}`,
+        actionVerb: 'Analyzed' as const,
+        filename: relPath || '.',
+        fileIcon: '📁',
+        title: `Analyzed 📁 ${relPath || '.'}`,
         detail: '',
       };
-    case 'search_code':
+    case 'search_code': {
+      const queryStr = `search_code "${args.query || ''}"`;
       return {
         type: 'command' as const,
-        title: `Search code: "${args.query || ''}"`,
+        actionVerb: 'Ran' as const,
+        command: queryStr,
+        title: `Ran ⚡ ${queryStr}`,
         detail: args.search_dir ? `in ${getRelativePath(args.search_dir, wsPath)}` : '',
       };
+    }
     case 'git_status':
       return {
         type: 'command' as const,
-        title: '$ git status',
+        actionVerb: 'Ran' as const,
+        command: 'git status',
+        title: 'Ran ⚡ git status',
         detail: '',
       };
     case 'git_diff':
       return {
         type: 'command' as const,
-        title: '$ git diff',
+        actionVerb: 'Ran' as const,
+        command: 'git diff',
+        title: 'Ran ⚡ git diff',
         detail: '',
       };
-    case 'web_search':
+    case 'web_search': {
+      const q = `web_search "${args.query || ''}"`;
       return {
         type: 'command' as const,
-        title: `Web search: "${args.query || ''}"`,
+        actionVerb: 'Ran' as const,
+        command: q,
+        title: `Ran ⚡ ${q}`,
         detail: '',
       };
+    }
     default:
       return {
         type: 'tool' as const,
-        title: name,
+        actionVerb: 'Ran' as const,
+        command: name,
+        title: `Ran ⚡ ${name}`,
         detail: '',
       };
   }
@@ -164,8 +221,32 @@ export const App: React.FC = () => {
     permissionMode: 'balanced',
   });
 
+  // Antigravity Split-Pane & Auto-scroll State
+  const [previewFile, setPreviewFile] = useState<{
+    path: string;
+    lineRange?: string;
+    defaultTab?: 'file' | 'diff';
+  } | null>(null);
+  const [showScrollBottom, setShowScrollBottom] = useState<boolean>(false);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
+  const handleChatScroll = () => {
+    if (!chatScrollRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = chatScrollRef.current;
+    const isUp = scrollHeight - scrollTop - clientHeight > 150;
+    setShowScrollBottom(isUp);
+  };
+
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTo({
+        top: chatScrollRef.current.scrollHeight,
+        behavior: 'smooth',
+      });
+    } else {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+    setShowScrollBottom(false);
   };
 
   useEffect(() => {
@@ -262,22 +343,115 @@ export const App: React.FC = () => {
     const { event_type, data } = event;
 
     switch (event_type) {
+      case 'task_started':
       case 'agent_started':
-        setCurrentAction(data.is_conversational ? '' : 'Starting agent...');
+        setCurrentAction(data.is_conversational ? '' : '● Understanding request...');
         setTerminalLogs((prev) => [...prev, `$ Starting task: "${data.goal}"`]);
+        break;
+
+      case 'task_classified':
+        setCurrentAction(data.initial_objective ? `● ${data.initial_objective}` : `Task classified: ${data.task_type}`);
+        break;
+
+      case 'phase_changed': {
+        const ph = data.phase || '';
+        const phaseLabels: Record<string, string> = {
+          UNDERSTAND: '● Understanding request',
+          INVESTIGATE: data.objective ? `● Investigating: ${data.objective}` : '● Investigating subsystem',
+          DIAGNOSE: '● Diagnosing root cause',
+          PLAN: '● Planning implementation',
+          EXECUTE: '● Implementing changes',
+          VERIFY: '● Verifying solution independently',
+          REPLAN: '● Replanning strategy',
+          RECOVER: '● Recovering workspace from checkpoint',
+          DONE: '✓ Task completed',
+          BLOCKED: '✕ Task blocked',
+        };
+        if (phaseLabels[ph]) {
+          setCurrentAction(phaseLabels[ph]);
+        }
+        break;
+      }
+
+      case 'investigation_started':
+        setCurrentAction('● Investigating repository & tracing flow...');
+        break;
+
+      case 'hypothesis_created':
+        if (data.statement) {
+          updateAssistantMessage((msg) => {
+            const acts = msg.actions || [];
+            return {
+              ...msg,
+              actions: [
+                ...acts,
+                {
+                  id: `hyp_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+                  type: 'thought',
+                  actionVerb: 'Thought for',
+                  thoughtSeconds: Math.max(2, Math.round(((Date.now() - (msg.startTime || Date.now())) / 1000) % 20) || 6),
+                  title: `Thought for 6s`,
+                  detail: `Hypothesis: ${data.statement}`,
+                  status: 'completed',
+                  timestamp: Date.now(),
+                },
+              ],
+            };
+          });
+        }
+        break;
+
+      case 'evidence_found':
+        if (data.fact) {
+          updateAssistantMessage((msg) => {
+            const acts = msg.actions || [];
+            return {
+              ...msg,
+              actions: [
+                ...acts,
+                {
+                  id: `ev_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+                  type: 'thought',
+                  actionVerb: 'Thought for',
+                  thoughtSeconds: Math.max(2, Math.round(((Date.now() - (msg.startTime || Date.now())) / 1000) % 20) || 5),
+                  title: `Thought for 5s`,
+                  detail: `Evidence: ${data.fact}`,
+                  status: 'completed',
+                  timestamp: Date.now(),
+                },
+              ],
+            };
+          });
+        }
         break;
 
       case 'planning':
         if (data.thought) {
-          updateAssistantMessage((msg) => ({
-            ...msg,
-            thought: data.thought,
-          }));
+          updateAssistantMessage((msg) => {
+            const acts = msg.actions || [];
+            return {
+              ...msg,
+              thought: data.thought,
+              actions: [
+                ...acts,
+                {
+                  id: `th_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+                  type: 'thought',
+                  actionVerb: 'Thought for',
+                  thoughtSeconds: 8,
+                  title: `Thought for 8s`,
+                  detail: data.thought,
+                  status: 'completed',
+                  timestamp: Date.now(),
+                },
+              ],
+            };
+          });
         }
         break;
 
       case 'exploration_started':
-        setCurrentAction('Exploring repository architecture...');
+        setCurrentAction('● Exploring repository architecture...');
         break;
 
       case 'tool_started': {
@@ -293,6 +467,11 @@ export const App: React.FC = () => {
               ...updated[existingIdx],
               status: 'running',
               detail: formatted.detail || updated[existingIdx].detail,
+              actionVerb: formatted.actionVerb,
+              filename: (formatted as any).filename,
+              fileIcon: (formatted as any).fileIcon,
+              lineRange: (formatted as any).lineRange,
+              command: (formatted as any).command,
             };
             return { ...msg, actions: updated };
           }
@@ -305,7 +484,13 @@ export const App: React.FC = () => {
                 type: formatted.type,
                 title: formatted.title,
                 detail: formatted.detail,
+                actionVerb: formatted.actionVerb,
+                filename: (formatted as any).filename,
+                fileIcon: (formatted as any).fileIcon,
+                lineRange: (formatted as any).lineRange,
+                command: (formatted as any).command,
                 status: 'running',
+                timestamp: Date.now(),
               },
             ],
           };
@@ -322,10 +507,12 @@ export const App: React.FC = () => {
           const acts = [...(msg.actions || [])];
           for (let i = acts.length - 1; i >= 0; i--) {
             if (acts[i].status === 'running') {
+              const startTs = acts[i].timestamp;
               acts[i] = {
                 ...acts[i],
                 status: data.success === false ? 'failed' : 'completed',
                 output: data.output || '(completed)',
+                durationMs: startTs ? Date.now() - startTs : undefined,
               };
               break;
             }
@@ -480,6 +667,7 @@ export const App: React.FC = () => {
         });
         break;
 
+      case 'task_completed':
       case 'agent_completed':
         setAgentState('COMPLETED');
         setCurrentAction('');
@@ -487,8 +675,12 @@ export const App: React.FC = () => {
           const finalActs = (msg.actions || []).map((a) =>
             a.status === 'running' ? { ...a, status: 'completed' as const } : a
           );
+          const endTime = Date.now();
+          const durationMs = msg.startTime ? endTime - msg.startTime : undefined;
           return {
             ...msg,
+            endTime,
+            durationMs,
             content: data.summary || msg.content || 'Task completed successfully.',
             actions: finalActs,
           };
@@ -496,6 +688,7 @@ export const App: React.FC = () => {
         api.getWorkspaceDiff().then(setDiffResult).catch(() => {});
         break;
 
+      case 'task_failed':
       case 'agent_failed':
         setAgentState('FAILED');
         setCurrentAction('');
@@ -503,8 +696,12 @@ export const App: React.FC = () => {
           const finalActs = (msg.actions || []).map((a) =>
             a.status === 'running' ? { ...a, status: 'failed' as const } : a
           );
+          const endTime = Date.now();
+          const durationMs = msg.startTime ? endTime - msg.startTime : undefined;
           return {
             ...msg,
+            endTime,
+            durationMs,
             content: `Task halted: ${data.error || 'Execution failed'}`,
             actions: finalActs,
           };
@@ -518,8 +715,12 @@ export const App: React.FC = () => {
           const finalActs = (msg.actions || []).map((a) =>
             a.status === 'running' ? { ...a, status: 'failed' as const, output: 'Cancelled by user.' } : a
           );
+          const endTime = Date.now();
+          const durationMs = msg.startTime ? endTime - msg.startTime : undefined;
           return {
             ...msg,
+            endTime,
+            durationMs,
             content: 'Task stopped by user.',
             actions: finalActs,
           };
@@ -539,10 +740,31 @@ export const App: React.FC = () => {
       content: goal,
       timestamp: Date.now(),
     };
-    setMessages((prev) => [...prev, userMsg]);
+    const now = Date.now();
+    const initialAssistantMsg: ChatMessage = {
+      id: String(now + 1),
+      role: 'assistant',
+      content: '',
+      actions: [
+        {
+          id: `step_${now}`,
+          type: 'thought',
+          actionVerb: 'Thought for',
+          thoughtSeconds: 1,
+          title: 'Thought for 1s',
+          detail: 'Initializing cognitive loop and classifying request...',
+          status: 'running',
+          timestamp: now,
+        },
+      ],
+      timestamp: now + 1,
+      startTime: now + 1,
+    };
+    setMessages((prev) => [...prev, userMsg, initialAssistantMsg]);
     setFilesModified([]);
     setFilesCreated([]);
     setAgentState('PLANNING');
+    setCurrentAction('Analyzing objective & planning steps...');
 
     try {
       const res = await api.startTask(goal, metadata?.workspace_path, selectedModel, activeSessionId);
@@ -590,12 +812,43 @@ export const App: React.FC = () => {
       const s = await api.getSession(id);
       setActiveSessionId(id);
       if (s.messages) {
-        const mapped = s.messages.map((m: any, idx: number) => ({
-          id: String(idx),
-          role: m.role,
-          content: m.content,
-          timestamp: m.created_at,
-        }));
+        const mapped = s.messages.map((m: any, idx: number) => {
+          let acts: any[] = [];
+          if (m.tool_calls && Array.isArray(m.tool_calls)) {
+            acts = m.tool_calls.map((tc: any, tcIdx: number) => {
+              const fnName = tc.function?.name || tc.name || '';
+              let fnArgs: any = {};
+              try {
+                fnArgs =
+                  typeof tc.function?.arguments === 'string'
+                    ? JSON.parse(tc.function.arguments)
+                    : tc.function?.arguments || tc.args || {};
+              } catch {
+                fnArgs = {};
+              }
+              const fmt = formatToolAction(fnName, fnArgs, metadata?.workspace_path);
+              return {
+                id: `tc_${idx}_${tcIdx}`,
+                type: fmt.type,
+                title: fmt.title,
+                detail: fmt.detail,
+                actionVerb: fmt.actionVerb,
+                filename: (fmt as any).filename,
+                fileIcon: (fmt as any).fileIcon,
+                lineRange: (fmt as any).lineRange,
+                command: (fmt as any).command,
+                status: 'completed' as const,
+              };
+            });
+          }
+          return {
+            id: String(idx),
+            role: m.role,
+            content: m.content,
+            actions: acts,
+            timestamp: m.created_at || Date.now(),
+          };
+        });
         setMessages(mapped);
       }
     } catch (err) {
@@ -654,10 +907,9 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleOpenFile = (filePath: string) => {
+  const handleOpenFile = (filePath: string, lineRange?: string) => {
     if (!filePath) return;
-    setShowDiff(true);
-    setShowTerminal(false);
+    setPreviewFile({ path: filePath, lineRange, defaultTab: 'file' });
     api.getWorkspaceDiff().then(setDiffResult).catch(() => {});
   };
 
@@ -672,7 +924,7 @@ export const App: React.FC = () => {
   ).length;
 
   return (
-    <div className="flex h-screen w-screen bg-white text-slate-800 overflow-hidden font-sans select-none">
+    <div className="flex h-screen w-screen bg-[#0d1117] text-[#c9d1d9] overflow-hidden font-sans select-none">
       {/* Left Sidebar (Echo AI Style) */}
       <Sidebar
         sessions={sessions}
@@ -690,16 +942,16 @@ export const App: React.FC = () => {
       />
 
       {/* Main Center Area */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden relative bg-white">
+      <main className="flex-1 flex flex-col h-full overflow-hidden relative bg-[#0d1117]">
         {/* Top Minimal Bar */}
-        <div className="h-12 px-6 flex items-center justify-between border-b border-slate-200 bg-white">
+        <div className="h-12 px-6 flex items-center justify-between border-b border-[#21262d] bg-[#0d1117]">
           <div className="flex items-center space-x-2 text-xs">
-            <span className="text-slate-400 font-medium">Workspace:</span>
-            <span className="text-slate-700 font-mono font-medium max-w-sm truncate">
+            <span className="text-[#8b949e] font-medium">Workspace:</span>
+            <span className="text-[#f0f6fc] font-mono font-medium max-w-sm truncate">
               {metadata?.workspace_path || 'No workspace selected'}
             </span>
             {metadata?.project_type && metadata.project_type !== 'unknown' && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 font-mono uppercase">
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#161b22] text-[#8b949e] border border-[#30363d] font-mono uppercase">
                 {metadata.project_type}
               </span>
             )}
@@ -710,96 +962,127 @@ export const App: React.FC = () => {
             <div
               className={`px-2.5 py-1 rounded-full font-mono text-[10px] uppercase font-semibold border ${
                 isRunning
-                  ? 'bg-blue-50 text-blue-700 border-blue-200 animate-pulse'
+                  ? 'bg-blue-950/60 text-blue-400 border-blue-800 animate-pulse'
                   : agentState === 'COMPLETED'
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                  : 'bg-slate-50 text-slate-500 border-slate-200'
+                  ? 'bg-emerald-950/60 text-emerald-400 border-emerald-800'
+                  : 'bg-[#161b22] text-[#8b949e] border-[#30363d]'
               }`}
             >
               ● {agentState}
             </div>
 
-            {/* Sources / Tool Calls Toggle */}
+            {/* Live Activity & Execution Toggle */}
             <button
               onClick={() => setShowSourcesDrawer(!showSourcesDrawer)}
-              className="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 transition-colors"
+              className={`flex items-center space-x-1.5 px-3 py-1 rounded-lg border text-xs font-medium transition-all ${
+                isRunning
+                  ? 'bg-blue-950/60 text-blue-300 border-blue-700 hover:bg-blue-900/60 shadow-xs'
+                  : 'bg-[#161b22] hover:bg-[#21262d] border-[#30363d] text-[#c9d1d9]'
+              }`}
             >
-              <span>Tool Calls ({toolCallsCount})</span>
+              {isRunning && <span className="w-2 h-2 rounded-full bg-[#58a6ff] animate-pulse" />}
+              <span>⚡ Live Execution ({events.length})</span>
             </button>
           </div>
         </div>
 
-        {/* Conversation / Welcome Screen Scroll Area */}
-        <div className="flex-1 overflow-y-auto px-6 py-4 bg-white">
-          {messages.length === 0 ? (
-            /* Welcome / Empty Screen */
-            <div className="h-full flex flex-col items-center justify-center text-center px-4 max-w-2xl mx-auto space-y-6 -mt-8">
-              {/* Minimalist Antigravity Logo */}
-              <div className="w-14 h-14 rounded-2xl bg-slate-900 flex items-center justify-center text-white shadow-sm">
-                <Sparkles className="w-7 h-7 text-white" />
-              </div>
-
-              <div>
-                <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider">Antigravity Agent Engine</p>
-                <h1 className="text-2xl font-bold text-slate-900 tracking-tight mt-1.5">
-                  How can I assist you today?
-                </h1>
-              </div>
-
-              {/* 3 Suggestion Prompt Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 w-full text-left pt-2">
-                {[
-                  {
-                    title: 'Fix failing pytest in my workspace',
-                    desc: 'Autonomously inspects tests, edits code surgically, and verifies results.',
-                  },
-                  {
-                    title: 'Inspect repository architecture & plan',
-                    desc: 'Searches codebase, reads manifests, and summarizes project structure.',
-                  },
-                  {
-                    title: 'Implement JWT auth & independent verification',
-                    desc: 'Writes clean functions and runs tests until verification passes.',
-                  },
-                ].map((item, idx) => (
-                  <div
-                    key={idx}
-                    onClick={() => handleSendMessage(item.title)}
-                    className="p-4 rounded-xl bg-slate-50 hover:bg-white border border-slate-200 hover:border-slate-300 hover:shadow-sm cursor-pointer transition-all duration-150 group"
-                  >
-                    <h3 className="font-semibold text-slate-800 text-xs group-hover:text-slate-900 line-clamp-2">
-                      {item.title}
-                    </h3>
-                    <p className="text-[11px] text-slate-500 mt-1.5 line-clamp-3 leading-relaxed">
-                      {item.desc}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : (
-            /* Active Chat Messages */
-            <div className="max-w-3xl mx-auto space-y-4">
-              {messages.map((m) => (
-                <ChatMessageView
-                  key={m.id}
-                  message={m}
-                  sourcesCount={toolCallsCount}
-                  onOpenSourcesDrawer={() => setShowSourcesDrawer(true)}
-                  onOpenFile={handleOpenFile}
-                />
-              ))}
-
-              {/* Antigravity Minimal Working Indicator (Image 1 Style) */}
-              {isRunning && (
-                <div className="flex items-center space-x-2 py-2 text-xs font-medium text-slate-700 select-none">
-                  <span className="w-2 h-2 rounded-full bg-blue-600 animate-pulse" />
-                  <span>Working{currentAction ? ` • ${currentAction}` : ''}</span>
+        {/* Main Content Area (Chat + Antigravity Split-Pane) */}
+        <div className="flex-1 flex flex-row overflow-hidden relative">
+          {/* Conversation / Welcome Screen Scroll Area */}
+          <div
+            ref={chatScrollRef}
+            onScroll={handleChatScroll}
+            className="flex-1 overflow-y-auto px-6 py-4 bg-[#0d1117] relative"
+          >
+            {messages.length === 0 ? (
+              /* Welcome / Empty Screen */
+              <div className="h-full flex flex-col items-center justify-center text-center px-4 max-w-2xl mx-auto space-y-6 -mt-8">
+                {/* Minimalist Antigravity Logo */}
+                <div className="w-14 h-14 rounded-2xl bg-[#161b22] border border-[#30363d] flex items-center justify-center text-white shadow-md">
+                  <Sparkles className="w-7 h-7 text-[#58a6ff]" />
                 </div>
-              )}
 
-              <div ref={messagesEndRef} />
-            </div>
+                <div>
+                  <p className="text-[#8b949e] text-xs font-semibold uppercase tracking-wider">Antigravity Agent Engine</p>
+                  <h1 className="text-2xl font-bold text-[#f0f6fc] tracking-tight mt-1.5">
+                    How can I assist you today?
+                  </h1>
+                </div>
+
+                {/* 3 Suggestion Prompt Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 w-full text-left pt-2">
+                  {[
+                    {
+                      title: 'Fix failing pytest in my workspace',
+                      desc: 'Autonomously inspects tests, edits code surgically, and verifies results.',
+                    },
+                    {
+                      title: 'Inspect repository architecture & plan',
+                      desc: 'Searches codebase, reads manifests, and summarizes project structure.',
+                    },
+                    {
+                      title: 'Implement JWT auth & independent verification',
+                      desc: 'Writes clean functions and runs tests until verification passes.',
+                    },
+                  ].map((item, idx) => (
+                    <div
+                      key={idx}
+                      onClick={() => handleSendMessage(item.title)}
+                      className="p-4 rounded-xl bg-[#161b22] hover:bg-[#21262d] border border-[#30363d] hover:border-[#8b949e]/40 hover:shadow-md cursor-pointer transition-all duration-150 group"
+                    >
+                      <h3 className="font-semibold text-[#f0f6fc] text-xs group-hover:text-white line-clamp-2">
+                        {item.title}
+                      </h3>
+                      <p className="text-[11px] text-[#8b949e] mt-1.5 line-clamp-3 leading-relaxed">
+                        {item.desc}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              /* Active Chat Messages */
+              <div className="max-w-3xl mx-auto space-y-4">
+                {messages.map((m, idx) => (
+                  <ChatMessageView
+                    key={m.id}
+                    message={m}
+                    sourcesCount={toolCallsCount}
+                    onOpenSourcesDrawer={() => setShowSourcesDrawer(true)}
+                    onOpenFile={handleOpenFile}
+                    isStillRunning={isRunning && m.role === 'assistant' && idx === messages.length - 1}
+                  />
+                ))}
+
+                <div ref={messagesEndRef} />
+              </div>
+            )}
+          </div>
+
+          {/* Antigravity Split-Pane Code & Diff Inspector */}
+          {previewFile && (
+            <CodePreviewPane
+              filePath={previewFile.path}
+              lineRange={previewFile.lineRange}
+              diffResult={diffResult}
+              filesModified={filesModified}
+              filesCreated={filesCreated}
+              defaultTab={previewFile.defaultTab || 'file'}
+              onClose={() => setPreviewFile(null)}
+            />
+          )}
+
+          {/* Floating Antigravity Down-Arrow Scroll Pill Button */}
+          {showScrollBottom && (
+            <button
+              onClick={scrollToBottom}
+              className={`fixed z-40 w-8 h-8 rounded-full bg-[#21262d] hover:bg-[#30363d] text-[#f0f6fc] border border-[#30363d] shadow-2xl flex items-center justify-center transition-all animate-in fade-in ${
+                previewFile ? 'bottom-24 right-[50%]' : 'bottom-24 right-10'
+              }`}
+              title="Scroll to bottom"
+            >
+              <ChevronDown className="w-4 h-4 text-[#f0f6fc]" />
+            </button>
           )}
         </div>
 
@@ -840,6 +1123,8 @@ export const App: React.FC = () => {
           }}
           onSelectWorkspace={handleSelectWorkspace}
           agentState={agentState}
+          isTerminalOpen={showTerminal}
+          isDiffOpen={showDiff}
         />
       </main>
 

@@ -33,21 +33,26 @@ class GemmaAccessibilityService : AccessibilityService() {
         private var pendingTargetPhone: String = ""
 
         @Volatile
+        private var pendingRecipientName: String = ""
+
+        @Volatile
         private var pendingTimestamp: Long = 0L
 
         /**
          * Queues an auto-send trigger for WhatsApp.
          */
-        fun armAutoSend(phone: String) {
+        fun armAutoSend(phone: String, recipientName: String = "") {
             isAutoSendPending = true
             pendingTargetPhone = phone
+            pendingRecipientName = recipientName
             pendingTimestamp = System.currentTimeMillis()
-            _lastSentStatus.value = "Sending in WhatsApp..."
+            _lastSentStatus.value = "Sending WhatsApp message..."
         }
 
         fun disarmAutoSend() {
             isAutoSendPending = false
             pendingTargetPhone = ""
+            pendingRecipientName = ""
         }
 
         /**
@@ -83,6 +88,8 @@ class GemmaAccessibilityService : AccessibilityService() {
         }
     }
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
@@ -113,25 +120,23 @@ class GemmaAccessibilityService : AccessibilityService() {
         try {
             val sendNode = findSendButton(rootNode)
             if (sendNode != null && sendNode.isEnabled) {
-                Log.d(TAG, "[$TAG] Found WhatsApp Send button! Clicking to send directly...")
+                Log.d(TAG, "[$TAG] Found WhatsApp Send button! Clicking to send...")
                 val clicked = sendNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 if (clicked) {
                     isAutoSendPending = false
                     _lastSentStatus.value = "Sent successfully!"
-                    Log.d(TAG, "[$TAG] Send button clicked successfully. Dismissing WhatsApp instantly...")
+                    Log.d(TAG, "[$TAG] Send button clicked successfully. Returning...")
 
-                    // Immediately dismiss WhatsApp so it doesn't linger on screen
-                    Handler(Looper.getMainLooper()).postDelayed({
+                    // Quickly return to previous screen
+                    try {
+                        performGlobalAction(GLOBAL_ACTION_BACK)
+                    } catch (_: Exception) {}
+
+                    mainHandler.postDelayed({
                         try {
                             performGlobalAction(GLOBAL_ACTION_BACK)
                         } catch (_: Exception) {}
-                    }, 50L)
-
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        try {
-                            performGlobalAction(GLOBAL_ACTION_BACK)
-                        } catch (_: Exception) {}
-                    }, 160L)
+                    }, 80L)
                 }
             }
         } catch (e: Exception) {

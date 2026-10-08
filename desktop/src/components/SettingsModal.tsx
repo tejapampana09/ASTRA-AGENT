@@ -27,14 +27,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/30 backdrop-blur-xs flex items-center justify-center z-50 p-4 select-none">
-      <div className="bg-white border border-slate-200 rounded-xl max-w-lg w-full p-5 shadow-xl space-y-4 text-slate-800 animate-in fade-in zoom-in duration-150">
-        <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-          <h3 className="font-semibold text-slate-900 text-sm flex items-center space-x-2">
-            <Cpu className="w-4 h-4 text-slate-700" />
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 select-none">
+      <div className="bg-[#161b22] border border-[#30363d] rounded-xl max-w-lg w-full p-5 shadow-2xl space-y-4 text-[#c9d1d9] animate-in fade-in zoom-in duration-150">
+        <div className="flex items-center justify-between border-b border-[#21262d] pb-3">
+          <h3 className="font-semibold text-[#f0f6fc] text-sm flex items-center space-x-2">
+            <Cpu className="w-4 h-4 text-[#58a6ff]" />
             <span>ASTRA Configuration</span>
           </h3>
-          <button onClick={onClose} className="p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-800">
+          <button onClick={onClose} className="p-1 rounded hover:bg-[#21262d] text-[#8b949e] hover:text-[#f0f6fc]">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -42,34 +42,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <form onSubmit={handleSubmit} className="space-y-4 text-xs">
           {/* Ollama URL */}
           <div className="space-y-1">
-            <label className="text-slate-700 font-medium flex items-center space-x-1.5">
-              <HardDrive className="w-3.5 h-3.5 text-slate-500" />
+            <label className="text-[#8b949e] font-medium flex items-center space-x-1.5">
+              <HardDrive className="w-3.5 h-3.5 text-[#8b949e]" />
               <span>Ollama Daemon URL</span>
             </label>
             <input
               type="text"
               value={form.ollamaBaseUrl}
               onChange={(e) => setForm({ ...form, ollamaBaseUrl: e.target.value })}
-              className="w-full bg-slate-50 border border-slate-200 focus:border-slate-400 rounded-lg p-2 text-slate-900 outline-none font-mono"
+              className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] rounded-lg p-2 text-[#f0f6fc] outline-none font-mono"
             />
           </div>
 
           {/* Model */}
           <div className="space-y-1">
-            <label className="text-slate-700 font-medium">Default Model</label>
+            <label className="text-[#8b949e] font-medium">Default Model</label>
             <input
               type="text"
               value={form.model}
               onChange={(e) => setForm({ ...form, model: e.target.value })}
-              className="w-full bg-slate-50 border border-slate-200 focus:border-slate-400 rounded-lg p-2 text-slate-900 outline-none font-mono"
+              className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] rounded-lg p-2 text-[#f0f6fc] outline-none font-mono"
             />
           </div>
 
           {/* Max Iterations & Timeout */}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="text-slate-700 font-medium flex items-center space-x-1">
-                <Clock className="w-3.5 h-3.5 text-slate-500" />
+              <label className="text-[#8b949e] font-medium flex items-center space-x-1">
+                <Clock className="w-3.5 h-3.5 text-[#8b949e]" />
                 <span>Max Iterations</span>
               </label>
               <input
@@ -78,13 +78,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 max="100"
                 value={form.maxIterations}
                 onChange={(e) => setForm({ ...form, maxIterations: parseInt(e.target.value) || 30 })}
-                className="w-full bg-slate-50 border border-slate-200 focus:border-slate-400 rounded-lg p-2 text-slate-900 outline-none font-mono"
+                className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] rounded-lg p-2 text-[#f0f6fc] outline-none font-mono"
               />
             </div>
 
             <div className="space-y-1">
-              <label className="text-slate-700 font-medium flex items-center space-x-1">
-                <Clock className="w-3.5 h-3.5 text-slate-500" />
+              <label className="text-[#8b949e] font-medium flex items-center space-x-1">
+                <Clock className="w-3.5 h-3.5 text-[#8b949e]" />
                 <span>Command Timeout (s)</span>
               </label>
               <input
@@ -93,39 +93,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 max="600"
                 value={form.commandTimeout}
                 onChange={(e) => setForm({ ...form, commandTimeout: parseInt(e.target.value) || 120 })}
-                className="w-full bg-slate-50 border border-slate-200 focus:border-slate-400 rounded-lg p-2 text-slate-900 outline-none font-mono"
+                className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] rounded-lg p-2 text-[#f0f6fc] outline-none font-mono"
               />
             </div>
           </div>
 
           {/* Permission Mode */}
           <div className="space-y-1">
-            <label className="text-slate-700 font-medium flex items-center space-x-1.5">
-              <Shield className="w-3.5 h-3.5 text-slate-500" />
+            <label className="text-[#8b949e] font-medium flex items-center space-x-1.5">
+              <Shield className="w-3.5 h-3.5 text-[#8b949e]" />
               <span>Filesystem & Command Security Mode</span>
             </label>
             <select
               value={form.permissionMode}
               onChange={(e) => setForm({ ...form, permissionMode: e.target.value })}
-              className="w-full bg-slate-50 border border-slate-200 focus:border-slate-400 rounded-lg p-2 text-slate-900 outline-none font-mono"
+              className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] rounded-lg p-2 text-[#f0f6fc] outline-none font-mono"
             >
-              <option value="balanced">Balanced (Auto-run safe commands; prompt on dangerous)</option>
-              <option value="strict">Strict (Prompt for any terminal command or file deletion)</option>
-              <option value="safe">Safe (Block all dangerous destructive operations completely)</option>
+              <option value="balanced" className="bg-[#161b22]">Balanced (Auto-run safe commands; prompt on dangerous)</option>
+              <option value="strict" className="bg-[#161b22]">Strict (Prompt for any terminal command or file deletion)</option>
+              <option value="safe" className="bg-[#161b22]">Safe (Block all dangerous destructive operations completely)</option>
             </select>
           </div>
 
-          <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-200">
+          <div className="flex items-center justify-end space-x-2 pt-3 border-t border-[#21262d]">
             <button
               type="button"
               onClick={onClose}
-              className="px-3.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors"
+              className="px-3.5 py-1.5 rounded-lg bg-[#21262d] hover:bg-[#30363d] text-[#c9d1d9] transition-colors border border-[#30363d]"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-4 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-medium flex items-center space-x-1.5 shadow-xs transition-colors"
+              className="px-4 py-1.5 rounded-lg bg-[#1f6feb] hover:bg-[#388bfd] text-white font-medium flex items-center space-x-1.5 shadow-xs transition-colors"
             >
               <Save className="w-3.5 h-3.5" />
               <span>Save Settings</span>

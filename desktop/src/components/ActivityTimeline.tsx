@@ -21,30 +21,48 @@ interface ActivityTimelineProps {
 export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({ events }) => {
   const getEventIcon = (type: string) => {
     switch (type) {
+      case 'task_started':
       case 'agent_started':
         return <Play className="w-3.5 h-3.5 text-cyan-400" />;
-      case 'planning':
-        return <Brain className="w-3.5 h-3.5 text-blue-400" />;
+      case 'task_classified':
+        return <Brain className="w-3.5 h-3.5 text-cyan-300" />;
+      case 'phase_changed':
+        return <Brain className="w-3.5 h-3.5 text-indigo-400" />;
+      case 'investigation_started':
       case 'exploration_started':
         return <Search className="w-3.5 h-3.5 text-indigo-400" />;
+      case 'evidence_found':
+        return <CheckCircle2 className="w-3.5 h-3.5 text-teal-400" />;
+      case 'hypothesis_created':
+        return <Brain className="w-3.5 h-3.5 text-amber-300" />;
+      case 'action_proposed':
       case 'tool_started':
       case 'tool_completed':
         return <Wrench className="w-3.5 h-3.5 text-amber-400" />;
+      case 'action_blocked':
+        return <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />;
       case 'file_changed':
         return <FileCode className="w-3.5 h-3.5 text-emerald-400" />;
       case 'command_started':
       case 'command_output':
         return <Terminal className="w-3.5 h-3.5 text-purple-400" />;
+      case 'diagnosis_created':
+        return <AlertTriangle className="w-3.5 h-3.5 text-orange-400" />;
+      case 'replan_started':
+      case 'fix_started':
+        return <RotateCcw className="w-3.5 h-3.5 text-orange-400" />;
+      case 'checkpoint_created':
+        return <CheckCircle2 className="w-3.5 h-3.5 text-blue-400" />;
       case 'verification_started':
         return <Activity className="w-3.5 h-3.5 text-purple-400" />;
       case 'verification_passed':
+      case 'task_completed':
       case 'agent_completed':
         return <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />;
       case 'verification_failed':
+      case 'task_failed':
       case 'agent_failed':
         return <XCircle className="w-3.5 h-3.5 text-rose-400" />;
-      case 'fix_started':
-        return <RotateCcw className="w-3.5 h-3.5 text-orange-400" />;
       default:
         return <Activity className="w-3.5 h-3.5 text-zinc-400" />;
     }
@@ -52,8 +70,45 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({ events }) =>
 
   const formatEventTitle = (event: AgentEvent) => {
     switch (event.event_type) {
+      case 'task_started':
       case 'agent_started':
         return 'Task started';
+      case 'task_classified':
+        return `Task classified: ${event.data.task_type || 'Engineering'} (${Math.round((event.data.confidence || 1) * 100)}% confidence)`;
+      case 'phase_changed': {
+        const ph = event.data.phase || 'PLAN';
+        const labels: Record<string, string> = {
+          UNDERSTAND: '● Understanding request',
+          INVESTIGATE: '● Investigating subsystem',
+          DIAGNOSE: '● Diagnosing root cause',
+          PLAN: '● Planning implementation',
+          EXECUTE: '● Implementing changes',
+          VERIFY: '● Verifying solution',
+          REPLAN: '● Replanning approach',
+          RECOVER: '● Recovering workspace',
+          DONE: '✓ Task completed',
+          BLOCKED: '✕ Task blocked',
+        };
+        return labels[ph] || `Phase: ${ph}`;
+      }
+      case 'investigation_started':
+        return '● Investigating repository & tracing flow';
+      case 'hypothesis_created':
+        return `● Hypothesis: ${event.data.statement || 'Formulated'}`;
+      case 'evidence_found':
+        return `✓ Evidence: ${event.data.fact || 'Observed'}`;
+      case 'action_proposed':
+        return `Proposed: ${event.data.tool || 'action'}`;
+      case 'action_blocked':
+        return `Action blocked by controller: ${event.data.reason || ''}`;
+      case 'observation_created':
+        return `Observed: ${event.data.observation || ''}`;
+      case 'diagnosis_created':
+        return `Root cause diagnosis: ${event.data.diagnosis || ''}`;
+      case 'replan_started':
+        return `Replanning: ${event.data.reason || 'Adapting strategy'}`;
+      case 'checkpoint_created':
+        return `Checkpoint snapshot: ${event.data.action || 'created'}`;
       case 'planning':
         return 'Reasoning & planning';
       case 'exploration_started':
@@ -74,12 +129,15 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({ events }) =>
         return 'Verification FAILED';
       case 'fix_started':
         return `Self-healing fix loop (attempt ${event.data.attempt || 1})`;
+      case 'task_completed':
       case 'agent_completed':
-        return 'Task completed successfully';
+        return '✓ Task completed successfully';
+      case 'task_failed':
       case 'agent_failed':
-        return 'Task halted with error';
+        return '✕ Task halted with error';
+      case 'task_blocked':
       case 'agent_cancelled':
-        return 'Task cancelled by user';
+        return 'Task cancelled or blocked';
       default:
         return event.event_type;
     }

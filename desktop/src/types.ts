@@ -9,7 +9,19 @@ export type AgentState =
   | 'WAITING_FOR_APPROVAL'
   | 'COMPLETED'
   | 'FAILED'
-  | 'CANCELLED';
+  | 'CANCELLED'
+  | 'CONVERSATION'
+  | 'UNDERSTAND'
+  | 'INVESTIGATE'
+  | 'DIAGNOSE'
+  | 'PLAN'
+  | 'EXECUTE'
+  | 'OBSERVE'
+  | 'VERIFY'
+  | 'REPLAN'
+  | 'RECOVER'
+  | 'DONE'
+  | 'BLOCKED';
 
 export interface AgentEvent {
   event_type: string;

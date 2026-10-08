@@ -22,6 +22,13 @@ export interface AgentAction {
   output?: string;
   status: 'running' | 'completed' | 'failed';
   timestamp?: number;
+  durationMs?: number;
+  actionVerb?: 'Analyzed' | 'Thought for' | 'Ran' | 'Edited' | 'Created' | 'Verified';
+  filename?: string;
+  fileIcon?: string;
+  lineRange?: string;
+  command?: string;
+  thoughtSeconds?: number;
 }
 
 export interface ChatMessage {
@@ -38,6 +45,9 @@ export interface ChatMessage {
   files_modified?: string[];
   actions?: AgentAction[];
   timestamp: number;
+  startTime?: number;
+  endTime?: number;
+  durationMs?: number;
 }
 
 interface ChatPanelProps {

@@ -1,6 +1,7 @@
 package com.teja.gemmmobile.ui
 
 import android.widget.Toast
+import com.teja.gemmmobile.search.SearchResult
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -49,6 +50,19 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+private val REGEX_CODE_BLOCK = Regex("""```([a-zA-Z0-9_+#.-]*)\s*\n([\s\S]*?)```""")
+private val REGEX_UNCLOSED_CODE = Regex("""```([a-zA-Z0-9_+#.-]*)\s*\n([\s\S]*)""")
+private val REGEX_TABLE = Regex("""(?m)^([ \t]*\|[^\n]+\|[ \t]*\n[ \t]*\|[-: |]+\|[ \t]*(?:\n[ \t]*\|[^\n]+\|[ \t]*)+)""")
+private val REGEX_TEXT_1 = Regex("""\$\s*\\text\{([^}]+)\}\s*\$""")
+private val REGEX_TEXT_2 = Regex("""\$\s*\\mathrm\{([^}]+)\}\s*\$""")
+private val REGEX_TEXT_3 = Regex("""\(\s*\\text\{([^}]+)\}\s*\)""")
+private val REGEX_TEXT_4 = Regex("""\\text\{([^}]+)\}""")
+private val REGEX_TEXT_5 = Regex("""\$([^$\n]+)\$""")
+private val REGEX_NUMBERED_LIST = Regex("""^\d+\.\s+.*""")
+private val REGEX_HTML_LINK = Regex("""<a\s+(?:[^>]*?\s+)?href=["']([^"']+)["'][^>]*>(.*?)<\/a>""", RegexOption.IGNORE_CASE)
+private val REGEX_RAW_HREF = Regex("""href=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE)
+private val REGEX_HTML_SELF_CLOSING = Regex("""<a\s+(?:[^>]*?\s+)?href=["']([^"']+)["'][^>]*\/?>""", RegexOption.IGNORE_CASE)
+
 sealed class MarkdownBlock {
     data class Code(val language: String, val code: String) : MarkdownBlock()
     data class Table(val headers: List<String>, val rows: List<List<String>>) : MarkdownBlock()
@@ -69,9 +83,11 @@ sealed class MarkdownBlock {
 fun MarkdownText(
     text: String,
     isUser: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    overrideTextColor: Color? = null,
+    searchResults: List<SearchResult> = emptyList()
 ) {
-    val textColor = if (isUser) {
+    val textColor = overrideTextColor ?: if (isUser) {
         MaterialTheme.colorScheme.onPrimaryContainer
     } else {
         MaterialTheme.colorScheme.onSurface
@@ -80,7 +96,7 @@ fun MarkdownText(
     val linkColor = if (isUser) {
         MaterialTheme.colorScheme.primary
     } else {
-        Color(0xFF1976D2) // Crisp, distinct blue for links in ChatGPT style
+        Color(0xFF58A6FF) // Crisp high-contrast link blue (ChatGPT dark mode style)
     }
 
     val codeBgColor = if (isUser) {
@@ -93,7 +109,7 @@ fun MarkdownText(
 
     Column(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         for (block in blocks) {
             when (block) {
@@ -110,132 +126,154 @@ fun MarkdownText(
                     )
                 }
                 is MarkdownBlock.Text -> {
-                    val sanitized = sanitizeMarkdown(block.content)
-                    val lines = sanitized.lines()
+                    TextBlockView(
+                        content = block.content,
+                        textColor = textColor,
+                        linkColor = linkColor,
+                        codeBgColor = codeBgColor,
+                        searchResults = searchResults
+                    )
+                }
+            }
+        }
+    }
+}
 
-                    for ((index, line) in lines.withIndex()) {
-                        val trimmed = line.trim()
-                        if (trimmed.isEmpty()) {
-                            if (index > 0 && index < lines.size - 1) {
-                                Spacer(modifier = Modifier.height(3.dp))
-                            }
-                            continue
-                        }
+private sealed class RenderedLine {
+    object Blank : RenderedLine()
+    data class Header(val annotatedText: AnnotatedString, val level: Int) : RenderedLine()
+    data class Bullet(val prefix: String, val annotatedText: AnnotatedString) : RenderedLine()
+    data class Paragraph(val annotatedText: AnnotatedString) : RenderedLine()
+}
 
-                        when {
-                            // Header 1, 2, 3
-                            trimmed.startsWith("### ") -> {
-                                ClickableMarkdownLine(
-                                    annotatedText = buildInlineMarkdown(
-                                        trimmed.removePrefix("### ").trim(),
-                                        textColor,
-                                        linkColor,
-                                        codeBgColor
-                                    ),
-                                    style = MaterialTheme.typography.titleSmall.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = textColor
-                                    ),
-                                    modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
-                                )
-                            }
+@Composable
+private fun TextBlockView(
+    content: String,
+    textColor: Color,
+    linkColor: Color,
+    codeBgColor: Color,
+    searchResults: List<SearchResult> = emptyList()
+) {
+    val parsedLines = remember(content, textColor, linkColor, codeBgColor, searchResults) {
+        val sanitized = sanitizeMarkdown(content, searchResults)
+        val rawLines = sanitized.lines()
+        val result = mutableListOf<RenderedLine>()
 
-                            trimmed.startsWith("## ") -> {
-                                ClickableMarkdownLine(
-                                    annotatedText = buildInlineMarkdown(
-                                        trimmed.removePrefix("## ").trim(),
-                                        textColor,
-                                        linkColor,
-                                        codeBgColor
-                                    ),
-                                    style = MaterialTheme.typography.titleMedium.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = textColor
-                                    ),
-                                    modifier = Modifier.padding(top = 6.dp, bottom = 2.dp)
-                                )
-                            }
+        for ((index, line) in rawLines.withIndex()) {
+            val trimmed = line.trim()
+            if (trimmed.isEmpty()) {
+                if (index > 0 && index < rawLines.size - 1) {
+                    result.add(RenderedLine.Blank)
+                }
+                continue
+            }
 
-                            trimmed.startsWith("# ") -> {
-                                ClickableMarkdownLine(
-                                    annotatedText = buildInlineMarkdown(
-                                        trimmed.removePrefix("# ").trim(),
-                                        textColor,
-                                        linkColor,
-                                        codeBgColor
-                                    ),
-                                    style = MaterialTheme.typography.titleLarge.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = textColor
-                                    ),
-                                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
-                                )
-                            }
+            when {
+                trimmed.startsWith("### ") -> {
+                    result.add(
+                        RenderedLine.Header(
+                            annotatedText = buildInlineMarkdown(trimmed.removePrefix("### ").trim(), textColor, linkColor, codeBgColor),
+                            level = 3
+                        )
+                    )
+                }
+                trimmed.startsWith("## ") -> {
+                    result.add(
+                        RenderedLine.Header(
+                            annotatedText = buildInlineMarkdown(trimmed.removePrefix("## ").trim(), textColor, linkColor, codeBgColor),
+                            level = 2
+                        )
+                    )
+                }
+                trimmed.startsWith("# ") -> {
+                    result.add(
+                        RenderedLine.Header(
+                            annotatedText = buildInlineMarkdown(trimmed.removePrefix("# ").trim(), textColor, linkColor, codeBgColor),
+                            level = 1
+                        )
+                    )
+                }
+                trimmed.startsWith("* ") || trimmed.startsWith("- ") || trimmed.startsWith("• ") -> {
+                    val c = when {
+                        trimmed.startsWith("* ") -> trimmed.removePrefix("* ")
+                        trimmed.startsWith("- ") -> trimmed.removePrefix("- ")
+                        else -> trimmed.removePrefix("• ")
+                    }.trim()
+                    result.add(
+                        RenderedLine.Bullet(
+                            prefix = "•",
+                            annotatedText = buildInlineMarkdown(c, textColor, linkColor, codeBgColor)
+                        )
+                    )
+                }
+                trimmed.matches(REGEX_NUMBERED_LIST) -> {
+                    val prefix = trimmed.substringBefore(". ") + "."
+                    val c = trimmed.substringAfter(". ").trim()
+                    result.add(
+                        RenderedLine.Bullet(
+                            prefix = prefix,
+                            annotatedText = buildInlineMarkdown(c, textColor, linkColor, codeBgColor)
+                        )
+                    )
+                }
+                else -> {
+                    result.add(
+                        RenderedLine.Paragraph(
+                            annotatedText = buildInlineMarkdown(trimmed, textColor, linkColor, codeBgColor)
+                        )
+                    )
+                }
+            }
+        }
+        result
+    }
 
-                            // Bullet point: * or - or •
-                            trimmed.startsWith("* ") || trimmed.startsWith("- ") || trimmed.startsWith("• ") -> {
-                                val content = when {
-                                    trimmed.startsWith("* ") -> trimmed.removePrefix("* ")
-                                    trimmed.startsWith("- ") -> trimmed.removePrefix("- ")
-                                    else -> trimmed.removePrefix("• ")
-                                }.trim()
-
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(start = 4.dp),
-                                    verticalAlignment = Alignment.Top
-                                ) {
-                                    Text(
-                                        text = "•",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = textColor,
-                                        modifier = Modifier.padding(end = 6.dp)
-                                    )
-                                    ClickableMarkdownLine(
-                                        annotatedText = buildInlineMarkdown(content, textColor, linkColor, codeBgColor),
-                                        style = MaterialTheme.typography.bodyMedium.copy(color = textColor, lineHeight = 22.sp),
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                }
-                            }
-
-                            // Numbered list: e.g. "1. " or "2. "
-                            trimmed.matches(Regex("""^\d+\.\s+.*""")) -> {
-                                val prefix = trimmed.substringBefore(". ") + "."
-                                val content = trimmed.substringAfter(". ").trim()
-
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(start = 4.dp),
-                                    verticalAlignment = Alignment.Top
-                                ) {
-                                    Text(
-                                        text = prefix,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = textColor,
-                                        modifier = Modifier.padding(end = 6.dp)
-                                    )
-                                    ClickableMarkdownLine(
-                                        annotatedText = buildInlineMarkdown(content, textColor, linkColor, codeBgColor),
-                                        style = MaterialTheme.typography.bodyMedium.copy(color = textColor, lineHeight = 22.sp),
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                }
-                            }
-
-                            // Regular paragraph
-                            else -> {
-                                ClickableMarkdownLine(
-                                    annotatedText = buildInlineMarkdown(trimmed, textColor, linkColor, codeBgColor),
-                                    style = MaterialTheme.typography.bodyMedium.copy(color = textColor, lineHeight = 22.sp)
-                                )
-                            }
-                        }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        for (line in parsedLines) {
+            when (line) {
+                is RenderedLine.Blank -> {
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
+                is RenderedLine.Header -> {
+                    val style = when (line.level) {
+                        1 -> MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, color = textColor)
+                        2 -> MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = textColor)
+                        else -> MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = textColor)
                     }
+                    val padTop = if (line.level == 1) 12.dp else if (line.level == 2) 8.dp else 6.dp
+                    ClickableMarkdownLine(
+                        annotatedText = line.annotatedText,
+                        style = style,
+                        modifier = Modifier.padding(top = padTop, bottom = 4.dp)
+                    )
+                }
+                is RenderedLine.Bullet -> {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 2.dp, top = 2.dp, bottom = 2.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Text(
+                            text = line.prefix,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = textColor,
+                            modifier = Modifier.padding(end = 8.dp)
+                        )
+                        ClickableMarkdownLine(
+                            annotatedText = line.annotatedText,
+                            style = MaterialTheme.typography.bodyMedium.copy(color = textColor, lineHeight = 24.sp),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                is RenderedLine.Paragraph -> {
+                    ClickableMarkdownLine(
+                        annotatedText = line.annotatedText,
+                        style = MaterialTheme.typography.bodyMedium.copy(color = textColor, lineHeight = 24.sp),
+                        modifier = Modifier.padding(vertical = 2.dp)
+                    )
                 }
             }
         }
@@ -342,42 +380,40 @@ fun MarkdownTableView(
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
+    val haptic = LocalHapticFeedback.current
     val scrollState = rememberScrollState()
 
     Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = Color.White,
-        border = BorderStroke(1.dp, Color(0xFFE5E5E5)),
+        shape = RoundedCornerShape(12.dp),
+        color = Color(0xFF18181B), // AMOLED dark surface matching ChatGPT
+        border = BorderStroke(1.dp, Color(0xFF2E2E36)),
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
+            .padding(vertical = 6.dp)
+            .clip(RoundedCornerShape(12.dp))
     ) {
-        Column {
-            // Header Bar with "TABLE" and Copy button
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Subtle Top Bar (ChatGPT Style: minimalist Table title and Copy button)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(0xFFF7F7F8))
-                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                    .background(Color(0xFF202024))
+                    .padding(horizontal = 14.dp, vertical = 7.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "TABLE (${rows.size} rows)",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF8E8E93),
-                    fontSize = 11.sp
-                )
-                Text(
-                    text = "📋 Copy",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF10A37F),
+                    text = "Table",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
                     fontWeight = FontWeight.SemiBold,
-                    fontSize = 12.sp,
+                    color = Color(0xFF9E9EA4)
+                )
+
+                Row(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
+                        .clip(RoundedCornerShape(6.dp))
                         .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             val csv = buildString {
                                 appendLine(headers.joinToString(","))
                                 rows.forEach { row -> appendLine(row.joinToString(",")) }
@@ -385,39 +421,52 @@ fun MarkdownTableView(
                             clipboard.setText(AnnotatedString(csv))
                             Toast.makeText(context, "Table copied to clipboard", Toast.LENGTH_SHORT).show()
                         }
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                )
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ContentCopy,
+                        contentDescription = "Copy",
+                        tint = Color(0xFF9E9EA4),
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Text(
+                        text = "Copy",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                        color = Color(0xFFB4B4BB),
+                        fontWeight = FontWeight.Medium
+                    )
+                }
             }
 
-            HorizontalDivider(color = Color(0xFFE5E5E5), thickness = 0.8.dp)
+            HorizontalDivider(color = Color(0xFF2E2E36), thickness = 0.8.dp)
 
             // Horizontally scrollable table grid
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(scrollState)
-                    .padding(horizontal = 6.dp, vertical = 6.dp)
             ) {
-                Column {
+                Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
                     // Header Row
                     Row(
                         modifier = Modifier
-                            .background(Color(0xFFF4F4F4), RoundedCornerShape(6.dp))
+                            .background(Color(0xFF242428), RoundedCornerShape(8.dp))
                             .padding(vertical = 9.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         headers.forEach { header ->
                             Box(
                                 modifier = Modifier
-                                    .widthIn(min = 100.dp, max = 220.dp)
-                                    .padding(horizontal = 10.dp)
+                                    .widthIn(min = 110.dp, max = 240.dp)
+                                    .padding(horizontal = 12.dp)
                             ) {
                                 Text(
                                     text = header.trim(),
-                                    style = MaterialTheme.typography.labelMedium,
+                                    style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.5.sp),
                                     fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF0D0D0D),
-                                    fontSize = 13.sp
+                                    color = Color(0xFFECECF1)
                                 )
                             }
                         }
@@ -429,29 +478,27 @@ fun MarkdownTableView(
                     rows.forEachIndexed { rowIndex, row ->
                         Row(
                             modifier = Modifier
-                                .background(if (rowIndex % 2 == 0) Color.White else Color(0xFFFAFAFA))
-                                .padding(vertical = 9.dp),
+                                .background(if (rowIndex % 2 == 0) Color(0xFF18181B) else Color(0xFF1D1D21))
+                                .padding(vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             row.forEachIndexed { colIndex, cell ->
                                 Box(
                                     modifier = Modifier
-                                        .widthIn(min = 100.dp, max = 220.dp)
-                                        .padding(horizontal = 10.dp)
+                                        .widthIn(min = 110.dp, max = 240.dp)
+                                        .padding(horizontal = 12.dp)
                                 ) {
                                     val cleanCell = cell.replace("\\_", "_").trim()
                                     Text(
                                         text = cleanCell,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color(0xFF1E1E1E),
-                                        fontSize = 12.5.sp,
-                                        lineHeight = 17.sp
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp, lineHeight = 18.sp),
+                                        color = Color(0xFFD1D1D6)
                                     )
                                 }
                             }
                         }
                         if (rowIndex < rows.size - 1) {
-                            HorizontalDivider(color = Color(0xFFF0F0F0), thickness = 0.5.dp)
+                            HorizontalDivider(color = Color(0xFF26262C), thickness = 0.5.dp)
                         }
                     }
                 }
@@ -464,11 +511,16 @@ fun MarkdownTableView(
  * Parses raw text into alternating Code blocks, Tables, and regular Markdown blocks.
  */
 fun parseMarkdownBlocks(input: String): List<MarkdownBlock> {
+    if (input.isBlank()) return emptyList()
+    // Fast-path: 90%+ of text messages have no code blocks and no tables
+    if (!input.contains("```") && !input.contains('|')) {
+        return listOf(MarkdownBlock.Text(input))
+    }
+
     val blocks = mutableListOf<MarkdownBlock>()
-    val codeBlockRegex = Regex("""```([a-zA-Z0-9_+#.-]*)\s*\n([\s\S]*?)```""")
     var currentIndex = 0
 
-    for (match in codeBlockRegex.findAll(input)) {
+    for (match in REGEX_CODE_BLOCK.findAll(input)) {
         if (match.range.first > currentIndex) {
             val textPart = input.substring(currentIndex, match.range.first)
             if (textPart.isNotBlank()) {
@@ -483,7 +535,7 @@ fun parseMarkdownBlocks(input: String): List<MarkdownBlock> {
 
     if (currentIndex < input.length) {
         val remaining = input.substring(currentIndex)
-        val unclosedMatch = Regex("""```([a-zA-Z0-9_+#.-]*)\s*\n([\s\S]*)""").find(remaining)
+        val unclosedMatch = REGEX_UNCLOSED_CODE.find(remaining)
         if (unclosedMatch != null) {
             val beforeUnclosed = remaining.substring(0, unclosedMatch.range.first)
             if (beforeUnclosed.isNotBlank()) {
@@ -506,11 +558,14 @@ fun parseMarkdownBlocks(input: String): List<MarkdownBlock> {
  * Extracts Markdown tables from text and returns a sequence of Text and Table blocks.
  */
 fun extractTablesAndText(text: String): List<MarkdownBlock> {
+    if (!text.contains('|')) {
+        return if (text.isNotBlank()) listOf(MarkdownBlock.Text(text)) else emptyList()
+    }
+
     val results = mutableListOf<MarkdownBlock>()
-    val tableRegex = Regex("""(?m)^([ \t]*\|[^\n]+\|[ \t]*\n[ \t]*\|[-: |]+\|[ \t]*(?:\n[ \t]*\|[^\n]+\|[ \t]*)+)""")
     var lastIdx = 0
 
-    for (match in tableRegex.findAll(text)) {
+    for (match in REGEX_TABLE.findAll(text)) {
         val start = match.range.first
         val end = match.range.last + 1
         if (start > lastIdx) {
@@ -702,15 +757,152 @@ fun ClickableMarkdownLine(
 }
 
 /**
- * Cleans unwanted math/LaTeX tokens and artifacts commonly generated by raw LLM checkpoints.
+ * Resolves recognizable source brand and badge for a web search URL.
  */
-fun sanitizeMarkdown(input: String): String {
+fun getSourceBrand(url: String, title: String): Pair<String, String> {
+    val host = try { java.net.URI(url).host?.removePrefix("www.")?.lowercase() ?: "" } catch (_: Exception) { "" }
+    val isLinkedIn = host.contains("linkedin") || title.contains("linkedin", ignoreCase = true)
+    val isGitHub = host.contains("github") || title.contains("github", ignoreCase = true)
+    val isWikipedia = host.contains("wikipedia") || title.contains("wikipedia", ignoreCase = true)
+    val isTwitter = host.contains("twitter") || host.contains("x.com")
+    val isYoutube = host.contains("youtube") || host.contains("youtu.be")
+    val isFacebook = host.contains("facebook") || host.contains("fb.com")
+    val isInstagram = host.contains("instagram")
+    val isSrm = host.contains("srm") || title.contains("srm", ignoreCase = true)
+
+    val brand = when {
+        isLinkedIn -> "LinkedIn"
+        isGitHub -> "GitHub"
+        isWikipedia -> "Wikipedia"
+        isTwitter -> "X"
+        isYoutube -> "YouTube"
+        isFacebook -> "Facebook"
+        isInstagram -> "Instagram"
+        isSrm -> "SRM University"
+        host.isNotBlank() -> host.substringBefore(".").replaceFirstChar { it.uppercase() }
+        else -> "Source"
+    }
+    return brand to url
+}
+
+/**
+ * Cleans unwanted math/LaTeX tokens and formats web search HTML/href artifacts into clean Markdown links.
+ */
+fun sanitizeMarkdown(input: String, searchResults: List<SearchResult> = emptyList()): String {
     var s = input
-    s = s.replace(Regex("""\$\s*\\text\{([^}]+)\}\s*\$"""), "$1")
-    s = s.replace(Regex("""\$\s*\\mathrm\{([^}]+)\}\s*\$"""), "$1")
-    s = s.replace(Regex("""\(\s*\\text\{([^}]+)\}\s*\)"""), "$1")
-    s = s.replace(Regex("""\\text\{([^}]+)\}"""), "$1")
-    s = s.replace(Regex("""\$([^$\n]+)\$"""), "$1")
+    // 1. Math/LaTeX cleanups
+    if (s.contains('$') || s.contains('\\')) {
+        s = s.replace(REGEX_TEXT_1, "$1")
+        s = s.replace(REGEX_TEXT_2, "$1")
+        s = s.replace(REGEX_TEXT_3, "$1")
+        s = s.replace(REGEX_TEXT_4, "$1")
+        s = s.replace(REGEX_TEXT_5, "$1")
+    }
+
+    // 2. Strip robotic disclaimers so response sounds natural like ChatGPT
+    val roboticPrefixes = listOf(
+        "Based on the live web search results,",
+        "Based on the live web search results",
+        "Based on the web search results,",
+        "Based on the web search results",
+        "According to the live web search results,",
+        "According to the search results,",
+        "According to live search results,",
+        "Here are the details gathered from the search results:",
+        "Here are the details gathered from the search results",
+        "Here are the search results:"
+    )
+    for (rp in roboticPrefixes) {
+        if (s.startsWith(rp, ignoreCase = true)) {
+            s = s.removePrefix(rp).trimStart()
+        }
+    }
+
+    // 3. Web search link sanitation: convert HTML <a> tags and raw href="..." to clean Markdown links
+    if (s.contains("<a", ignoreCase = true)) {
+        s = s.replace(REGEX_HTML_LINK) { match ->
+            val url = match.groupValues[1]
+            val text = match.groupValues[2].trim()
+            if (text.isNotBlank() && !text.equals("href", true) && !text.equals("link", true) && !text.equals("url", true)) {
+                "[$text]($url)"
+            } else {
+                val (b, u) = getSourceBrand(url, "")
+                "[$b]($u)"
+            }
+        }
+        s = s.replace(REGEX_HTML_SELF_CLOSING) { match ->
+            val url = match.groupValues[1]
+            val (b, u) = getSourceBrand(url, "")
+            "[$b]($u)"
+        }
+    }
+    if (s.contains("href=", ignoreCase = true)) {
+        s = s.replace(REGEX_RAW_HREF) { match ->
+            val url = match.groupValues[1]
+            val (b, u) = getSourceBrand(url, "")
+            "[$b]($u)"
+        }
+    }
+
+    // 4. Map numeric citation references like [1], [2], [1, 2] to sleek clickable citation pills
+    if (searchResults.isNotEmpty()) {
+        val numCitationRegex = Regex("""\[([0-9]+(?:\s*,\s*[0-9]+)*)\]""")
+        s = s.replace(numCitationRegex) { match ->
+            val numStr = match.groupValues[1].trim()
+            val indices = numStr.split(",").mapNotNull { it.trim().toIntOrNull() }
+            if (indices.isEmpty()) {
+                match.value
+            } else {
+                val validResults = indices.mapNotNull { idx -> searchResults.getOrNull(idx - 1) }
+                if (validResults.isEmpty()) {
+                    match.value
+                } else {
+                    val first = validResults[0]
+                    "[$numStr](${first.url})"
+                }
+            }
+        }
+
+        // 5. Ground markdown links [Title](url) to real URLs from searchResults to prevent random/hallucinated domains
+        val markdownLinkRegex = Regex("""\[([^\]]+)\]\((https?://[^\s)]+)\)""")
+        s = s.replace(markdownLinkRegex) { match ->
+            val linkText = match.groupValues[1]
+            val generatedUrl = match.groupValues[2]
+
+            val matchedResult = searchResults.firstOrNull { res ->
+                val resHost = try { java.net.URI(res.url).host?.removePrefix("www.")?.lowercase() } catch (_: Exception) { null }
+                val genHost = try { java.net.URI(generatedUrl).host?.removePrefix("www.")?.lowercase() } catch (_: Exception) { null }
+
+                (genHost != null && resHost != null && (genHost.contains(resHost) || resHost.contains(genHost))) ||
+                (linkText.contains("linkedin", ignoreCase = true) && res.url.contains("linkedin", ignoreCase = true)) ||
+                (linkText.contains("github", ignoreCase = true) && res.url.contains("github", ignoreCase = true)) ||
+                (linkText.contains("hugging", ignoreCase = true) && res.url.contains("huggingface", ignoreCase = true)) ||
+                (linkText.contains("wikipedia", ignoreCase = true) && res.url.contains("wikipedia", ignoreCase = true))
+            }
+
+            if (matchedResult != null) {
+                "[$linkText](${matchedResult.url})"
+            } else if (searchResults.isNotEmpty()) {
+                // If Gemma hallucinated a random domain, ground it to the primary verified result URL
+                "[$linkText](${searchResults.first().url})"
+            } else {
+                match.value
+            }
+        }
+
+        // 6. Ground raw URLs to matching searchResults domains so users never navigate to fake URLs
+        val rawUrlRegex = Regex("""https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:/[^\s\)\],<]*)?""")
+        s = s.replace(rawUrlRegex) { match ->
+            val rawUrl = match.value
+            val matched = searchResults.firstOrNull { res ->
+                val resHost = try { java.net.URI(res.url).host?.removePrefix("www.")?.lowercase() } catch (_: Exception) { null }
+                val rawHost = try { java.net.URI(rawUrl).host?.removePrefix("www.")?.lowercase() } catch (_: Exception) { null }
+                resHost != null && rawHost != null && (resHost.contains(rawHost) || rawHost.contains(resHost))
+            }
+            matched?.url ?: (if (searchResults.isNotEmpty()) searchResults.first().url else rawUrl)
+        }
+    }
+
     return s
 }
 
@@ -720,8 +912,8 @@ fun sanitizeMarkdown(input: String): String {
 fun buildInlineMarkdown(
     text: String,
     defaultColor: Color,
-    linkColor: Color,
-    codeBgColor: Color
+    linkColor: Color = Color(0xFF58A6FF),
+    codeBgColor: Color = Color(0xFFEEEEEE)
 ): AnnotatedString {
     return buildAnnotatedString {
         var i = 0
@@ -734,18 +926,37 @@ fun buildInlineMarkdown(
                 if (closeBracket != -1 && closeBracket + 1 < length && text[closeBracket + 1] == '(') {
                     val closeParen = text.indexOf(')', closeBracket + 2)
                     if (closeParen != -1) {
-                        val title = text.substring(i + 1, closeBracket)
+                        val rawTitle = text.substring(i + 1, closeBracket).trim()
                         val url = text.substring(closeBracket + 2, closeParen).trim()
                         if (url.startsWith("http://") || url.startsWith("https://")) {
+                            val isNumericCitation = rawTitle.matches(Regex("""^\[?\d+(?:\s*,\s*\d+)*\]?$"""))
+
                             pushStringAnnotation(tag = "URL", annotation = url)
-                            withStyle(
-                                SpanStyle(
-                                    color = linkColor,
-                                    textDecoration = TextDecoration.Underline,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            ) {
-                                append(title)
+                            if (isNumericCitation) {
+                                // Subtle, compact numeric citation pill (ChatGPT style): e.g. [1]
+                                val cleanNum = rawTitle.trim('[', ']')
+                                withStyle(
+                                    SpanStyle(
+                                        color = linkColor,
+                                        fontSize = 10.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        background = Color(0xFF222226)
+                                    )
+                                ) {
+                                    append(" $cleanNum ")
+                                }
+                            } else {
+                                // Clean, elegant link text with ↗ arrow (matching ChatGPT)
+                                withStyle(
+                                    SpanStyle(
+                                        color = linkColor,
+                                        fontWeight = FontWeight.Medium,
+                                        textDecoration = TextDecoration.Underline
+                                    )
+                                ) {
+                                    val displayTitle = if (rawTitle.isBlank()) "Link" else rawTitle.removeSuffix("↗").trim()
+                                    append("$displayTitle ↗")
+                                }
                             }
                             pop()
                             i = closeParen + 1
@@ -767,6 +978,9 @@ fun buildInlineMarkdown(
                     end--
                 }
                 if (url.isNotBlank()) {
+                    val host = try { java.net.URI(url).host?.removePrefix("www.") } catch (_: Exception) { null }
+                    val displayUrl = if (!host.isNullOrBlank() && !host.equals("open link", ignoreCase = true)) "$host ↗" else "Link ↗"
+
                     pushStringAnnotation(tag = "URL", annotation = url)
                     withStyle(
                         SpanStyle(
@@ -775,7 +989,7 @@ fun buildInlineMarkdown(
                             fontWeight = FontWeight.SemiBold
                         )
                     ) {
-                        append(url)
+                        append(displayUrl)
                     }
                     pop()
                     i = end

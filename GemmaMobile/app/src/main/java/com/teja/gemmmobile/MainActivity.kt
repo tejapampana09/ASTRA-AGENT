@@ -1,5 +1,6 @@
 package com.teja.gemmmobile
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -11,34 +12,41 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import com.teja.gemmmobile.assistant.AssistantActivity
 import com.teja.gemmmobile.ui.ChatScreen
 import com.teja.gemmmobile.ui.ChatViewModel
 
-// Clean ChatGPT-style color scheme — no gradients, pure whites and grays
-private val GemmaColorScheme = lightColorScheme(
-    primary           = Color(0xFF10A37F),   // ChatGPT green — send button, active chips
+import androidx.compose.material3.darkColorScheme
+
+// Pure AMOLED ChatGPT Dark color scheme — matching real ChatGPT Android app
+private val GemmaColorScheme = darkColorScheme(
+    primary           = Color(0xFF10A37F),   // Emerald green
     onPrimary         = Color(0xFFFFFFFF),
-    primaryContainer  = Color(0xFFECFDF5),   // Very light green for chips
-    onPrimaryContainer= Color(0xFF065F46),
-    secondary         = Color(0xFF6B6B6B),
+    primaryContainer  = Color(0xFF1A382B),
+    onPrimaryContainer= Color(0xFFA7F3D0),
+    secondary         = Color(0xFFF43F5E),   // ChatGPT Coral/Pink Voice Accent
     onSecondary       = Color(0xFFFFFFFF),
-    secondaryContainer= Color(0xFFF0F0F0),
-    onSecondaryContainer = Color(0xFF1A1A1A),
-    surface           = Color(0xFFFFFFFF),   // Pure white surface
-    onSurface         = Color(0xFF0D0D0D),   // Near-black text
-    surfaceVariant    = Color(0xFFF4F4F4),   // Light gray — user bubbles
-    onSurfaceVariant  = Color(0xFF343434),
-    outline           = Color(0xFFD9D9D9),   // Thin borders
-    outlineVariant    = Color(0xFFEEEEEE),
-    background        = Color(0xFFFFFFFF),   // White background
-    onBackground      = Color(0xFF0D0D0D),
+    secondaryContainer= Color(0xFF262626),
+    onSecondaryContainer = Color(0xFFFFFFFF),
+    surface           = Color(0xFF171717),   // Deep dark surface
+    onSurface         = Color(0xFFFFFFFF),   // Crisp white text
+    surfaceVariant    = Color(0xFF212121),   // Pill, bubbles, cards
+    onSurfaceVariant  = Color(0xFFB4B4B4),   // Secondary light gray
+    outline           = Color(0xFF333333),   // Thin dark border
+    outlineVariant    = Color(0xFF262626),
+    background        = Color(0xFF000000),   // Pure AMOLED Black
+    onBackground      = Color(0xFFFFFFFF),
     error             = Color(0xFFEF4444),
     onError           = Color(0xFFFFFFFF),
-    errorContainer    = Color(0xFFFEE2E2),
-    onErrorContainer  = Color(0xFF991B1B),
+    errorContainer    = Color(0xFF3B1212),
+    onErrorContainer  = Color(0xFFFCA5A5),
 )
 
 class MainActivity : ComponentActivity() {
+
+    companion object {
+        const val EXTRA_SESSION_ID = "EXTRA_SESSION_ID"
+    }
 
     private val chatViewModel: ChatViewModel by viewModels()
 
@@ -46,9 +54,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // Handle digital assistant trigger (Power button long-press or assistant gesture)
-        if (intent?.action == android.content.Intent.ACTION_ASSIST) {
-            chatViewModel.openAssistantOverlay()
+        handleIntent(intent)
+
+        if (com.teja.gemmmobile.assistant.GemmaWakeWordService.isEnabled(this)) {
+            com.teja.gemmmobile.assistant.GemmaWakeWordService.start(this)
         }
 
         // Move task to back on back press so background response generation,
@@ -71,11 +80,29 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onNewIntent(intent: android.content.Intent) {
+    override fun onResume() {
+        super.onResume()
+        // Synchronize sessions created or updated while the Assistant overlay was in use
+        chatViewModel.refreshSessions()
+    }
+
+    override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent.action == android.content.Intent.ACTION_ASSIST) {
-            chatViewModel.openAssistantOverlay()
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(incomingIntent: Intent?) {
+        if (incomingIntent == null) return
+
+        val targetSessionId = incomingIntent.getStringExtra(EXTRA_SESSION_ID)
+        if (!targetSessionId.isNullOrBlank()) {
+            chatViewModel.selectSession(targetSessionId)
+        } else if (incomingIntent.action == Intent.ACTION_ASSIST || incomingIntent.action == Intent.ACTION_VOICE_COMMAND) {
+            val assistIntent = Intent(this, AssistantActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            startActivity(assistIntent)
         }
     }
 }

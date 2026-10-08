@@ -12,7 +12,155 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set
 
-from astra.events import AgentState
+from astra.events import AgentState, ControllerPhase
+
+
+class TaskType(str, Enum):
+    DEBUG = "DEBUG"
+    IMPLEMENTATION = "IMPLEMENTATION"
+    INVESTIGATION = "INVESTIGATION"
+    DOCUMENTATION = "DOCUMENTATION"
+    REFACTOR = "REFACTOR"
+    CONVERSATION = "CONVERSATION"
+
+
+@dataclass
+class Hypothesis:
+    id: str
+    statement: str
+    status: str = "UNTESTED"  # UNTESTED, TESTING, LIKELY, CONFIRMED, REJECTED
+    evidence_ids: List[str] = field(default_factory=list)
+    created_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "statement": self.statement,
+            "status": self.status,
+            "evidence_ids": list(self.evidence_ids),
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> Hypothesis:
+        return cls(
+            id=data.get("id", ""),
+            statement=data.get("statement", ""),
+            status=data.get("status", "UNTESTED"),
+            evidence_ids=list(data.get("evidence_ids", [])),
+            created_at=data.get("created_at", time.time()),
+        )
+
+
+@dataclass
+class Evidence:
+    id: str
+    fact: str
+    source: str = ""
+    timestamp: float = field(default_factory=time.time)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "fact": self.fact,
+            "source": self.source,
+            "timestamp": self.timestamp,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> Evidence:
+        return cls(
+            id=data.get("id", ""),
+            fact=data.get("fact", ""),
+            source=data.get("source", ""),
+            timestamp=data.get("timestamp", time.time()),
+        )
+
+
+@dataclass
+class CognitiveState:
+    """Full persistent cognitive state for autonomous engineering agents."""
+    goal: str = ""
+    task_type: TaskType = TaskType.DEBUG
+    constraints: List[str] = field(default_factory=list)
+    known_facts: List[str] = field(default_factory=list)
+    unknowns: List[str] = field(default_factory=list)
+    observations: List[str] = field(default_factory=list)
+    hypotheses: List[Dict[str, Any]] = field(default_factory=list)
+    evidence: List[Dict[str, Any]] = field(default_factory=list)
+    decisions: List[str] = field(default_factory=list)
+    current_objective: str = ""
+    next_action: Optional[str] = None
+    blockers: List[str] = field(default_factory=list)
+    progress: float = 0.0
+    confidence: float = 0.5
+    actions_taken: List[str] = field(default_factory=list)
+    successful_actions: List[str] = field(default_factory=list)
+    failed_actions: List[str] = field(default_factory=list)
+    last_tool: Optional[str] = None
+    last_error: Optional[str] = None
+    phase: ControllerPhase = ControllerPhase.UNDERSTAND
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "goal": self.goal,
+            "task_type": self.task_type.value if isinstance(self.task_type, TaskType) else str(self.task_type),
+            "constraints": list(self.constraints),
+            "known_facts": list(self.known_facts),
+            "unknowns": list(self.unknowns),
+            "observations": list(self.observations),
+            "hypotheses": list(self.hypotheses),
+            "evidence": list(self.evidence),
+            "decisions": list(self.decisions),
+            "current_objective": self.current_objective,
+            "next_action": self.next_action,
+            "blockers": list(self.blockers),
+            "progress": self.progress,
+            "confidence": self.confidence,
+            "actions_taken": list(self.actions_taken),
+            "successful_actions": list(self.successful_actions),
+            "failed_actions": list(self.failed_actions),
+            "last_tool": self.last_tool,
+            "last_error": self.last_error,
+            "phase": self.phase.value if isinstance(self.phase, ControllerPhase) else str(self.phase),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> CognitiveState:
+        tt = data.get("task_type", TaskType.DEBUG.value)
+        try:
+            task_type = TaskType(tt)
+        except Exception:
+            task_type = TaskType.DEBUG
+
+        ph = data.get("phase", ControllerPhase.UNDERSTAND.value)
+        try:
+            phase = ControllerPhase(ph)
+        except Exception:
+            phase = ControllerPhase.UNDERSTAND
+
+        return cls(
+            goal=data.get("goal", ""),
+            task_type=task_type,
+            constraints=list(data.get("constraints", [])),
+            known_facts=list(data.get("known_facts", [])),
+            unknowns=list(data.get("unknowns", [])),
+            observations=list(data.get("observations", [])),
+            hypotheses=list(data.get("hypotheses", [])),
+            evidence=list(data.get("evidence", [])),
+            decisions=list(data.get("decisions", [])),
+            current_objective=data.get("current_objective", ""),
+            next_action=data.get("next_action"),
+            blockers=list(data.get("blockers", [])),
+            progress=float(data.get("progress", 0.0)),
+            confidence=float(data.get("confidence", 0.5)),
+            actions_taken=list(data.get("actions_taken", [])),
+            successful_actions=list(data.get("successful_actions", [])),
+            failed_actions=list(data.get("failed_actions", [])),
+            last_tool=data.get("last_tool"),
+            last_error=data.get("last_error"),
+            phase=phase,
+        )
 
 
 class StepStatus(str, Enum):
@@ -225,6 +373,7 @@ class TaskState:
     model_name: str
     state: AgentState = AgentState.IDLE
     plan: TaskPlan = field(default_factory=lambda: TaskPlan(goal=""))
+    cognitive_state: CognitiveState = field(default_factory=CognitiveState)
     files_modified: Set[str] = field(default_factory=set)
     files_created: Set[str] = field(default_factory=set)
     files_deleted: Set[str] = field(default_factory=set)
@@ -232,6 +381,14 @@ class TaskState:
     action_records: List[ActionRecord] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
+
+    def __post_init__(self):
+        if not self.cognitive_state.goal and self.goal:
+            self.cognitive_state.goal = self.goal
+
+    @property
+    def cognitive(self) -> CognitiveState:
+        return self.cognitive_state
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -241,6 +398,7 @@ class TaskState:
             "model_name": self.model_name,
             "state": self.state.value if isinstance(self.state, AgentState) else self.state,
             "plan": self.plan.to_dict(),
+            "cognitive_state": self.cognitive_state.to_dict(),
             "files_modified": list(self.files_modified),
             "files_created": list(self.files_created),
             "files_deleted": list(self.files_deleted),
@@ -252,6 +410,12 @@ class TaskState:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> TaskState:
+        cog_data = data.get("cognitive_state")
+        if cog_data:
+            cog_state = CognitiveState.from_dict(cog_data)
+        else:
+            cog_state = CognitiveState(goal=data.get("goal", ""))
+
         state = cls(
             session_id=data.get("session_id", ""),
             goal=data.get("goal", ""),
@@ -259,6 +423,7 @@ class TaskState:
             model_name=data.get("model_name", ""),
             state=AgentState(data.get("state", AgentState.IDLE.value)),
             plan=TaskPlan.from_dict(data.get("plan", {"goal": data.get("goal", "")})),
+            cognitive_state=cog_state,
             files_modified=set(data.get("files_modified", [])),
             files_created=set(data.get("files_created", [])),
             files_deleted=set(data.get("files_deleted", [])),

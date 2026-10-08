@@ -97,16 +97,14 @@ class ProgressTracker:
         if len(self.history) >= 4:
             recent_tools = [h["tool"] for h in self.history[-4:]]
             if all(t in ("read_file", "search_code", "list_dir") for t in recent_tools):
-                # 4 consecutive reads on potentially same items
-                self.stagnation_score += 1
-                if self.stagnation_score >= self.max_stagnant_steps:
-                    return ProgressReport(
-                        is_progressing=False,
-                        stagnation_score=self.stagnation_score,
-                        reason="Agent has performed 4 consecutive exploratory read calls without writing or executing code.",
-                        recommended_action=ProgressAction.REPLAN,
-                        details={"recent_tools": recent_tools},
-                    )
+                self.stagnation_score += 2
+                return ProgressReport(
+                    is_progressing=False,
+                    stagnation_score=self.stagnation_score,
+                    reason="Agent has performed 4 consecutive exploratory read calls without writing or executing code.",
+                    recommended_action=ProgressAction.REPLAN,
+                    details={"recent_tools": recent_tools},
+                )
 
         # Check for failed command loops
         if is_command and not success:

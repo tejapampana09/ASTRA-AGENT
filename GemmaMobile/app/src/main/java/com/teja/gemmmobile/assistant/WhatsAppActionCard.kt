@@ -42,6 +42,7 @@ fun WhatsAppActionCard(
     onEditMessage: (String, WhatsAppAction) -> Unit = { _, _ -> },
     onSendAgain: (WhatsAppAction) -> Unit = {},
     onOpenA11ySettings: () -> Unit = {},
+    onPlatformChanged: (MessagePlatform, WhatsAppAction) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -49,10 +50,15 @@ fun WhatsAppActionCard(
     var isEditing by remember { mutableStateOf(false) }
     var currentText by remember(action.messageText) { mutableStateOf(action.messageText) }
 
+    val isSms = action.platform == MessagePlatform.BACKGROUND_SMS
+    val cardBorder = if (isSms) Color(0xFF3F51B5).copy(alpha = 0.35f) else WhatsAppGreen.copy(alpha = 0.35f)
+    val cardHeaderColor = if (isSms) Color(0xFF1A237E) else WhatsAppDarkGreen
+    val cardIconBg = if (isSms) Color(0xFF3F51B5) else WhatsAppGreen
+
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = Color(0xFFF9FBF9),
-        border = BorderStroke(1.dp, WhatsAppGreen.copy(alpha = 0.35f)),
+        border = BorderStroke(1.dp, cardBorder),
         shadowElevation = 2.dp,
         modifier = modifier
             .fillMaxWidth()
@@ -63,7 +69,7 @@ fun WhatsAppActionCard(
                 .fillMaxWidth()
                 .padding(14.dp)
         ) {
-            // Header: WhatsApp Icon & Badge
+            // Header: Icon & Badge
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -72,24 +78,24 @@ fun WhatsAppActionCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Surface(
                         shape = CircleShape,
-                        color = WhatsAppGreen,
+                        color = cardIconBg,
                         modifier = Modifier.size(26.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Text(
-                                text = "W",
+                                text = if (isSms) "SMS" else "W",
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp
+                                fontSize = if (isSms) 10.sp else 14.sp
                             )
                         }
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "WhatsApp Direct Action",
+                        text = if (isSms) "Direct Message Action" else "WhatsApp Direct Action",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
-                        color = WhatsAppDarkGreen
+                        color = cardHeaderColor
                     )
                 }
 
@@ -98,6 +104,60 @@ fun WhatsAppActionCard(
             }
 
             Spacer(modifier = Modifier.height(10.dp))
+
+            // Platform Selector: Direct Background SMS vs WhatsApp
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isSms) Color(0xFFE8EAF6) else Color(0xFFF1F3F4),
+                    border = BorderStroke(1.dp, if (isSms) Color(0xFF3F51B5) else Color(0xFFDADCE0)),
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { onPlatformChanged(MessagePlatform.BACKGROUND_SMS, action) }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            text = "💬 Background SMS",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = if (isSms) FontWeight.Bold else FontWeight.Medium,
+                            color = if (isSms) Color(0xFF1A237E) else Color(0xFF5F6368)
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (!isSms) WhatsAppBg else Color(0xFFF1F3F4),
+                    border = BorderStroke(1.dp, if (!isSms) WhatsAppGreen else Color(0xFFDADCE0)),
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { onPlatformChanged(MessagePlatform.WHATSAPP, action) }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            text = "🟢 WhatsApp",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = if (!isSms) FontWeight.Bold else FontWeight.Medium,
+                            color = if (!isSms) WhatsAppDarkGreen else Color(0xFF5F6368)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             // Contact Info Row
             Surface(
@@ -276,20 +336,20 @@ fun WhatsAppActionCard(
                             onConfirmSend(action.copy(messageText = currentText))
                         },
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = WhatsAppGreen,
+                            containerColor = if (isSms) Color(0xFF3F51B5) else WhatsAppGreen,
                             contentColor = Color.White
                         ),
                         shape = RoundedCornerShape(20.dp),
                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Default.CheckCircle,
+                            imageVector = if (isSms) Icons.Default.Send else Icons.Default.CheckCircle,
                             contentDescription = null,
                             modifier = Modifier.size(15.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Send on WhatsApp",
+                            text = if (isSms) "Send in Background" else "Send on WhatsApp",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -298,7 +358,7 @@ fun WhatsAppActionCard(
                     Button(
                         onClick = { onSendAgain(action) },
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = WhatsAppGreen,
+                            containerColor = if (isSms) Color(0xFF3F51B5) else WhatsAppGreen,
                             contentColor = Color.White
                         ),
                         shape = RoundedCornerShape(20.dp),
@@ -319,8 +379,25 @@ fun WhatsAppActionCard(
                 }
             }
 
-            // Accessibility Helper if not enabled
-            if (!isA11yEnabled && action.matchedNumber != null) {
+            // Background indicator hint
+            if (isSms && action.matchedNumber != null) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "⚡ 100% silent background message. No apps will open.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF3949AB)
+                )
+            } else if (!isSms && action.matchedNumber != null) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "💡 WhatsApp opens briefly to auto-send. Tap 'Background SMS' for silent sending.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF666666)
+                )
+            }
+
+            // Accessibility Helper if not enabled (WhatsApp only)
+            if (!isSms && !isA11yEnabled && action.matchedNumber != null) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Surface(
                     shape = RoundedCornerShape(8.dp),

@@ -126,19 +126,19 @@ fun ConfigDialog(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        PresetChip(label = "Short (256)", value = 256f, current = maxTokens.toFloat()) { maxTokens = it.toInt() }
-                        PresetChip(label = "Medium (1024)", value = 1024f, current = maxTokens.toFloat()) { maxTokens = it.toInt() }
-                        PresetChip(label = "Long (2048)", value = 2048f, current = maxTokens.toFloat()) { maxTokens = it.toInt() }
+                        PresetChip(label = "1024", value = 1024f, current = maxTokens.toFloat()) { maxTokens = it.toInt() }
+                        PresetChip(label = "2048 (Default)", value = 2048f, current = maxTokens.toFloat()) { maxTokens = it.toInt() }
+                        PresetChip(label = "4096 (Full)", value = 4096f, current = maxTokens.toFloat()) { maxTokens = it.toInt() }
                     }
                     Spacer(modifier = Modifier.height(6.dp))
                     Slider(
                         value = maxTokens.toFloat(),
                         onValueChange = { maxTokens = (it / 64).toInt() * 64 },
-                        valueRange = 128f..2048f,
-                        steps = 29
+                        valueRange = 256f..4096f,
+                        steps = 59
                     )
                     Text(
-                        text = "Upper limit of generated tokens per answer",
+                        text = "Upper limit of generated tokens per answer (including thinking budget)",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline,
                         fontSize = 10.sp
@@ -177,6 +177,23 @@ fun ConfigDialog(
                             color = MaterialTheme.colorScheme.outline,
                             fontSize = 10.sp
                         )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "⚡ Tip: Turn off thinking for instant token generation on mobile CPU!",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFFFFB74D),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    } else {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "🚀 Fast mode active: Model skips hidden reasoning and responds immediately.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFF10A37F),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium
+                        )
                     }
                 }
 
@@ -210,6 +227,167 @@ fun ConfigDialog(
                         placeholder = { Text("Enter system instruction...") },
                         textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                     )
+                }
+
+                // BOX 6: Hands-Free Wake-Word ("Hey Gemma" / "Hey Teja")
+                val context = androidx.compose.ui.platform.LocalContext.current
+                var wakeWordEnabled by remember { mutableStateOf(com.teja.gemmmobile.assistant.GemmaWakeWordService.isEnabled(context)) }
+
+                val micPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+                    contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+                ) { isGranted ->
+                    if (isGranted) {
+                        wakeWordEnabled = true
+                        try {
+                            com.teja.gemmmobile.assistant.GemmaWakeWordService.setEnabled(context, true)
+                        } catch (e: Exception) {
+                            android.widget.Toast.makeText(context, "Could not start: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        wakeWordEnabled = false
+                        android.widget.Toast.makeText(context, "Microphone permission is required for Wake-Word", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }
+
+                SettingBox(title = "Wake-Word Detection", badge = if (wakeWordEnabled) "Active" else "Off") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text(
+                                text = "Say \"Hey Gemma\" or \"Hey Teja\"",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "Listen in background and summon the assistant overlay hands-free.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                        Switch(
+                            checked = wakeWordEnabled,
+                            onCheckedChange = { checked ->
+                                if (checked) {
+                                    val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(
+                                        context,
+                                        android.Manifest.permission.RECORD_AUDIO
+                                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+                                    if (hasPermission) {
+                                        wakeWordEnabled = true
+                                        try {
+                                            com.teja.gemmmobile.assistant.GemmaWakeWordService.setEnabled(context, true)
+                                        } catch (e: Exception) {
+                                            android.widget.Toast.makeText(context, "Could not start: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                                        }
+                                    } else {
+                                        micPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                                    }
+                                } else {
+                                    wakeWordEnabled = false
+                                    com.teja.gemmmobile.assistant.GemmaWakeWordService.setEnabled(context, false)
+                                }
+                            }
+                        )
+                    }
+                }
+
+                // BOX 7: WhatsApp Connected App Gateway (Optional Remote Bridge)
+                var gatewayUrl by remember {
+                    mutableStateOf(com.teja.gemmmobile.assistant.WhatsAppActionHandler.getGatewayUrl(context))
+                }
+                var gatewayApiKey by remember {
+                    mutableStateOf(com.teja.gemmmobile.assistant.WhatsAppActionHandler.getGatewayApiKey(context))
+                }
+
+                SettingBox(
+                    title = "WhatsApp Connected App Gateway",
+                    badge = if (gatewayUrl.isNotBlank()) "Connected" else "Direct Mode"
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "Connect external WhatsApp Webhook / Bridge (WAHA, Baileys, Evolution API). When configured, messages send remotely over HTTP without opening WhatsApp on phone.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+
+                        OutlinedTextField(
+                            value = gatewayUrl,
+                            onValueChange = {
+                                gatewayUrl = it
+                                com.teja.gemmmobile.assistant.WhatsAppActionHandler.setGatewayConfig(context, it, gatewayApiKey)
+                            },
+                            placeholder = { Text("https://your-gateway.com/send", fontSize = 11.sp) },
+                            label = { Text("Gateway Endpoint URL", fontSize = 10.sp) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            shape = RoundedCornerShape(6.dp),
+                            textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                        )
+
+                        OutlinedTextField(
+                            value = gatewayApiKey,
+                            onValueChange = {
+                                gatewayApiKey = it
+                                com.teja.gemmmobile.assistant.WhatsAppActionHandler.setGatewayConfig(context, gatewayUrl, it)
+                            },
+                            placeholder = { Text("Bearer / API Key (optional)", fontSize = 11.sp) },
+                            label = { Text("API Key", fontSize = 10.sp) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            shape = RoundedCornerShape(6.dp),
+                            textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                        )
+                    }
+                }
+
+                // BOX 8: Default Digital Assistant (Hardware Power Button & Gesture)
+                SettingBox(
+                    title = "Default Phone Assistant",
+                    badge = "Gemini Style"
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 6.dp)) {
+                            Text(
+                                text = "Set as Default Assistant App",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "Launch Gemma with power button long-press or corner swipe, exactly like Google Gemini.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                try {
+                                    val intent = android.content.Intent(android.provider.Settings.ACTION_VOICE_INPUT_SETTINGS).apply {
+                                        flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                                    }
+                                    context.startActivity(intent)
+                                } catch (_: Exception) {
+                                    try {
+                                        val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS).apply {
+                                            flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                                        }
+                                        context.startActivity(intent)
+                                    } catch (_: Exception) {}
+                                }
+                            },
+                            shape = RoundedCornerShape(4.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Text("Open Settings", fontSize = 11.sp)
+                        }
+                    }
                 }
             }
         },

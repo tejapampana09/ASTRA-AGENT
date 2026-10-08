@@ -21,18 +21,18 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   }, [logs]);
 
   return (
-    <div className="h-52 bg-white border-t border-slate-200 flex flex-col font-mono text-xs select-text">
+    <div className="h-52 bg-[#0d1117] border-t border-[#21262d] flex flex-col font-mono text-xs select-text">
       {/* Header Bar */}
-      <div className="h-8 bg-slate-50 px-3 border-b border-slate-200 flex items-center justify-between select-none">
-        <div className="flex items-center space-x-2 text-slate-700">
-          <Terminal className="w-3.5 h-3.5 text-slate-600" />
+      <div className="h-8 bg-[#161b22] px-3 border-b border-[#21262d] flex items-center justify-between select-none">
+        <div className="flex items-center space-x-2 text-[#f0f6fc]">
+          <Terminal className="w-3.5 h-3.5 text-[#58a6ff]" />
           <span className="font-semibold text-[11px] uppercase tracking-wider">Terminal Execution</span>
         </div>
         <div className="flex items-center space-x-2">
           {isRunning && onStop && (
             <button
               onClick={onStop}
-              className="flex items-center space-x-1 px-2 py-0.5 rounded bg-rose-600 hover:bg-rose-700 text-white text-[10px] transition-colors"
+              className="flex items-center space-x-1 px-2 py-0.5 rounded bg-[#da3633] hover:bg-[#f85149] text-white text-[10px] transition-colors"
             >
               <Square className="w-2.5 h-2.5 fill-current" />
               <span>Kill</span>
@@ -40,7 +40,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           )}
           <button
             onClick={onClear}
-            className="p-1 rounded hover:bg-slate-200 text-slate-500 hover:text-slate-800 transition-colors"
+            className="p-1 rounded hover:bg-[#21262d] text-[#8b949e] hover:text-[#f0f6fc] transition-colors"
             title="Clear terminal"
           >
             <Trash2 className="w-3 h-3" />
@@ -49,7 +49,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       </div>
 
       {/* Output Console */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-1 bg-slate-950 text-slate-200">
+      <div className="flex-1 overflow-y-auto p-3 space-y-1 bg-[#010409] text-[#c9d1d9]">
         {logs.length === 0 ? (
           <div className="text-slate-500 select-none">$ Terminal ready. Commands executed by ASTRA will appear here.</div>
         ) : (

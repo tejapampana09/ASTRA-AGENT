@@ -1,66 +1,78 @@
-"""ASTRA V4 Autonomous Software Engineering Agent.
+"""ASTRA V5 Autonomous Cognitive Software Engineering Agent.
 
-Core Orchestrator implementing:
-PLAN -> EXPLORE -> ACT -> OBSERVE -> VERIFY -> FIX -> DONE
-With:
-- Independent Verification (AST, compilation, project-aware tests)
-- Self-Healing Fix Loop
-- Loop & Stalling Detection
-- Real-time Structured Event Streaming (WebSockets, Desktop UI, Terminal)
-- Strict Cancellation and Timeout Controls
-- Comprehensive Change Tracking
+Core Architecture:
+    USER
+     ↓
+    API / Desktop UI
+     ↓
+    SESSION
+     ↓
+    AGENT CONTROLLER (Governs execution, gating, hypotheses, evidence, progress, checkpoints)
+     ↓
+    COGNITIVE STATE (Persistent, serializable, deterministic)
+     ↓
+    PLANNER
+     ↓
+    LLM (Reasoning engine - suggests next purposeful action)
+     ↓
+    ACTION VALIDATOR (Controller gates: safe, non-repetitive, investigation-first)
+     ↓
+    TOOL EXECUTOR (Carries out action safely in sandbox)
+     ↓
+    OBSERVATION & EVIDENCE
+     ↓
+    PROGRESS TRACKER (Evaluates advancement vs stagnation)
+     ↓
+    VERIFIER (Mandatory independent external verification)
+     ↓
+    REPLAN / DONE
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import time
-import datetime as _dt
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from astra.approval import approval_manager
 from astra.checkpoints import CheckpointManager
 from astra.config import settings
-from astra.events import AgentEvent, AgentState, EventType, event_bus
+from astra.controller import DeterministicAgentController, TaskModel, classify_task_intent
+from astra.events import AgentEvent, AgentState, ControllerPhase, EventType, event_bus
 from astra.llm import LLMClient, LLMResponse, parse_tool_calls_from_text
 from astra.planner import Planner
 from astra.progress import ProgressAction, ProgressReport, ProgressTracker
-from astra.session import session_manager
-from astra.state import ActionRecord, StagnationAndLoopDetector, StepStatus, TaskPlan, TaskState, TaskStep
+from astra.session import SessionManager, session_manager as global_session_manager
+from astra.state import (
+    ActionRecord,
+    CognitiveState,
+    StagnationAndLoopDetector,
+    StepStatus,
+    TaskPlan,
+    TaskState,
+    TaskStep,
+    TaskType,
+)
 from astra.tools import PermissionLevel, ToolExecutor, ToolRegistry, ToolResult
 from astra.verifier import IndependentVerifier, VerificationResult
 from astra.workspace import WorkspaceManager
 
-SYSTEM_PROMPT = """You are ASTRA, an autonomous senior software engineering assistant (powered by the Google Antigravity engineering engine).
+SYSTEM_PROMPT = """You are ASTRA, an autonomous senior software engineering agent (powered by the Google Antigravity engineering runtime).
 You help developers explore repositories, understand architecture, implement features, fix bugs, and create documentation.
 
-CORE PARADIGM: THINK -> HUMAN-IN-THE-LOOP CHECK -> EXECUTE
+CORE EXECUTION PHILOSOPHY:
+1. THE RUNTIME CONTROLLER GOVERNS EXECUTION:
+   - Your job is to reason about the current evidence, state, and objective, and propose the single most purposeful next action.
+   - Do NOT output conversational apologies or ask the user to run commands. You have full autonomous tool access.
 
-1. THINK (Analyze User Intent First):
-   - Determine what the user actually wants before taking any action:
-     * ARCHITECTURE / DOCUMENTATION / EXPLANATION REQUESTS:
-       - Examples: "what is project architecture", "explain how this works", "document the system", "make a documentation".
-       - Action: EXPLORE the local workspace! Use `list_dir`, `read_file` on core files (`README.md`, `package.json`, `setup.py`, `pyproject.toml`, main entry points).
-       - DO NOT run `pytest`, `npm test`, or `git status` for questions or architecture inquiries.
-       - DO NOT search the web for generic articles. The user wants the architecture and documentation of THIS workspace!
-       - DELIVER: Provide the full, high-quality, in-depth architectural breakdown directly to the user (components, data flow, tech stack, API overview, directory structure, design patterns). If asked to "make documentation", write it to `docs/ARCHITECTURE.md` or `ARCHITECTURE.md` and present the complete guide in your response!
-     * CODE IMPLEMENTATION / BUG FIX / FEATURE REQUESTS:
-       - Examples: "fix failing pytest", "add endpoint", "refactor function".
-       - Action: Locate the code, make clean surgical edits (`edit_file`, `write_file`), and verify with syntax/tests.
+2. INVESTIGATION-FIRST REASONING:
+   - In debugging or investigation tasks: ALWAYS inspect the codebase (search_code, read_file, or targeted reproduction) before attempting code mutations.
+   - The runtime controller will reject premature code edits if root cause has not been investigated.
 
-2. HUMAN-IN-THE-LOOP CHECK:
-   - Destructive operations (`delete_file`, git hard resets, dropping data, or critical system commands) require explicit human authorization.
-   - Explain your rationale clearly before proposing destructive or major mutating actions.
-
-3. EXECUTE:
-   - Take ONE purposeful action at a time.
-   - Observe tool results and use the gathered knowledge to progress directly towards fulfilling the user's goal.
-   - NEVER loop or repeatedly call the same tool with the same arguments.
-
-4. DELIVER REAL VALUE (NO ROBOTIC META-SUMMARIES):
-   - When answering a question or providing documentation, output the complete, well-structured, professional documentation directly in markdown!
-   - NEVER output a robotic meta-summary recounting your own tool calls (e.g. NEVER say: "Executive Overview: The assistant ran git status... Changes Made: No files were edited"). That is completely useless.
-   - Deliver real value: complete documentation, working code, or verified solutions.
+3. DELIVER REAL VALUE (NO ROBOTIC META-LOGS):
+   - When asked an architecture or explanation question: deliver deep, structured, professional markdown documentation directly.
+   - Never output a meta-narrative about your own tool history.
 
 AVAILABLE TOOLS:
 - read_file(file_path, start_line, end_line): Read file contents
@@ -103,7 +115,7 @@ class AgentCallback:
 
 
 class AstraAgent:
-    """Autonomous software engineering agent with mandatory independent verification."""
+    """Autonomous software engineering agent governed by DeterministicAgentController."""
 
     def __init__(
         self,
@@ -114,23 +126,24 @@ class AstraAgent:
         max_verification_attempts: int = 3,
         callback: Optional[AgentCallback] = None,
         approval_handler: Optional[Callable[[str, str, Dict[str, Any]], bool]] = None,
+        session_manager: Optional[SessionManager] = None,
     ):
         self.workspace_path = Path(workspace_path or settings.workspace_path).resolve()
         self.workspace_manager = WorkspaceManager(self.workspace_path)
         self.tool_registry = ToolRegistry(self.workspace_path)
-        self.verifier = IndependentVerifier(self.workspace_path)
         self.model_name = model_name or settings.default_model
         self.llm = LLMClient(model_name=self.model_name)
-        self.session_id = session_id or session_manager.create_session(str(self.workspace_path), self.model_name)
-        
+        self.session_manager = session_manager or global_session_manager
+        self.session_id = session_id or self.session_manager.create_session(str(self.workspace_path), self.model_name)
+
         self.max_iterations = max_iterations or settings.max_iterations
         self.max_verification_attempts = max_verification_attempts
         self.callback = callback or AgentCallback()
         self.approval_handler = approval_handler
-        
+
         self.state = AgentState.IDLE
         self._is_cancelled = False
-        
+
         # Change & Execution Tracking
         self.files_modified: Set[str] = set()
         self.files_created: Set[str] = set()
@@ -139,22 +152,31 @@ class AstraAgent:
         self.tests_run: List[Dict[str, Any]] = []
         self.verification_results: List[Dict[str, Any]] = []
 
-        # Autonomy, Checkpoints & Deterministic State Engine
-        self.checkpoint_manager = CheckpointManager(self.workspace_path, session_manager)
-        self.loop_detector = StagnationAndLoopDetector()
-        self.planner = Planner()
-        self.progress_tracker = ProgressTracker(self.workspace_path)
-        self.task_state = TaskState(
+        # Central Cognitive Controller
+        self.controller = DeterministicAgentController(
+            workspace_path=self.workspace_path,
             session_id=self.session_id,
             goal="",
-            workspace_path=str(self.workspace_path),
             model_name=self.model_name,
-            state=self.state,
+            tool_registry=self.tool_registry,
+            session_manager=self.session_manager,
+            approval_manager=approval_manager,
+            max_iterations=self.max_iterations,
+            llm_client=self.llm,
         )
+
+        # Delegate references to controller components
+        self.task_state = self.controller.task_state
+        self.checkpoint_manager = self.controller.checkpoint_manager
+        self.loop_detector = self.controller.loop_detector
+        self.planner = self.controller.planner
+        self.progress_tracker = self.controller.progress_tracker
+        self.verifier = self.controller.verifier
 
     def cancel(self) -> None:
         """User clicked Stop or cancelled execution."""
         self._is_cancelled = True
+        self.controller.set_phase(ControllerPhase.BLOCKED, {"reason": "Cancelled by user"})
         self._set_state(AgentState.CANCELLED, {"message": "Execution stopped by user."})
         self._emit_event(EventType.AGENT_CANCELLED, {"message": "Agent cancelled by user."})
 
@@ -163,7 +185,7 @@ class AstraAgent:
 
     def _set_state(self, state: AgentState, data: Optional[Dict[str, Any]] = None) -> None:
         self.state = state
-        session_manager.update_session(self.session_id, state=state)
+        self.session_manager.update_session(self.session_id, state=state)
         self.callback.on_state_change(state, data.get("message", "") if data else "")
         self.callback.on_phase_change(state.value, data.get("message", "") if data else "")
 
@@ -176,7 +198,7 @@ class AstraAgent:
             session_id=self.session_id,
         )
         event_bus.emit(event)
-        session_manager.add_event(self.session_id, event)
+        self.session_manager.add_event(self.session_id, event)
 
     def _compress_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Context compression: keeps system prompt, initial goal, and recent turns, compressing older outputs."""
@@ -207,7 +229,7 @@ class AstraAgent:
         return compressed
 
     def _is_conversational(self, text: str) -> bool:
-        """Classify if user input is a conversational greeting/question rather than a coding task."""
+        """Classify if user input is conversational rather than an engineering task."""
         cleaned = text.strip().lower().rstrip("!?.")
         greetings = {
             "hi", "hello", "hey", "hola", "yo", "sup", "howdy",
@@ -218,7 +240,7 @@ class AstraAgent:
         if cleaned in greetings:
             return True
         words = cleaned.split()
-        if len(words) <= 2 and words[0] in {"hi", "hello", "hey", "yo"}:
+        if len(words) <= 2 and words and words[0] in {"hi", "hello", "hey", "yo"}:
             return True
         return False
 
@@ -227,8 +249,17 @@ class AstraAgent:
         self._is_cancelled = False
         start_time = time.time()
 
+        # Check for conversation continuity or follow-up
+        is_follow_up = bool(existing_messages) or (
+            bool(self.controller.cognitive_state.goal)
+            and self.controller.cognitive_state.phase not in (ControllerPhase.DONE, ControllerPhase.CONVERSATION)
+        )
+
+        # 1. Controller classifies task and initializes cognitive state
+        task_model = self.controller.start_task(goal, is_follow_up=is_follow_up)
+
         # Fast-path for conversational greetings & general questions (only on fresh non-resumed tasks)
-        if not existing_messages and self._is_conversational(goal):
+        if not existing_messages and task_model.task_type == TaskType.CONVERSATION:
             self._set_state(AgentState.EXECUTING, {"goal": goal})
             self._emit_event(EventType.AGENT_STARTED, {
                 "goal": goal,
@@ -236,7 +267,7 @@ class AstraAgent:
                 "model": self.model_name,
                 "is_conversational": True,
             })
-            session_manager.add_message(self.session_id, "user", goal)
+            self.session_manager.add_message(self.session_id, "user", goal)
 
             chat_messages = [
                 {
@@ -259,20 +290,16 @@ class AstraAgent:
             except Exception:
                 reply = "Hello! I am ASTRA, your autonomous software engineering agent. How can I help you with your code today?"
 
-            session_manager.add_message(self.session_id, "assistant", reply)
+            self.session_manager.add_message(self.session_id, "assistant", reply)
+            self.controller.set_phase(ControllerPhase.DONE)
             self._set_state(AgentState.COMPLETED, {"summary": reply})
             self._emit_event(EventType.AGENT_COMPLETED, {"summary": reply})
+            self._emit_event(EventType.TASK_COMPLETED, {"summary": reply})
             return self._build_result("completed", reply, 1, start_time)
 
-        # Autonomous Coding Task Workflow
+        # Autonomous Engineering Task Workflow
         meta = self.workspace_manager.scan()
-
         self._set_state(AgentState.PLANNING, {"goal": goal})
-        self.task_state.goal = goal
-        self.task_state.state = AgentState.PLANNING
-        if not self.task_state.plan.steps:
-            self.task_state.plan = self.planner.create_initial_plan(goal, meta.project_type.value)
-        session_manager.save_task_state(self.task_state.to_dict())
 
         self._emit_event(EventType.AGENT_STARTED, {
             "goal": goal,
@@ -280,6 +307,7 @@ class AstraAgent:
             "project_type": meta.project_type.value,
             "package_manager": meta.package_manager,
             "model": self.model_name,
+            "task_type": task_model.task_type.value,
         })
 
         if existing_messages:
@@ -303,154 +331,144 @@ class AstraAgent:
         final_summary = ""
         verification_result: Optional[VerificationResult] = None
 
-        while iteration < self.max_iterations:
+        while iteration < self.max_iterations and self.controller.phase != ControllerPhase.DONE:
             if self._is_cancelled:
                 return self._build_result("cancelled", "Task cancelled by user.", iteration, start_time)
 
             iteration += 1
 
-            # Context compression
-            compressed_msgs = self._compress_messages(messages)
-
-            # Check if exploring vs executing
-            if iteration == 1:
+            # Sync AgentState with Controller Phase
+            if self.controller.phase == ControllerPhase.INVESTIGATE:
                 self._set_state(AgentState.EXPLORING, {"iteration": iteration})
-                self._emit_event(EventType.EXPLORATION_STARTED, {"iteration": iteration})
+                if iteration == 1:
+                    self._emit_event(EventType.EXPLORATION_STARTED, {"iteration": iteration})
+            elif self.controller.phase in (ControllerPhase.PLAN, ControllerPhase.REPLAN):
+                self._set_state(AgentState.PLANNING, {"iteration": iteration})
+            elif self.controller.phase in (ControllerPhase.DIAGNOSE, ControllerPhase.OBSERVE):
+                self._set_state(AgentState.OBSERVING, {"iteration": iteration})
+            elif self.controller.phase == ControllerPhase.VERIFY:
+                self._set_state(AgentState.VERIFYING, {"iteration": iteration})
+            elif self.controller.phase == ControllerPhase.RECOVER:
+                self._set_state(AgentState.FIXING, {"iteration": iteration})
             else:
                 self._set_state(AgentState.EXECUTING, {"iteration": iteration})
+
+            # Compress history to fit context window
+            compressed_msgs = self._compress_messages(messages)
 
             # LLM Completion
             try:
                 response = self.llm.complete(compressed_msgs, tools=self.tool_registry.get_definitions())
             except Exception as exc:
                 err_msg = f"LLM error: {exc}"
+                self.controller.set_phase(ControllerPhase.BLOCKED, {"error": err_msg})
                 self._set_state(AgentState.FAILED, {"error": err_msg})
                 self._emit_event(EventType.AGENT_FAILED, {"error": err_msg})
                 return self._build_result("error", err_msg, iteration, start_time, error=err_msg)
 
-            # Thoughts & Reasoning
+            # Process Thoughts & Reasoning
             if response.content:
                 final_summary = response.content.strip()
                 if response.has_tool_calls():
                     self.callback.on_thought(final_summary)
                     self._emit_event(EventType.PLANNING, {"thought": final_summary})
+                    # Extract hypotheses or observations from model thoughts if present
+                    if "hypothesis" in final_summary.lower():
+                        hyp_line = final_summary.split("\n")[0][:150]
+                        self.controller.add_hypothesis(hyp_line)
 
-            # Check if LLM proposes no further tool calls -> MODEL SAYS DONE
+            # CASE 1: LLM proposes NO further tool calls -> CONTROLLER evaluates completion
             if not response.has_tool_calls():
-                intent_markers = [
-                    "we need to", "we should", "next step", "let's now", 
-                    "i will now", "i'll now", "in order to fix", "we must",
-                    "let us now", "investigate the changes and ensure",
-                    "to fix the failing", "to fix this, we need", "i will inspect",
-                    "let's try running", "let's try", "here's the updated command",
-                    "here is the updated command", "here's the command", "here is the command",
-                    "try running the test again", "run the test again", "run the following command",
-                    "let's run", "we can run", "let's execute", "run the updated command",
-                ]
-                if iteration < self.max_iterations and any(im in final_summary.lower() for im in intent_markers):
-                    messages.append({"role": "assistant", "content": response.content})
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            "You are an autonomous engineering agent (ASTRA). Do NOT instruct the user to run commands "
-                            "or state what command to try next. Execute the command yourself immediately using the 'run_command' tool."
-                        )
-                    })
-                    continue
-
                 all_changed = list(self.files_modified | self.files_created)
-                is_actionable = any(w in goal.lower() for w in ["fix", "pytest", "test", "implement", "build", "create", "write", "debug"])
-                if is_actionable and iteration < 4 and not self.commands_executed and not all_changed:
-                    messages.append({"role": "assistant", "content": response.content})
-                    messages.append({
-                        "role": "user",
-                        "content": f"The objective '{goal}' requires taking action. Please invoke the appropriate tool (such as run_command with pytest or read_file to inspect code)."
-                    })
-                    continue
 
-                if all_changed:
-                    # TRIGGER MANDATORY INDEPENDENT VERIFIER
-                    self._set_state(AgentState.VERIFYING, {"modified_files": all_changed})
-                    self._emit_event(EventType.VERIFICATION_STARTED, {"files": all_changed})
-                    
-                    verification_result = self.verifier.verify(all_changed, goal=goal)
-                    session_manager.add_verification(
-                        self.session_id,
-                        verification_result.passed,
-                        verification_result.summary,
-                        verification_result.details,
-                        verification_result.phase,
-                    )
-                    self.verification_results.append(verification_result.to_dict())
+                # Check with controller whether task is genuinely complete
+                is_done, reason = self.controller.check_completion(final_summary, all_changed)
 
-                    if verification_result.passed:
-                        self.callback.on_verification(True, verification_result.summary, verification_result.details)
-                        self.task_state.plan.complete_current_step("Verification passed.")
-                        clean_summary = self._ensure_full_summary(goal, final_summary, all_changed, verification_result)
-                        self._set_state(AgentState.COMPLETED, {"summary": clean_summary})
-                        self._emit_event(EventType.VERIFICATION_PASSED, {
-                            "summary": verification_result.summary,
-                            "details": verification_result.details,
-                        })
-                        self._emit_event(EventType.AGENT_COMPLETED, {"summary": clean_summary})
-                        session_manager.save_task_state(self.task_state.to_dict())
-                        return self._build_result("completed", clean_summary, iteration, start_time, verification="passed")
-                    else:
-                        # VERIFICATION FAILED -> ENTER SELF-HEALING FIX LOOP
-                        verification_attempts += 1
-                        self.callback.on_verification(False, verification_result.summary, verification_result.details)
-                        self._emit_event(EventType.VERIFICATION_FAILED, {
-                            "summary": verification_result.summary,
-                            "details": verification_result.details,
-                            "category": verification_result.error_category.value if verification_result.error_category else None,
-                        })
+                if not is_done:
+                    # Controller rejected premature completion!
+                    if all_changed:
+                        # Files were modified but independent verification hasn't run yet -> RUN VERIFICATION
+                        self._set_state(AgentState.VERIFYING, {"modified_files": all_changed})
+                        vres, prep = self.controller.verify()
+                        self.verification_results.append(vres.to_dict())
 
-                        # Loop detection check
-                        is_stuck = self.verifier.loop_detector.record_and_check(verification_result.details)
-                        if is_stuck:
-                            fail_msg = (
-                                f"ASTRA loop detector stopped execution: The exact same error repeated {self.verifier.loop_detector.max_repeated} times.\n"
-                                f"Repeated Blocker: {verification_result.details[:300]}\n"
-                                f"Recommended Action: Review dependency versions or manual test setup."
-                            )
-                            self._set_state(AgentState.FAILED, {"error": fail_msg})
-                            self._emit_event(EventType.AGENT_FAILED, {"error": fail_msg})
-                            return self._build_result("failed", final_summary, iteration, start_time, error=fail_msg, verification="failed")
-
-                        if verification_attempts < self.max_verification_attempts:
-                            self._set_state(AgentState.FIXING, {
-                                "attempt": verification_attempts,
-                                "max_attempts": self.max_verification_attempts,
-                            })
-                            self._emit_event(EventType.FIX_STARTED, {
-                                "attempt": verification_attempts,
-                                "details": verification_result.details,
-                            })
-
-                            fix_prompt = (
-                                f"[INDEPENDENT VERIFICATION FAILED]\n"
-                                f"Stage: {verification_result.phase}\n"
-                                f"Error Classification: {verification_result.error_category.value if verification_result.error_category else 'runtime'}\n"
-                                f"Error Details:\n{verification_result.details}\n\n"
-                                f"The task CANNOT be marked complete until all errors are fixed and tests pass.\n"
-                                f"Diagnose the failure, read the relevant source files, edit the code to fix it, and verify."
-                            )
-                            messages.append({"role": "user", "content": fix_prompt})
-                            continue
+                        if vres.passed:
+                            self.callback.on_verification(True, vres.summary, vres.details)
+                            clean_summary = self._ensure_full_summary(goal, final_summary, all_changed, vres)
+                            self._set_state(AgentState.COMPLETED, {"summary": clean_summary})
+                            self._emit_event(EventType.AGENT_COMPLETED, {"summary": clean_summary})
+                            return self._build_result("completed", clean_summary, iteration, start_time, verification="passed")
                         else:
-                            fail_msg = f"Independent verification failed after {verification_attempts} fix attempts:\n{verification_result.details}"
-                            self._set_state(AgentState.FAILED, {"error": fail_msg})
-                            self._emit_event(EventType.AGENT_FAILED, {"error": fail_msg})
-                            return self._build_result("failed", final_summary, iteration, start_time, error=fail_msg, verification="failed")
+                            # Verification failed -> enter self-healing fix loop
+                            verification_attempts += 1
+                            self.callback.on_verification(False, vres.summary, vres.details)
+                            if verification_attempts < self.max_verification_attempts:
+                                self._set_state(AgentState.FIXING, {"attempt": verification_attempts})
+                                self._emit_event(EventType.FIX_STARTED, {"attempt": verification_attempts, "details": vres.details})
+                                fix_prompt = (
+                                    f"[INDEPENDENT VERIFICATION FAILED]\n"
+                                    f"Stage: {vres.phase}\n"
+                                    f"Error Details:\n{vres.details}\n\n"
+                                    f"The task CANNOT be marked complete until all errors are fixed and tests pass.\n"
+                                    f"Diagnose the failure, read the relevant source files, edit the code to fix it, and verify."
+                                )
+                                messages.append({"role": "user", "content": fix_prompt})
+                                continue
+                            else:
+                                fail_msg = f"Independent verification failed after {verification_attempts} fix attempts:\n{vres.details}"
+                                self.controller.set_phase(ControllerPhase.BLOCKED, {"error": fail_msg})
+                                self._set_state(AgentState.FAILED, {"error": fail_msg})
+                                self._emit_event(EventType.AGENT_FAILED, {"error": fail_msg})
+                                return self._build_result("failed", final_summary, iteration, start_time, error=fail_msg, verification="failed")
+                    else:
+                        # Work is not complete and no files changed yet
+                        messages.append({"role": "assistant", "content": response.content})
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                f"[CONTROLLER DIRECTIVE]: The task '{goal}' is not yet complete.\n"
+                                f"Current Status: {reason}\n"
+                                f"Do NOT state what command to run. Execute the action immediately using available tools."
+                            ),
+                        })
+                        continue
                 else:
-                    # Task completed without local file mutations (e.g. read-only, inquiry, or command execution)
-                    clean_summary = self._ensure_full_summary(goal, final_summary, [], None)
-                    self._set_state(AgentState.COMPLETED, {"summary": clean_summary})
-                    self._emit_event(EventType.AGENT_COMPLETED, {"summary": clean_summary})
-                    session_manager.save_task_state(self.task_state.to_dict())
-                    return self._build_result("completed", clean_summary, iteration, start_time)
+                    # Controller confirms task IS complete!
+                    if all_changed:
+                        # Mandatory verification check before concluding
+                        vres, prep = self.controller.verify()
+                        self.verification_results.append(vres.to_dict())
+                        if vres.passed:
+                            self.callback.on_verification(True, vres.summary, vres.details)
+                            clean_summary = self._ensure_full_summary(goal, final_summary, all_changed, vres)
+                            self._set_state(AgentState.COMPLETED, {"summary": clean_summary})
+                            self._emit_event(EventType.AGENT_COMPLETED, {"summary": clean_summary})
+                            return self._build_result("completed", clean_summary, iteration, start_time, verification="passed")
+                        else:
+                            verification_attempts += 1
+                            self.callback.on_verification(False, vres.summary, vres.details)
+                            if verification_attempts < self.max_verification_attempts:
+                                self._set_state(AgentState.FIXING, {"attempt": verification_attempts})
+                                self._emit_event(EventType.FIX_STARTED, {"attempt": verification_attempts, "details": vres.details})
+                                messages.append({
+                                    "role": "user",
+                                    "content": f"[INDEPENDENT VERIFICATION FAILED]:\n{vres.details}\nDiagnose and fix the issue.",
+                                })
+                                continue
+                            else:
+                                fail_msg = f"Independent verification failed after {verification_attempts} attempts:\n{vres.details}"
+                                self._set_state(AgentState.FAILED, {"error": fail_msg})
+                                self._emit_event(EventType.AGENT_FAILED, {"error": fail_msg})
+                                return self._build_result("failed", final_summary, iteration, start_time, error=fail_msg, verification="failed")
+                    else:
+                        # Pure documentation, explanation, or inquiry task
+                        self.controller.set_phase(ControllerPhase.DONE)
+                        clean_summary = self._ensure_full_summary(goal, final_summary, [], None)
+                        self._set_state(AgentState.COMPLETED, {"summary": clean_summary})
+                        self._emit_event(EventType.AGENT_COMPLETED, {"summary": clean_summary})
+                        return self._build_result("completed", clean_summary, iteration, start_time)
 
-            # Process tool calls
+            # CASE 2: Process proposed tool calls
             assistant_msg: Dict[str, Any] = {
                 "role": "assistant",
                 "content": response.content,
@@ -458,7 +476,7 @@ class AstraAgent:
                 "raw_content": response.raw_content,
             }
             messages.append(assistant_msg)
-            session_manager.add_message(self.session_id, "assistant", response.content, response.tool_calls)
+            self.session_manager.add_message(self.session_id, "assistant", response.content, response.tool_calls)
 
             for tc in response.tool_calls:
                 if self._is_cancelled:
@@ -473,56 +491,35 @@ class AstraAgent:
                     except Exception:
                         fn_args = {}
 
-                # Loop and Stagnation Check
-                is_stuck, loop_msg = self.loop_detector.check_loop(fn_name, fn_args)
-                if is_stuck:
-                    loop_obs = f"Observation: {loop_msg} File or command is already in the requested state. Moving to verification."
+                # 1. TOOL ACTION GATING VIA CONTROLLER
+                allowed, reason, guidance = self.controller.validate_and_prepare_action(fn_name, fn_args)
+                if not allowed:
+                    block_content = guidance or f"Controller blocked action '{fn_name}': {reason}"
                     messages.append({
                         "role": "tool",
                         "name": fn_name,
                         "tool_call_id": tc.get("id"),
-                        "content": loop_obs,
+                        "content": block_content,
                     })
-                    session_manager.add_message(self.session_id, "tool", loop_obs)
+                    self.session_manager.add_message(self.session_id, "tool", block_content)
                     continue
 
-                # Checkpoint snapshot before file mutations
-                if fn_name in ("write_file", "create_file", "edit_file", "delete_file"):
-                    fp = fn_args.get("file_path", "")
-                    if fp:
-                        self.checkpoint_manager.create_checkpoint(
-                            session_id=self.session_id,
-                            description=f"Before {fn_name} on {fp}",
-                            files=[fp],
-                        )
-
+                # 2. ACTION EXECUTION VIA CONTROLLER
                 self.callback.on_tool_call(fn_name, fn_args)
-                self._emit_event(EventType.TOOL_STARTED, {"name": fn_name, "arguments": fn_args})
-
                 if fn_name == "run_command":
                     cmd_str = fn_args.get("command", "")
                     self._emit_event(EventType.COMMAND_STARTED, {"command": cmd_str})
                     self.commands_executed.append({"command": cmd_str, "timestamp": time.time()})
-                    self.task_state.commands_executed.append(cmd_str)
 
-                # Central execution via ToolRegistry
-                tool_res: ToolResult = self.tool_registry.execute(
-                    name=fn_name,
-                    args=fn_args,
-                    approval_callback=self.approval_handler,
+                tool_res: ToolResult = self.controller.execute_action(
+                    tool_name=fn_name,
+                    tool_args=fn_args,
+                    approval_handler=self.approval_handler,
                     cancel_check=self.is_cancelled,
-                    session_id=self.session_id,
                 )
 
                 tool_out = tool_res.to_string()
-                self.loop_detector.record_action(fn_name, fn_args, success=tool_res.success, output_summary=tool_out)
                 self.callback.on_tool_result(fn_name, tool_out)
-                self._emit_event(EventType.TOOL_COMPLETED, {
-                    "name": fn_name,
-                    "success": tool_res.success,
-                    "output": tool_out[:1000],
-                    "duration_ms": tool_res.duration_ms,
-                })
 
                 if fn_name == "run_command":
                     self._emit_event(EventType.COMMAND_OUTPUT, {
@@ -530,31 +527,32 @@ class AstraAgent:
                         "output": tool_out,
                     })
 
-                # Change tracking
+                # 3. EVALUATE PROGRESS AND RECORD ACTION IN CONTROLLER
+                prep_report = self.controller.record_and_evaluate_action(
+                    tool_name=fn_name,
+                    tool_args=fn_args,
+                    tool_result=tool_res,
+                )
+
+                # 4. TRACK WORKSPACE FILE MODIFICATIONS
                 if fn_name in ("write_file", "edit_file"):
-                    fp = fn_args.get("file_path", "")
-                    if fp:
-                        self.files_modified.add(fp)
-                        self.task_state.files_modified.add(fp)
-                        session_manager.add_file_change(self.session_id, fp, "modified")
-                        self.callback.on_file_changed(fp, "modified")
-                        self._emit_event(EventType.FILE_CHANGED, {"file_path": fp, "action": "modified"})
+                    fp = fn_args.get("file_path") or fn_args.get("path")
+                    if fp and tool_res.success:
+                        s_fp = str(fp)
+                        self.files_modified.add(s_fp)
+                        self.callback.on_file_changed(s_fp, "modified")
                 elif fn_name == "create_file":
-                    fp = fn_args.get("file_path", "")
-                    if fp:
-                        self.files_created.add(fp)
-                        self.task_state.files_created.add(fp)
-                        session_manager.add_file_change(self.session_id, fp, "created")
-                        self.callback.on_file_changed(fp, "created")
-                        self._emit_event(EventType.FILE_CHANGED, {"file_path": fp, "action": "created"})
+                    fp = fn_args.get("file_path") or fn_args.get("path")
+                    if fp and tool_res.success:
+                        s_fp = str(fp)
+                        self.files_created.add(s_fp)
+                        self.callback.on_file_changed(s_fp, "created")
                 elif fn_name == "delete_file":
-                    fp = fn_args.get("file_path", "")
-                    if fp:
-                        self.files_deleted.add(fp)
-                        self.task_state.files_deleted.add(fp)
-                        session_manager.add_file_change(self.session_id, fp, "deleted")
-                        self.callback.on_file_changed(fp, "deleted")
-                        self._emit_event(EventType.FILE_CHANGED, {"file_path": fp, "action": "deleted"})
+                    fp = fn_args.get("file_path") or fn_args.get("path")
+                    if fp and tool_res.success:
+                        s_fp = str(fp)
+                        self.files_deleted.add(s_fp)
+                        self.callback.on_file_changed(s_fp, "deleted")
 
                 messages.append({
                     "role": "tool",
@@ -562,48 +560,48 @@ class AstraAgent:
                     "tool_call_id": tc.get("id"),
                     "content": tool_out,
                 })
-                session_manager.add_message(self.session_id, "tool", tool_out)
-                session_manager.save_task_state(self.task_state.to_dict())
+                self.session_manager.add_message(self.session_id, "tool", tool_out)
 
         # Max iterations reached without clean finish
         status = "max_iterations_reached"
         msg = f"Task halted: maximum iteration limit ({self.max_iterations}) reached."
+        self.controller.set_phase(ControllerPhase.BLOCKED, {"error": msg})
         self._set_state(AgentState.FAILED, {"error": msg})
         self._emit_event(EventType.AGENT_FAILED, {"error": msg})
         return self._build_result(status, final_summary, iteration, start_time, error=msg)
 
     def resume(self) -> Dict[str, Any]:
-        """Resume an interrupted task using saved TaskState and conversation history."""
-        saved = session_manager.get_task_state(self.session_id)
+        """Resume an interrupted task using saved CognitiveState, TaskState, and history."""
+        saved = self.session_manager.get_task_state(self.session_id)
         if saved:
             self.task_state = TaskState.from_dict(saved)
+            self.controller.task_state = self.task_state
             self.files_modified = set(self.task_state.files_modified)
             self.files_created = set(self.task_state.files_created)
             self.files_deleted = set(self.task_state.files_deleted)
             goal = self.task_state.goal
-            curr_step = self.task_state.plan.get_current_step()
+            curr_obj = self.controller.cognitive_state.current_objective or (
+                self.task_state.plan.get_current_step().title if self.task_state.plan.get_current_step() else "Next Step"
+            )
 
-            existing_messages = session_manager.get_messages(self.session_id)
-            if not existing_messages:
-                prompt = (
-                    f"Resuming autonomous task: '{goal}'.\n"
-                    f"Current Step: {curr_step.title if curr_step else 'Next Step'}\n"
-                    f"Files modified: {list(self.files_modified)}\n"
-                    f"Files created: {list(self.files_created)}\n"
-                    f"Continue executing the task to completion."
-                )
-                return self.run(prompt)
-
+            existing_messages = self.session_manager.get_messages(self.session_id)
             continuation_prompt = (
                 f"[SYSTEM: Task Resumed]\n"
-                f"Resuming session from state: {self.task_state.state.value if isinstance(self.task_state.state, AgentState) else self.task_state.state}.\n"
-                f"Goal: {goal}\n"
-                f"Current Step: {curr_step.title if curr_step else 'Next Step'}\n"
-                f"Files modified so far: {list(self.files_modified)}\n"
-                f"Please continue executing the plan towards full verification and completion."
+                f"Resuming autonomous task '{goal}' from phase {self.controller.phase.value}.\n"
+                f"Current Objective: {curr_obj}\n"
+                f"Known Facts: {self.controller.cognitive_state.known_facts}\n"
+                f"Files modified: {list(self.files_modified)}\n"
+                f"Files created: {list(self.files_created)}\n"
+                f"Continue executing the task to full verification and completion."
             )
+            if not existing_messages:
+                return self.run(continuation_prompt)
+
             existing_messages.append({"role": "user", "content": continuation_prompt})
             return self.run(goal, existing_messages=existing_messages)
+
+        return self.run("Resume task")
+
     def _ensure_full_summary(
         self,
         goal: str,
@@ -614,21 +612,20 @@ class AstraAgent:
         """Ensure the user receives a complete, rich, Antigravity-style final summary."""
         words = current_summary.strip().split()
         has_structure = any(s in current_summary for s in ["###", "**", "- "])
-        intent_markers = ["we need to", "we should", "next step", "let's now", "i will now", "i'll now"]
-        has_intent = any(im in current_summary.lower() for im in intent_markers)
+        is_mere_file_listing = (
+            ("The current directory contains" in current_summary or "# Folder Contents" in current_summary or "contains the following files" in current_summary)
+            and not any(term in current_summary.lower() for term in ["architecture", "pipeline", "component", "function", "handles", "implements", "logic", "responsibilit", "entry point", "framework"])
+        )
 
-        # If summary is already rich (> 40 words with markdown headings and no future intent), use it directly
-        if len(words) >= 40 and has_structure and not has_intent:
+        if len(words) >= 40 and has_structure and not is_mere_file_listing:
             return current_summary
 
-        goal_lower = goal.lower()
-        is_info_or_doc = any(kw in goal_lower for kw in [
-            "architecture", "documentation", "document", "explain", "overview",
-            "what is", "how does", "summarize", "walkthrough", "read and analyze",
-            "diagram", "components", "structure", "audit", "review"
-        ])
+        is_info_or_doc = self.controller.cognitive_state.task_type in (
+            TaskType.DOCUMENTATION,
+            TaskType.INVESTIGATION,
+        ) or not changed_files
 
-        if is_info_or_doc or not changed_files:
+        if is_info_or_doc:
             summary_prompt = [
                 {
                     "role": "system",
@@ -655,7 +652,6 @@ class AstraAgent:
                 },
             ]
         else:
-            # Code modification summary
             summary_prompt = [
                 {
                     "role": "system",
@@ -694,7 +690,7 @@ class AstraAgent:
         except Exception:
             pass
 
-        if is_info_or_doc or not changed_files:
+        if is_info_or_doc:
             return (
                 f"### 🏛️ Architecture & System Overview\n\n"
                 f"**Objective:** {goal}\n\n"
@@ -703,7 +699,6 @@ class AstraAgent:
                 f"{current_summary}"
             )
 
-        # Fallback template
         cmds_list = "\n".join(f"- `{c['command']}`" for c in self.commands_executed[-5:]) if self.commands_executed else "- Workspace inspection completed"
         files_list = "\n".join(f"- `{f}`" for f in changed_files) if changed_files else "- Workspace files inspected"
         v_status = "All automated checks and independent verifications passed." if (verification_result and verification_result.passed) else "Task execution completed successfully."
@@ -743,5 +738,5 @@ class AstraAgent:
         }
         if error:
             res["error"] = error
-        session_manager.update_session(self.session_id, summary=summary)
+        self.session_manager.update_session(self.session_id, summary=summary)
         return res

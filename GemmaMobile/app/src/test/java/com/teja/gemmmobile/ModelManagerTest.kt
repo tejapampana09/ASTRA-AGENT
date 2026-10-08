@@ -52,12 +52,12 @@ class ModelManagerTest {
     fun testModelAvailabilityWhenPresent() = runBlocking {
         val file = modelManager.defaultModelFile
         file.parentFile?.mkdirs()
-        file.writeBytes(ByteArray(2_000_000)) // 2MB dummy payload
+        java.io.RandomAccessFile(file, "rw").use { it.setLength(2_000_000_000L) }
 
         val state = modelManager.checkModelAvailability()
         assertTrue(state is ModelInstallState.Installed)
         val installed = state as ModelInstallState.Installed
         assertEquals(file.absolutePath, installed.modelFile.absolutePath)
-        assertEquals(2_000_000L, installed.sizeBytes)
+        assertEquals(2_000_000_000L, installed.sizeBytes)
     }
 }

@@ -12,10 +12,12 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.text.AnnotatedString
 import com.teja.gemmmobile.ocr.DocumentOcrHelper
 import com.teja.gemmmobile.ocr.ExtractedDocument
 import com.teja.gemmmobile.search.SearchResult
+import com.teja.gemmmobile.search.ProfileAvatarLoader
 import com.teja.gemmmobile.util.ExportHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -30,18 +32,32 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.RepeatMode
+import com.teja.gemmmobile.assistant.AssistantActivity
+import com.teja.gemmmobile.assistant.GeminiBlue
 import com.teja.gemmmobile.assistant.WhatsAppAction
 import com.teja.gemmmobile.assistant.WhatsAppStatus
 import com.teja.gemmmobile.assistant.WhatsAppActionCard
 import com.teja.gemmmobile.assistant.ContactMatch
 import com.teja.gemmmobile.assistant.CallAction
 import com.teja.gemmmobile.assistant.CallActionCard
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.imeNestedScroll
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -77,11 +93,16 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
@@ -91,6 +112,7 @@ import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
@@ -101,7 +123,12 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.ThumbUp
+import androidx.compose.material.icons.filled.ThumbDown
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.border
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -123,6 +150,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -134,6 +164,7 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import com.teja.gemmmobile.storage.ChatSession
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.Composable
@@ -157,7 +188,7 @@ import com.teja.gemmmobile.ai.EngineState
 import com.teja.gemmmobile.ai.GemmaConfig
 import com.teja.gemmmobile.model.ModelInstallState
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun ChatScreen(
     viewModel: ChatViewModel,
@@ -173,18 +204,23 @@ fun ChatScreen(
     val memories by viewModel.memories.collectAsState()
     val isWebSearchEnabled by viewModel.isWebSearchEnabled.collectAsState()
 
-    var showConfigDialog by remember { mutableStateOf(false) }
+    var showSettingsPage by remember { mutableStateOf(false) }
     var showMemoryDialog by remember { mutableStateOf(false) }
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
     var showAttachmentDialog by remember { mutableStateOf(false) }
+    var showAttachmentMenu by remember { mutableStateOf(false) }
     var isOcrProcessing by remember { mutableStateOf(false) }
     var editingMessageId by remember { mutableStateOf<String?>(null) }
     var activeUserMenuMessage by remember { mutableStateOf<ChatMessage?>(null) }
+    var showCameraOverlay by remember { mutableStateOf(false) }
+    var showAddFilesSheet by remember { mutableStateOf(false) }
 
     val haptic = LocalHapticFeedback.current
     val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val isImeVisible = WindowInsets.isImeVisible
 
     val sessions by viewModel.sessions.collectAsState()
     val currentSessionId by viewModel.currentSessionId.collectAsState()
@@ -192,6 +228,7 @@ fun ChatScreen(
     val isSpeaking by viewModel.isSpeaking.collectAsState()
     val currentlySpeakingId by viewModel.currentlySpeakingId.collectAsState()
     val attachedDocument by viewModel.attachedDocument.collectAsState()
+    val recentFiles by viewModel.recentFiles.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -325,12 +362,28 @@ fun ChatScreen(
 
 
     val listState = rememberLazyListState()
-    val showScrollToBottom by remember { derivedStateOf { listState.canScrollForward } }
+    val canScrollForward by remember { derivedStateOf { listState.canScrollForward } }
+    var isScrollToBottomVisible by remember { mutableStateOf(false) }
 
-    // Dismiss keyboard on scroll
+    // Floating Scroll Down Button Auto-Hide (ChatGPT style):
+    // Appears on scroll interaction, stays for 2 seconds, then smoothly auto-hides.
+    // Reappears on new scroll touch, and immediately hides when reaching the bottom.
+    LaunchedEffect(listState.isScrollInProgress, canScrollForward) {
+        if (!canScrollForward) {
+            isScrollToBottomVisible = false
+        } else if (listState.isScrollInProgress) {
+            isScrollToBottomVisible = true
+        } else if (isScrollToBottomVisible) {
+            kotlinx.coroutines.delay(2000L)
+            isScrollToBottomVisible = false
+        }
+    }
+
+    // When user scrolls messages, dismiss keyboard if it was open (never opens on scroll!)
     LaunchedEffect(listState.isScrollInProgress) {
-        if (listState.isScrollInProgress) {
+        if (listState.isScrollInProgress && isImeVisible) {
             keyboardController?.hide()
+            focusManager.clearFocus()
         }
     }
 
@@ -343,20 +396,32 @@ fun ChatScreen(
         prevGenerating = isGenerating
     }
 
-    // When a new message is added, scroll to bottom anchor
+    // When a new message is added, animate to bottom (use lastIndex, not size, to stay in bounds)
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
-            listState.scrollToItem(messages.size)
+            // +1 for bottom_anchor spacer item after the messages list
+            val target = messages.size // points to follow_up_chips or bottom_anchor
+            listState.animateScrollToItem(target)
         }
     }
 
-    // While generating: auto-scroll to the bottom anchor on every token or thought update if near bottom
-    LaunchedEffect(messages.lastOrNull()?.text, messages.lastOrNull()?.thoughtText) {
+    // While generating: auto-scroll token-by-token ONLY if user hasn't scrolled up manually
+    LaunchedEffect(messages.lastOrNull()?.text?.length, messages.lastOrNull()?.thoughtText?.length) {
         if (messages.isNotEmpty() && isGenerating && !listState.isScrollInProgress) {
+            val totalItems = listState.layoutInfo.totalItemsCount
             val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            if (lastVisible >= messages.size - 2) {
+            // Only auto-scroll when within 3 items of the bottom
+            if (totalItems > 0 && lastVisible >= totalItems - 3) {
                 listState.scrollToItem(messages.size)
             }
+        }
+    }
+
+    // After generation finishes: always scroll to bottom so the full response is visible
+    LaunchedEffect(isGenerating) {
+        if (!isGenerating && messages.isNotEmpty()) {
+            kotlinx.coroutines.delay(80L) // let Compose layout settle
+            listState.animateScrollToItem(messages.size)
         }
     }
 
@@ -365,12 +430,13 @@ fun ChatScreen(
         val userMsg = activeUserMenuMessage!!
         AlertDialog(
             onDismissRequest = { activeUserMenuMessage = null },
-            title = { Text("Message Options", fontWeight = FontWeight.Bold) },
+            containerColor = Color(0xFF171717),
+            title = { Text("Message Options", fontWeight = FontWeight.Bold, color = Color.White) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFFF4F4F4),
+                        color = Color(0xFF212121),
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
@@ -384,14 +450,14 @@ fun ChatScreen(
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.Edit, contentDescription = null, tint = Color(0xFF0D0D0D), modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.Edit, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(10.dp))
-                            Text("Edit message", fontWeight = FontWeight.Medium, color = Color(0xFF0D0D0D))
+                            Text("Edit message", fontWeight = FontWeight.Medium, color = Color.White)
                         }
                     }
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFFF4F4F4),
+                        color = Color(0xFF212121),
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
@@ -406,9 +472,9 @@ fun ChatScreen(
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = null, tint = Color(0xFF0D0D0D), modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.ContentCopy, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(10.dp))
-                            Text("Copy prompt", fontWeight = FontWeight.Medium, color = Color(0xFF0D0D0D))
+                            Text("Copy prompt", fontWeight = FontWeight.Medium, color = Color.White)
                         }
                     }
                 }
@@ -416,18 +482,23 @@ fun ChatScreen(
             confirmButton = {},
             dismissButton = {
                 OutlinedButton(onClick = { activeUserMenuMessage = null }) {
-                    Text("Close")
+                    Text("Close", color = Color.White)
                 }
             }
         )
     }
 
-    if (showConfigDialog) {
-        ConfigDialog(
+    if (showSettingsPage) {
+        SettingsScreen(
             currentConfig = config,
-            onDismiss = { showConfigDialog = false },
-            onApply = { viewModel.updateConfig(it) },
-            onResetDefaults = { viewModel.resetConfig() }
+            isWebSearchEnabled = isWebSearchEnabled,
+            onToggleWebSearch = { viewModel.toggleWebSearch() },
+            onApplyConfig = { newConfig ->
+                viewModel.updateConfig(newConfig)
+                showSettingsPage = false
+            },
+            onResetDefaults = { viewModel.resetConfig() },
+            onBack = { showSettingsPage = false }
         )
     }
 
@@ -518,12 +589,13 @@ fun ChatScreen(
                 modifier = Modifier
                     .width(320.dp)
                     .fillMaxHeight(),
-                drawerContainerColor = MaterialTheme.colorScheme.surface
+                drawerContainerColor = Color(0xFF171717)
             ) {
                 RecentChatsDrawer(
                     sessions = sessions,
                     currentSessionId = currentSessionId,
                     activeGeneratingSessionId = activeGeneratingSessionId,
+                    isWebSearchEnabled = isWebSearchEnabled,
                     onNewChat = {
                         viewModel.createNewChat()
                         scope.launch { drawerState.close() }
@@ -542,11 +614,23 @@ fun ChatScreen(
                         viewModel.clearAllChats()
                         scope.launch { drawerState.close() }
                     },
+                    onOpenVision = {
+                        scope.launch { drawerState.close() }
+                        imagePickerLauncher.launch("image/*")
+                    },
+                    onToggleWebSearch = {
+                        viewModel.toggleWebSearch()
+                    },
                     onOpenSettings = {
-                        showConfigDialog = true
+                        scope.launch { drawerState.close() }
+                        showSettingsPage = true
                     },
                     onOpenMemory = {
                         showMemoryDialog = true
+                    },
+                    onLaunchVoice = {
+                        scope.launch { drawerState.close() }
+                        context.startActivity(Intent(context, AssistantActivity::class.java))
                     },
                     onCloseDrawer = {
                         scope.launch { drawerState.close() }
@@ -557,66 +641,99 @@ fun ChatScreen(
     ) {
         Scaffold(
             modifier = modifier.fillMaxSize(),
+            containerColor = Color.Black,
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             topBar = {
                 TopAppBar(
                     navigationIcon = {
-                        IconButton(
-                            onClick = { scope.launch { drawerState.open() } }
+                        Surface(
+                            shape = CircleShape,
+                            color = Color(0xFF212121),
+                            modifier = Modifier
+                                .padding(start = 12.dp)
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .clickable { scope.launch { drawerState.open() } }
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Menu,
-                                contentDescription = "Open drawer",
-                                tint = Color(0xFF2E2E2E),
-                                modifier = Modifier.size(24.dp)
-                            )
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Menu,
+                                    contentDescription = "Open drawer",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
                     },
                     title = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center
+                        ) {
                             Text(
                                 text = "Gemma",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF0D0D0D)
+                                color = Color.White
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             BackendBadge(engineState = engineState)
                         }
                     },
                     actions = {
-                        IconButton(
-                            onClick = { viewModel.createNewChat() }
+                        // Circular dark new chat button (ChatGPT style)
+                        Surface(
+                            shape = CircleShape,
+                            color = Color(0xFF212121),
+                            modifier = Modifier
+                                .padding(end = 12.dp)
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .clickable { viewModel.createNewChat() }
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Edit,
-                                contentDescription = "New chat",
-                                tint = Color(0xFF2E2E2E),
-                                modifier = Modifier.size(20.dp)
-                            )
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = "New chat",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(19.dp)
+                                )
+                            }
                         }
 
                         if (messages.isNotEmpty()) {
                             var showMenu by remember { mutableStateOf(false) }
-                            Box {
-                                IconButton(onClick = { showMenu = true }) {
-                                    Icon(
-                                        imageVector = Icons.Default.MoreVert,
-                                        contentDescription = "Chat options",
-                                        tint = Color(0xFF2E2E2E),
-                                        modifier = Modifier.size(22.dp)
-                                    )
+                            Box(modifier = Modifier.padding(end = 8.dp)) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = Color(0xFF212121),
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                        .clickable { showMenu = true }
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.MoreVert,
+                                            contentDescription = "Chat options",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
                                 }
                                 DropdownMenu(
                                     expanded = showMenu,
-                                    onDismissRequest = { showMenu = false }
+                                    onDismissRequest = { showMenu = false },
+                                    modifier = Modifier.background(Color(0xFF262626))
                                 ) {
                                     DropdownMenuItem(
-                                        text = { Text("Share conversation") },
+                                        text = { Text("Share conversation", color = Color.White) },
                                         leadingIcon = {
                                             Icon(
                                                 imageVector = Icons.Default.Share,
                                                 contentDescription = null,
+                                                tint = Color.White,
                                                 modifier = Modifier.size(18.dp)
                                             )
                                         },
@@ -628,11 +745,12 @@ fun ChatScreen(
                                         }
                                     )
                                     DropdownMenuItem(
-                                        text = { Text("Rename") },
+                                        text = { Text("Rename", color = Color.White) },
                                         leadingIcon = {
                                             Icon(
                                                 imageVector = Icons.Default.DriveFileRenameOutline,
                                                 contentDescription = null,
+                                                tint = Color.White,
                                                 modifier = Modifier.size(18.dp)
                                             )
                                         },
@@ -662,7 +780,7 @@ fun ChatScreen(
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = Color.White
+                        containerColor = Color.Black
                     )
                 )
         }
@@ -748,6 +866,63 @@ fun ChatScreen(
                     }
                 }
 
+                engineState is EngineState.Error -> {
+                    val errorState = engineState as EngineState.Error
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Card(
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text("⚠️", fontSize = 44.sp)
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = "Model Loading Failed",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = errorState.message,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(20.dp))
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Button(
+                                        onClick = { viewModel.initializeEngine() }
+                                    ) {
+                                        Text("Retry")
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            viewModel.deleteModel()
+                                            viewModel.checkModel()
+                                        }
+                                    ) {
+                                        Text("Delete & Re-Download")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 else -> {
                     // Chat Interface
                     Box(modifier = Modifier.weight(1f)) {
@@ -756,21 +931,25 @@ fun ChatScreen(
                                 onPromptSelected = { prompt ->
                                     viewModel.onInputTextChanged(prompt)
                                     viewModel.sendMessage()
+                                },
+                                onExamineSelected = {
+                                    imagePickerLauncher.launch("image/*")
                                 }
                             )
                         } else {
                             LazyColumn(
                                 state = listState,
-                                modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                                modifier = Modifier
+                                    .fillMaxSize(),
+                                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 28.dp),
                                 verticalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
                                 items(messages, key = { it.id }) { message ->
                                     MessageBubble(
                                         message = message,
                                         isSpeaking = isSpeaking && currentlySpeakingId == message.id,
-                                        onSpeak = { viewModel.toggleSpeak(message.id, message.text) },
-                                        onShare = { ExportHelper.shareMessage(context, message.text) },
+                                        onSpeak = { viewModel.toggleSpeak(message.id, if (message.text.isNotBlank()) message.text else message.thoughtText) },
+                                        onShare = { ExportHelper.shareMessage(context, if (message.text.isNotBlank()) message.text else message.thoughtText) },
                                         onRegenerate = { viewModel.regenerateLastResponse() },
                                         onLongPressUserMessage = { activeUserMenuMessage = it },
                                         onConfirmWhatsApp = { action -> viewModel.confirmAndSendWhatsAppAction(action) },
@@ -781,38 +960,44 @@ fun ChatScreen(
                                     )
                                 }
 
-                                if (!isGenerating && messages.isNotEmpty() && messages.last().role == MessageRole.ASSISTANT && messages.last().text.isNotBlank()) {
+                                val lastMsg = messages.lastOrNull()
+                                val lastContent = (if (lastMsg?.text?.isNotBlank() == true) lastMsg.text else lastMsg?.thoughtText.orEmpty()).trim()
+                                if (!isGenerating && lastMsg?.role == MessageRole.ASSISTANT && lastContent.isNotBlank()) {
                                     item(key = "follow_up_chips") {
-                                        val followUps = listOf(
-                                            "Explain in simpler terms",
-                                            "Give real-world examples",
-                                            "Summarize key takeaways"
-                                        )
-                                        LazyRow(
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(start = 30.dp, top = 4.dp, bottom = 4.dp)
-                                        ) {
-                                            items(followUps) { chip ->
-                                                Surface(
-                                                    shape = RoundedCornerShape(16.dp),
-                                                    color = Color(0xFFF7F7F8),
-                                                    border = BorderStroke(1.dp, Color(0xFFE5E5E5)),
-                                                    modifier = Modifier
-                                                        .clip(RoundedCornerShape(16.dp))
-                                                        .clickable {
+                                        val followUps = remember(lastMsg.id, lastContent) {
+                                            extractFollowUpSuggestions(lastContent)
+                                        }
+                                        if (followUps.isNotEmpty()) {
+                                            LazyRow(
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(vertical = 4.dp)
+                                            ) {
+                                                items(followUps) { chip ->
+                                                    ChatGptSurfaceButton(
+                                                        onClick = {
                                                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                            viewModel.onInputTextChanged(chip)
+                                                            val promptToSend = if (chip.equals("Continue generating", ignoreCase = true)) {
+                                                                "Continue from where you left off"
+                                                            } else {
+                                                                chip
+                                                            }
+                                                            viewModel.onInputTextChanged(promptToSend)
                                                             viewModel.sendMessage()
-                                                        }
-                                                ) {
-                                                    Text(
-                                                        text = chip,
-                                                        style = MaterialTheme.typography.labelMedium,
-                                                        color = Color(0xFF333333),
-                                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                                                    )
+                                                        },
+                                                        shape = RoundedCornerShape(16.dp),
+                                                        color = Color(0xFF212121),
+                                                        border = BorderStroke(1.dp, Color(0xFF2E2E2E)),
+                                                        shadowElevation = 1.dp
+                                                    ) {
+                                                        Text(
+                                                            text = chip,
+                                                            style = MaterialTheme.typography.labelMedium,
+                                                            color = Color(0xFFECECEC),
+                                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
@@ -820,25 +1005,57 @@ fun ChatScreen(
                                 }
 
                                 item(key = "bottom_anchor") {
-                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Spacer(modifier = Modifier.height(16.dp))
                                 }
                             }
+
+                            // Top Vignette (ultra-subtle gentle transparent feathering under top app bar)
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(8.dp)
+                                    .align(Alignment.TopCenter)
+                                    .background(
+                                        Brush.verticalGradient(
+                                            colors = listOf(
+                                                Color.Black.copy(alpha = 0.08f),
+                                                Color.Transparent
+                                            )
+                                        )
+                                    )
+                            )
+
+                            // Bottom Vignette - Chat Box Paina (ultra-subtle gentle transparent feathering above input dock)
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(10.dp)
+                                    .align(Alignment.BottomCenter)
+                                    .background(
+                                        Brush.verticalGradient(
+                                            colors = listOf(
+                                                Color.Transparent,
+                                                Color.Black.copy(alpha = 0.08f)
+                                            )
+                                        )
+                                    )
+                            )
                         }
 
-                        // Floating Scroll-to-Bottom Button (ChatGPT style)
+                        // Floating Scroll-to-Bottom Button (ChatGPT style: auto-hides after 2s inactivity)
                         androidx.compose.animation.AnimatedVisibility(
-                            visible = showScrollToBottom,
-                            enter = fadeIn() + scaleIn(),
-                            exit = fadeOut() + scaleOut(),
+                            visible = isScrollToBottomVisible && canScrollForward,
+                            enter = fadeIn(tween(180)) + scaleIn(tween(180), initialScale = 0.85f),
+                            exit = fadeOut(tween(220)) + scaleOut(tween(220), targetScale = 0.85f),
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
                                 .padding(bottom = 12.dp)
                         ) {
                             Surface(
                                 shape = CircleShape,
-                                color = Color.White,
+                                color = Color(0xFF212121),
                                 shadowElevation = 4.dp,
-                                border = BorderStroke(1.dp, Color(0xFFE5E5E5)),
+                                border = BorderStroke(1.dp, Color(0xFF383838)),
                                 modifier = Modifier
                                     .size(36.dp)
                                     .clip(CircleShape)
@@ -853,7 +1070,7 @@ fun ChatScreen(
                                     Icon(
                                         imageVector = Icons.Default.KeyboardArrowDown,
                                         contentDescription = "Scroll to bottom",
-                                        tint = Color(0xFF4A4A4A),
+                                        tint = Color.White,
                                         modifier = Modifier.size(22.dp)
                                     )
                                 }
@@ -861,10 +1078,16 @@ fun ChatScreen(
                         }
                     }
 
-                    // Attached Document / Image Preview (ChatGPT Floating Thumbnail Style)
-                    if (attachedDocument != null) {
-                        val doc = attachedDocument!!
-                        Row(
+                    // Chat Box Bottom Dock
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            // Attached Document / Image Preview (ChatGPT Floating Thumbnail Style)
+                            if (attachedDocument != null) {
+                                val doc = attachedDocument!!
+                                Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 4.dp),
@@ -882,15 +1105,16 @@ fun ChatScreen(
                                             .size(54.dp)
                                             .align(Alignment.BottomStart)
                                             .clip(RoundedCornerShape(12.dp))
-                                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                                            .background(Color(0xFF212121)),
                                         contentScale = ContentScale.Crop
                                     )
                                     // Circular Close Button floating at top right of image
                                     Surface(
                                         shape = CircleShape,
-                                        color = Color.Black.copy(alpha = 0.75f),
+                                        color = Color(0xFF212121),
+                                        border = BorderStroke(1.dp, Color(0xFF383838)),
                                         modifier = Modifier
-                                            .size(18.dp)
+                                            .size(20.dp)
                                             .align(Alignment.TopEnd)
                                             .clickable { viewModel.clearAttachedDocument() }
                                     ) {
@@ -907,8 +1131,8 @@ fun ChatScreen(
                             } else {
                                 Surface(
                                     shape = RoundedCornerShape(14.dp),
-                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                                    color = Color(0xFF212121),
+                                    border = BorderStroke(1.dp, Color(0xFF2E2E2E))
                                 ) {
                                     Row(
                                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -918,14 +1142,14 @@ fun ChatScreen(
                                         Icon(
                                             imageVector = Icons.Default.Description,
                                             contentDescription = "File",
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            tint = Color.White,
                                             modifier = Modifier.size(16.dp)
                                         )
                                         Text(
                                             text = doc.fileName,
                                             style = MaterialTheme.typography.labelMedium,
                                             fontWeight = FontWeight.Medium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            color = Color.White,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                             modifier = Modifier.widthIn(max = 200.dp)
@@ -945,49 +1169,6 @@ fun ChatScreen(
                         }
                     }
 
-                    // Active Web Search Chip (ChatGPT Style)
-                    if (isWebSearchEnabled) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 16.dp, end = 16.dp, bottom = 4.dp)
-                        ) {
-                            Surface(
-                                shape = RoundedCornerShape(16.dp),
-                                color = Color(0xFF10A37F).copy(alpha = 0.12f),
-                                border = BorderStroke(1.dp, Color(0xFF10A37F).copy(alpha = 0.25f))
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Language,
-                                        contentDescription = null,
-                                        tint = Color(0xFF10A37F),
-                                        modifier = Modifier.size(13.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(5.dp))
-                                    Text(
-                                        text = "Search the web",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Medium,
-                                        color = Color(0xFF10A37F)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Remove search",
-                                        tint = Color(0xFF10A37F),
-                                        modifier = Modifier
-                                            .size(13.dp)
-                                            .clip(CircleShape)
-                                            .clickable { viewModel.toggleWebSearch() }
-                                    )
-                                }
-                            }
-                        }
-                    }
 
                     // Editing message pill (ChatGPT style)
                     if (editingMessageId != null) {
@@ -1049,6 +1230,7 @@ fun ChatScreen(
                                 viewModel.onInputTextChanged("")
                             } else {
                                 viewModel.sendMessage()
+                                viewModel.onInputTextChanged("")
                             }
                         },
                         onStop = {
@@ -1070,9 +1252,13 @@ fun ChatScreen(
                             }
                             voiceLauncher.launch(intent)
                         },
+                        onVoiceAssistant = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            context.startActivity(Intent(context, AssistantActivity::class.java))
+                        },
                         onAttach = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            showAttachmentDialog = true
+                            showAttachmentMenu = !showAttachmentMenu
                         },
                         hasAttachment = attachedDocument != null
                     )
@@ -1080,7 +1266,125 @@ fun ChatScreen(
             }
         }
     }
+        }
+    }
 }
+
+    // Floating Attachment Popup Menu (matching ChatGPT AMOLED pure dark screenshot)
+    if (showAttachmentMenu) {
+        // Scrim using pointerInput so it NEVER steals focus from the text field
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectTapGestures {
+                        showAttachmentMenu = false
+                    }
+                }
+        )
+    }
+
+    AnimatedVisibility(
+        visible = showAttachmentMenu,
+        enter = fadeIn(tween(140)) + scaleIn(tween(140), initialScale = 0.92f),
+        exit = fadeOut(tween(100)) + scaleOut(tween(100), targetScale = 0.92f)
+    ) {
+        // Floating Dark Card anchored directly above the + button with imePadding so it stays above keyboard!
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .imePadding()
+                .navigationBarsPadding()
+                .padding(start = 20.dp, bottom = 72.dp),
+            contentAlignment = Alignment.BottomStart
+        ) {
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = Color(0xFF262626),
+                border = BorderStroke(1.dp, Color(0xFF383838)),
+                shadowElevation = 10.dp,
+                modifier = Modifier
+                    .width(260.dp)
+                    .clip(RoundedCornerShape(22.dp))
+            ) {
+                Column(
+                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    FloatingMenuItem(
+                        icon = Icons.Default.CameraAlt,
+                        label = "Camera",
+                        onClick = {
+                            showAttachmentMenu = false
+                            showCameraOverlay = true
+                        }
+                    )
+                    FloatingMenuItem(
+                        icon = Icons.Default.Image,
+                        label = "Photos",
+                        onClick = {
+                            showAttachmentMenu = false
+                            imagePickerLauncher.launch("image/*")
+                        }
+                    )
+                    FloatingMenuItem(
+                        icon = Icons.Default.AttachFile,
+                        label = "Files",
+                        onClick = {
+                            showAttachmentMenu = false
+                            showAddFilesSheet = true
+                        }
+                    )
+                    HorizontalDivider(
+                        color = Color(0xFF383838),
+                        thickness = 0.5.dp,
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
+                    FloatingMenuItemWithToggle(
+                        icon = Icons.Default.Language,
+                        label = "Web search",
+                        isChecked = isWebSearchEnabled,
+                        onToggle = {
+                            viewModel.toggleWebSearch()
+                        }
+                    )
+                    FloatingMenuItemWithToggle(
+                        icon = Icons.Default.Psychology,
+                        label = "Think harder",
+                        isChecked = config.enableThinking,
+                        onToggle = {
+                            viewModel.updateConfig(config.copy(enableThinking = !config.enableThinking))
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    // In-Chat Camera Viewfinder Overlay (matching media_1791398963414.jpg)
+    InChatCameraOverlay(
+        visible = showCameraOverlay,
+        onDismiss = { showCameraOverlay = false },
+        onPhotoCaptured = { doc ->
+            showCameraOverlay = false
+            viewModel.attachDocument(doc)
+            Toast.makeText(context, "📷 Photo attached", Toast.LENGTH_SHORT).show()
+        }
+    )
+
+    // AMOLED Dark "Add files" Modal Page (matching media_1791398949494.jpg)
+    AddFilesSheet(
+        visible = showAddFilesSheet,
+        onDismiss = { showAddFilesSheet = false },
+        onUploadFiles = {
+            docPickerLauncher.launch(arrayOf("*/*"))
+        },
+        onFileSelected = { doc ->
+            viewModel.attachDocument(doc)
+            Toast.makeText(context, "Attached ${doc.fileName}", Toast.LENGTH_SHORT).show()
+        },
+        recentFiles = recentFiles
+    )
 }
 }
 
@@ -1089,13 +1393,17 @@ fun RecentChatsDrawer(
     sessions: List<ChatSession>,
     currentSessionId: String,
     activeGeneratingSessionId: String? = null,
+    isWebSearchEnabled: Boolean = false,
     onNewChat: () -> Unit,
     onSelectSession: (String) -> Unit,
     onDeleteSession: (String) -> Unit,
     onShareSession: (ChatSession) -> Unit,
     onClearAll: () -> Unit,
+    onOpenVision: () -> Unit = {},
+    onToggleWebSearch: () -> Unit = {},
     onOpenSettings: () -> Unit,
     onOpenMemory: () -> Unit,
+    onLaunchVoice: () -> Unit = {},
     onCloseDrawer: () -> Unit
 ) {
     var showClearAllConfirm by remember { mutableStateOf(false) }
@@ -1103,8 +1411,9 @@ fun RecentChatsDrawer(
     if (showClearAllConfirm) {
         AlertDialog(
             onDismissRequest = { showClearAllConfirm = false },
-            title = { Text("Clear All Chats?", fontWeight = FontWeight.SemiBold) },
-            text = { Text("Are you sure you want to delete all saved conversations? This cannot be undone.") },
+            containerColor = Color(0xFF212121),
+            title = { Text("Clear All Chats?", fontWeight = FontWeight.SemiBold, color = Color.White) },
+            text = { Text("Are you sure you want to delete all saved conversations? This cannot be undone.", color = Color(0xFFB0B0B0)) },
             confirmButton = {
                 Button(
                     onClick = {
@@ -1118,7 +1427,7 @@ fun RecentChatsDrawer(
             },
             dismissButton = {
                 OutlinedButton(onClick = { showClearAllConfirm = false }) {
-                    Text("Cancel")
+                    Text("Cancel", color = Color.White)
                 }
             }
         )
@@ -1129,7 +1438,7 @@ fun RecentChatsDrawer(
             .fillMaxSize()
             .statusBarsPadding()
             .navigationBarsPadding()
-            .background(Color.White)
+            .background(Color(0xFF171717))
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         // Top Header
@@ -1142,13 +1451,13 @@ fun RecentChatsDrawer(
                 text = "Gemma",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFF0D0D0D)
+                color = Color.White
             )
             IconButton(onClick = onCloseDrawer, modifier = Modifier.size(32.dp)) {
                 Icon(
                     imageVector = Icons.Default.Close,
                     contentDescription = "Close drawer",
-                    tint = Color(0xFF6B6B6B),
+                    tint = Color(0xFFAAAAAA),
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -1156,40 +1465,7 @@ fun RecentChatsDrawer(
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // + New Chat capsule button (ChatGPT style)
-        Surface(
-            shape = RoundedCornerShape(22.dp),
-            color = Color(0xFFF4F4F4),
-            border = BorderStroke(1.dp, Color(0xFFE5E5E5)),
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(22.dp))
-                .clickable { onNewChat() }
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 11.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Edit,
-                    contentDescription = null,
-                    tint = Color(0xFF0D0D0D),
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Text(
-                    text = "New chat",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFF0D0D0D)
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
+        // Search chats (ChatGPT capsule)
         var searchQuery by remember { mutableStateOf("") }
         val filteredSessions = remember(sessions, searchQuery) {
             if (searchQuery.isBlank()) sessions
@@ -1199,10 +1475,10 @@ fun RecentChatsDrawer(
             }
         }
 
-        // Search chats (ChatGPT style)
         Surface(
             shape = RoundedCornerShape(12.dp),
-            color = Color(0xFFF4F4F4),
+            color = Color(0xFF212121),
+            border = BorderStroke(1.dp, Color(0xFF2E2E2E)),
             modifier = Modifier
                 .fillMaxWidth()
                 .height(40.dp)
@@ -1224,8 +1500,8 @@ fun RecentChatsDrawer(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
                     singleLine = true,
-                    textStyle = TextStyle(fontSize = 14.sp, color = Color(0xFF0D0D0D)),
-                    cursorBrush = SolidColor(Color(0xFF0D0D0D)),
+                    textStyle = TextStyle(fontSize = 14.sp, color = Color.White),
+                    cursorBrush = SolidColor(Color.White),
                     modifier = Modifier.weight(1f),
                     decorationBox = { innerTextField ->
                         if (searchQuery.isEmpty()) {
@@ -1256,7 +1532,39 @@ fun RecentChatsDrawer(
             }
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Quick feature shortcuts (matching Screenshot 3)
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            DrawerShortcutRow(
+                icon = Icons.Default.CameraAlt,
+                label = "Vision & OCR",
+                onClick = onOpenVision
+            )
+            DrawerShortcutRow(
+                icon = Icons.Default.Psychology,
+                label = "Memories",
+                onClick = { onOpenMemory(); onCloseDrawer() }
+            )
+            DrawerShortcutRow(
+                icon = Icons.Default.Language,
+                label = if (isWebSearchEnabled) "Web Search (ON)" else "Web Search",
+                tint = if (isWebSearchEnabled) Color(0xFF10A37F) else Color(0xFFB0B0B0),
+                onClick = onToggleWebSearch
+            )
+            DrawerShortcutRow(
+                icon = Icons.Default.Settings,
+                label = "Settings",
+                onClick = { onOpenSettings(); onCloseDrawer() }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+        HorizontalDivider(color = Color(0xFF282828), thickness = 0.5.dp)
+        Spacer(modifier = Modifier.height(8.dp))
 
         Text(
             text = "Recent chats",
@@ -1291,7 +1599,7 @@ fun RecentChatsDrawer(
                     val isSelected = session.id == currentSessionId
                     Surface(
                         shape = RoundedCornerShape(10.dp),
-                        color = if (isSelected) Color(0xFFF0F0F0) else Color.Transparent,
+                        color = if (isSelected) Color(0xFF262626) else Color.Transparent,
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
@@ -1312,7 +1620,7 @@ fun RecentChatsDrawer(
                                     text = session.title,
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                    color = Color(0xFF0D0D0D),
+                                    color = Color.White,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f, fill = false)
@@ -1358,95 +1666,80 @@ fun RecentChatsDrawer(
         }
 
         Spacer(modifier = Modifier.height(10.dp))
-        HorizontalDivider(color = Color(0xFFE5E5E5), thickness = 0.5.dp)
-        Spacer(modifier = Modifier.height(6.dp))
+        HorizontalDivider(color = Color(0xFF282828), thickness = 0.5.dp)
+        Spacer(modifier = Modifier.height(10.dp))
 
-        // Bottom section: Memory, Settings & Clear (True ChatGPT layout)
-        Column(
+        // Bottom pinned bar (matching Screenshot 3: Coral Pink Chat button + avatar "TP" + Voice button)
+        Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            // Memory item
+            // Coral Pink "+ Chat" pill button
             Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = Color.Transparent,
+                shape = RoundedCornerShape(22.dp),
+                color = Color(0xFFF43F5E),
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable { onOpenMemory(); onCloseDrawer() }
+                    .clip(RoundedCornerShape(22.dp))
+                    .clickable { onNewChat() }
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Psychology,
-                        contentDescription = null,
-                        tint = Color(0xFF4A4A4A),
-                        modifier = Modifier.size(18.dp)
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "New chat",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
                     )
-                    Spacer(modifier = Modifier.width(12.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Memory",
+                        text = "Chat",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = Color(0xFF0D0D0D)
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
                     )
                 }
             }
 
-            // Settings item
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = Color.Transparent,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable { onOpenSettings(); onCloseDrawer() }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Settings,
-                        contentDescription = null,
-                        tint = Color(0xFF4A4A4A),
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = "Settings",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color(0xFF0D0D0D)
-                    )
-                }
-            }
-
-            // Clear all chats button
-            if (sessions.isNotEmpty()) {
+                // User Avatar "TP" (Teja Pampana)
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = Color.Transparent,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { showClearAllConfirm = true }
+                    shape = CircleShape,
+                    color = Color(0xFF2E2E2E),
+                    border = BorderStroke(1.dp, Color(0xFF383838)),
+                    modifier = Modifier.size(36.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.DeleteSweep,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
+                    Box(contentAlignment = Alignment.Center) {
                         Text(
-                            text = "Clear all chats",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.error
+                            text = "TP",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                }
+
+                // Voice assistant button
+                Surface(
+                    shape = CircleShape,
+                    color = Color(0xFF212121),
+                    border = BorderStroke(1.dp, Color(0xFF2E2E2E)),
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .clickable { onLaunchVoice() }
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.GraphicEq,
+                            contentDescription = "Voice assistant",
+                            tint = Color(0xFFF43F5E),
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
@@ -1456,91 +1749,149 @@ fun RecentChatsDrawer(
 }
 
 @Composable
-fun EmptyChatHero(
-    onPromptSelected: (String) -> Unit
+private fun DrawerShortcutRow(
+    icon: ImageVector,
+    label: String,
+    tint: Color = Color(0xFFB0B0B0),
+    onClick: () -> Unit
 ) {
-    val promptChips = listOf(
-        Triple("✍️", "Draft a leave email", "draft a professional leave application email"),
-        Triple("💡", "Explain quantum computing", "explain quantum computing in simple terms"),
-        Triple("🌐", "SRM University AP portal", "now search SRM University AP student portal"),
-        Triple("🏏", "Virat Kohli records", "tell me about Virat Kohli cricket records")
-    )
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = Color.Transparent,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = tint,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = if (tint != Color(0xFFB0B0B0)) tint else Color.White
+            )
+        }
+    }
+}
 
+@Composable
+fun EmptyChatHero(
+    onPromptSelected: (String) -> Unit,
+    onExamineSelected: () -> Unit = {}
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+            .padding(horizontal = 20.dp, vertical = 24.dp),
+        verticalArrangement = Arrangement.SpaceBetween
     ) {
-        // Clean ChatGPT-style icon
-        Surface(
-            shape = CircleShape,
-            color = Color(0xFFF4F4F4),
-            modifier = Modifier.size(56.dp)
+        // Centered subtle greeting / logo
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text(text = "✦", fontSize = 24.sp, color = Color(0xFF10A37F))
+            Surface(
+                shape = CircleShape,
+                color = Color(0xFF212121),
+                border = BorderStroke(1.dp, Color(0xFF2E2E2E)),
+                modifier = Modifier.size(60.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(text = "✦", fontSize = 28.sp, color = Color(0xFF10A37F))
+                }
             }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Text(
+                text = "What can I help with?",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = "On-device • 100% Private • Multimodal",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF8E8E93)
+            )
         }
 
-        Spacer(modifier = Modifier.height(18.dp))
-
-        Text(
-            text = "What can I help with?",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.SemiBold,
-            color = Color(0xFF0D0D0D)
-        )
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        Text(
-            text = "On-device • 100% Private • Multimodal",
-            style = MaterialTheme.typography.bodySmall,
-            color = Color(0xFF8E8E93)
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // 2x2 grid of clean suggestion chips
+        // Minimal ChatGPT-style bottom suggestion pills (matching Screenshot 1 & 2)
         Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            promptChips.chunked(2).forEach { row ->
+            // Suggestion 1: Examine image or document
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = Color(0xFF212121),
+                border = BorderStroke(1.dp, Color(0xFF2E2E2E)),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .clickable { onExamineSelected() }
+            ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    row.forEach { (emoji, label, prompt) ->
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = Color(0xFFF9F9F9),
-                            border = BorderStroke(1.dp, Color(0xFFE5E5E5)),
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable { onPromptSelected(prompt) }
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 10.dp)
-                            ) {
-                                Text(emoji, fontSize = 16.sp)
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = label,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Normal,
-                                    color = Color(0xFF343434),
-                                    maxLines = 2
-                                )
-                            }
-                        }
-                    }
-                    if (row.size == 1) Spacer(modifier = Modifier.weight(1f))
+                    Icon(
+                        imageVector = Icons.Default.Image,
+                        contentDescription = null,
+                        tint = Color(0xFF8E8E93),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Examine image or document",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White
+                    )
+                }
+            }
+
+            // Suggestion 2: Write, explain or code
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = Color(0xFF212121),
+                border = BorderStroke(1.dp, Color(0xFF2E2E2E)),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .clickable { onPromptSelected("Explain how quantum computing works with a simple analogy") }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = null,
+                        tint = Color(0xFF8E8E93),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Write, explain or code",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White
+                    )
                 }
             }
         }
@@ -1552,33 +1903,39 @@ fun BackendBadge(engineState: EngineState) {
     val (label, bg, fg) = when (engineState) {
         is EngineState.Ready -> {
             when (engineState.backend) {
-                BackendType.GPU -> Triple("GPU available", Color(0xFFE8F5E9), Color(0xFF2E7D32))
-                BackendType.CPU_FALLBACK -> Triple("CPU fallback", Color(0xFFFFF3E0), Color(0xFFE65100))
-                BackendType.CPU -> Triple("CPU", Color(0xFFF5F5F5), Color(0xFF616161))
+                BackendType.GPU -> Triple("GPU", Color(0xFF1E3A2F), Color(0xFF10A37F))
+                BackendType.CPU_FALLBACK -> Triple("CPU fallback", Color(0xFF3E2D1A), Color(0xFFFFB74D))
+                BackendType.CPU -> Triple("CPU", Color(0xFF262629), Color(0xFFA0A0A5))
             }
         }
         is EngineState.Generating -> {
-            Triple("Generating...", Color(0xFFE3F2FD), Color(0xFF1565C0))
+            Triple("Generating...", Color(0xFF1A2A3A), Color(0xFF58A6FF))
         }
         is EngineState.Loading -> {
-            Triple("Loading...", Color(0xFFEDE7F6), Color(0xFF512DA8))
+            Triple("Loading...", Color(0xFF2A1F3D), Color(0xFFB39DDB))
         }
         else -> {
-            Triple("Offline", Color(0xFFEEEEEE), Color(0xFF9E9E9E))
+            Triple("Offline", Color(0xFF262629), Color(0xFF8E8E93))
         }
     }
 
-    Surface(
-        color = bg,
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Text(
-            text = label,
-            color = fg,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-        )
+    AnimatedContent(
+        targetState = Triple(label, bg, fg),
+        transitionSpec = { fadeIn(tween(200)).togetherWith(fadeOut(tween(180))) },
+        label = "backendBadgeTransition"
+    ) { (curLabel, curBg, curFg) ->
+        Surface(
+            color = curBg,
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Text(
+                text = curLabel,
+                color = curFg,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+            )
+        }
     }
 }
 
@@ -1609,7 +1966,7 @@ fun MessageBubble(
     }
 
     if (isUser) {
-        // ── USER bubble: gray pill, right-aligned, no avatar ──────────────────
+        // ── USER bubble: dark charcoal pill, right-aligned, no avatar ──────────────────
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1629,25 +1986,17 @@ fun MessageBubble(
                 Icon(
                     imageVector = Icons.Default.Edit,
                     contentDescription = "Edit prompt",
-                    tint = Color(0xFF9E9E9E),
+                    tint = Color(0xFFAAAAAA),
                     modifier = Modifier.size(15.dp)
                 )
             }
 
             Surface(
-                shape = RoundedCornerShape(
-                    topStart = 18.dp, topEnd = 18.dp,
-                    bottomStart = 18.dp, bottomEnd = 4.dp
-                ),
-                color = Color(0xFFF4F4F4),
+                shape = RoundedCornerShape(20.dp),
+                color = Color(0xFF381024), // ChatGPT dark burgundy/plum bubble (matching media_1791402016025.jpg)
                 modifier = Modifier
-                    .widthIn(max = 290.dp)
-                    .clip(
-                        RoundedCornerShape(
-                            topStart = 18.dp, topEnd = 18.dp,
-                            bottomStart = 18.dp, bottomEnd = 4.dp
-                        )
-                    )
+                    .widthIn(max = 295.dp)
+                    .clip(RoundedCornerShape(20.dp))
                     .combinedClickable(
                         onClick = {
                             onLongPressUserMessage(message)
@@ -1682,7 +2031,7 @@ fun MessageBubble(
                         Text(
                             text = message.text,
                             style = MaterialTheme.typography.bodyMedium.copy(
-                                color = Color(0xFF0D0D0D),
+                                color = Color.White,
                                 lineHeight = 22.sp
                             )
                         )
@@ -1691,160 +2040,253 @@ fun MessageBubble(
             }
         }
     } else {
-        // ── ASSISTANT: no bubble, white background, small avatar + bold name ──
+        // ── ASSISTANT: clean ChatGPT style (no avatar header, pure text aligned to left) ──
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 6.dp),
+                .padding(vertical = 4.dp),
             horizontalAlignment = Alignment.Start
         ) {
-            // Avatar row
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(bottom = 4.dp)
-            ) {
-                // Small circular avatar
-                Surface(
-                    shape = CircleShape,
-                    color = Color(0xFF10A37F),
-                    modifier = Modifier.size(22.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text("✦", fontSize = 10.sp, color = Color.White)
-                    }
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Gemma",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFF0D0D0D)
+            // WhatsApp Direct Action Card
+            if (message.whatsAppAction != null) {
+                WhatsAppActionCard(
+                    action = message.whatsAppAction,
+                    onConfirmSend = onConfirmWhatsApp,
+                    onCancel = onCancelWhatsApp,
+                    onSelectCandidate = onSelectWhatsAppCandidate,
+                    onSendAgain = onWhatsAppSendAgain,
+                    onOpenA11ySettings = onOpenA11ySettings
                 )
+                Spacer(modifier = Modifier.height(8.dp))
             }
 
-            // Message body — indented under avatar
-            Column(modifier = Modifier.padding(start = 30.dp)) {
+            // Phone Call Action Card
+            if (message.callAction != null) {
+                CallActionCard(
+                    action = message.callAction
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
-                // WhatsApp Direct Action Card
-                if (message.whatsAppAction != null) {
-                    WhatsAppActionCard(
-                        action = message.whatsAppAction,
-                        onConfirmSend = onConfirmWhatsApp,
-                        onCancel = onCancelWhatsApp,
-                        onSelectCandidate = onSelectWhatsAppCandidate,
-                        onSendAgain = onWhatsAppSendAgain,
-                        onOpenA11ySettings = onOpenA11ySettings
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
+            val effectiveText = when {
+                message.text.isNotEmpty() -> message.text
+                !message.isStreaming && message.thoughtText.isNotEmpty() -> message.thoughtText
+                else -> ""
+            }
+
+            // Thinking card: shown while streaming thoughts OR if thoughtText exists alongside body text
+            if (message.thoughtText.isNotEmpty() && (message.text.isNotEmpty() || message.isStreaming)) {
+                ThinkingCard(
+                    thoughtText = message.thoughtText,
+                    isThinking = message.isThinking,
+                    isStreaming = message.isStreaming
+                )
+                if (effectiveText.isNotEmpty() && message.text.isNotEmpty()) Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            // Autonomous tool execution indicator
+            if (message.isExecutingTool) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = Color(0xFF1C1C20),
+                    border = BorderStroke(1.dp, Color(0xFF2E2E36)),
+                    modifier = Modifier.padding(vertical = 4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            color = Color(0xFF10A37F),
+                            strokeWidth = 1.5.dp
+                        )
+                        Text(
+                            text = message.toolExecutionStatus ?: "Executing tool...",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFFE5E5E5),
+                            fontSize = 11.5.sp
+                        )
+                    }
                 }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
-                // Phone Call Action Card
-                if (message.callAction != null) {
-                    CallActionCard(
-                        action = message.callAction
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
+            // ChatGPT "Searched N sites" collapsible accordion (matching media_1791402016025.jpg)
+            if (message.isSearchingWeb) {
+                ChatGptSearchingWebPill()
+                Spacer(modifier = Modifier.height(10.dp))
+            } else if (message.searchResults.isNotEmpty()) {
+                ChatGptSearchedSitesPill(
+                    searchResults = message.searchResults
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+
+            // Minimal subtle pulsing dot while waiting for first token (ChatGPT style)
+            if (effectiveText.isEmpty() && message.isStreaming && message.thoughtText.isEmpty()) {
+                val infiniteTransition = rememberInfiniteTransition(label = "cursorBlink")
+                val alpha by infiniteTransition.animateFloat(
+                    initialValue = 0.2f,
+                    targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(400),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "cursorAlpha"
+                )
+                Box(
+                    modifier = Modifier
+                        .padding(vertical = 6.dp)
+                        .size(10.dp)
+                        .graphicsLayer { this.alpha = alpha }
+                        .background(Color.White, CircleShape)
+                )
+            } else if (effectiveText.isNotEmpty()) {
+                val emailDraft = if (!message.isStreaming && effectiveText.contains("Subject:", ignoreCase = true)) {
+                    remember(effectiveText) { extractEmailDraft(effectiveText) }
+                } else null
+                if (emailDraft != null) {
+                    val (preamble, body) = emailDraft
+                    if (preamble != null) {
+                        MarkdownText(text = preamble, isUser = false, searchResults = message.searchResults)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                    EmailDraftBox(draftText = body)
+                } else {
+                    MarkdownText(text = effectiveText, isUser = false, searchResults = message.searchResults)
                 }
+            }
 
-
-                // Web search sources
-                if (message.searchResults.isNotEmpty()) {
-                    SourcesCard(searchResults = message.searchResults)
-                }
-
-                // Thinking card
-                if (message.thoughtText.isNotEmpty()) {
-                    ThinkingCard(
-                        thoughtText = message.thoughtText,
-                        isThinking = message.isThinking,
-                        isStreaming = message.isStreaming
-                    )
-                    if (message.text.isNotEmpty()) Spacer(modifier = Modifier.height(8.dp))
-                }
-
-                // Dynamic ChatGPT-style working indicator while waiting for first token
-                if (message.text.isEmpty() && message.isStreaming && message.thoughtText.isEmpty()) {
-                    DynamicWorkingIndicator(isImage = message.isImageAnalysis, isWebSearch = message.isSearchingWeb)
-                } else if (message.text.isNotEmpty()) {
-                    val emailDraft = remember(message.text) { extractEmailDraft(message.text) }
-                    if (emailDraft != null) {
-                        val (preamble, body) = emailDraft
-                        if (preamble != null) {
-                            MarkdownText(text = preamble, isUser = false)
-                            Spacer(modifier = Modifier.height(8.dp))
-                        }
-                        EmailDraftBox(draftText = body)
-                    } else {
-                        MarkdownText(text = message.text, isUser = false)
+                // Profile & Link Cards (ChatGPT interactive cards with Open Profile action)
+                if (!message.isStreaming && effectiveText.isNotEmpty() && message.searchResults.isNotEmpty()) {
+                    val profileCards = remember(message.searchResults) { extractProfileCards(message.searchResults) }
+                    if (profileCards.isNotEmpty()) {
+                        ProfileCardsRow(cards = profileCards)
                     }
                 }
 
-                // Action bar — only after streaming done
-                if (!message.isStreaming && message.text.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(4.dp))
+                // Action bar — only after streaming done (matching media_1791402016025.jpg)
+                if (!message.isStreaming && effectiveText.isNotEmpty()) {
+                    var showSourcesSheet by remember { mutableStateOf(false) }
+                    Spacer(modifier = Modifier.height(10.dp))
                     Row(
+                        modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        // Copy
-                        IconButton(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                clipboardManager.setText(AnnotatedString(message.text))
-                                Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
-                            },
-                            modifier = Modifier.size(30.dp)
+                        // Left icons (Copy, Like, Dislike, Speaker, Share, Regenerate)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.ContentCopy,
-                                contentDescription = "Copy",
-                                tint = Color(0xFF6B6B6B),
-                                modifier = Modifier.size(16.dp)
-                            )
+                            // Copy
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    clipboardManager.setText(AnnotatedString(effectiveText))
+                                    Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ContentCopy,
+                                    contentDescription = "Copy",
+                                    tint = Color(0xFF8E8E93),
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
+                            // Like
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    Toast.makeText(context, "Good response", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ThumbUp,
+                                    contentDescription = "Good response",
+                                    tint = Color(0xFF8E8E93),
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
+                            // Dislike
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    Toast.makeText(context, "Bad response", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ThumbDown,
+                                    contentDescription = "Bad response",
+                                    tint = Color(0xFF8E8E93),
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
+                            // Speak / stop
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onSpeak()
+                                },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isSpeaking) Icons.Default.Stop else Icons.Default.VolumeUp,
+                                    contentDescription = if (isSpeaking) "Stop reading" else "Read aloud",
+                                    tint = Color(0xFF8E8E93),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            // Share
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onShare()
+                                },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Share,
+                                    contentDescription = "Share",
+                                    tint = Color(0xFF8E8E93),
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
+                            // Regenerate
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onRegenerate()
+                                },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Refresh,
+                                    contentDescription = "Regenerate response",
+                                    tint = Color(0xFF8E8E93),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
                         }
-                        // Speak / stop
-                        IconButton(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onSpeak()
-                            },
-                            modifier = Modifier.size(30.dp)
-                        ) {
-                            Icon(
-                                imageVector = if (isSpeaking) Icons.Default.Stop else Icons.Default.VolumeUp,
-                                contentDescription = if (isSpeaking) "Stop reading" else "Read aloud",
-                                tint = Color(0xFF6B6B6B),
-                                modifier = Modifier.size(17.dp)
+
+                        // Right: [in] [in] [S] Sources button (matching media_1791402016025.jpg)
+                        if (message.searchResults.isNotEmpty()) {
+                            ChatGptSourcesPill(
+                                searchResults = message.searchResults,
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    showSourcesSheet = true
+                                }
                             )
-                        }
-                        // Regenerate
-                        IconButton(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onRegenerate()
-                            },
-                            modifier = Modifier.size(30.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Refresh,
-                                contentDescription = "Regenerate response",
-                                tint = Color(0xFF6B6B6B),
-                                modifier = Modifier.size(17.dp)
-                            )
-                        }
-                        // Share
-                        IconButton(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onShare()
-                            },
-                            modifier = Modifier.size(30.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Share,
-                                contentDescription = "Share",
-                                tint = Color(0xFF6B6B6B),
-                                modifier = Modifier.size(16.dp)
+                            SourcesBottomSheet(
+                                visible = showSourcesSheet,
+                                searchResults = message.searchResults,
+                                onDismiss = { showSourcesSheet = false }
                             )
                         }
                     }
@@ -1852,7 +2294,6 @@ fun MessageBubble(
             }
         }
     }
-}
 
 // Dynamic, alive ChatGPT-style working indicator (never feels stuck)
 @Composable
@@ -1903,7 +2344,7 @@ fun DynamicWorkingIndicator(
         Text(
             text = statusMessages[currentIndex],
             style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.5.sp),
-            color = Color(0xFF6B6B6B),
+            color = Color(0xFFAAAAAA),
             fontWeight = FontWeight.Medium
         )
     }
@@ -1964,10 +2405,10 @@ fun EmailDraftBox(
 
     Surface(
         shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        color = Color(0xFF212121),
         border = BorderStroke(
             1.dp,
-            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
+            Color(0xFF2E2E2E)
         ),
         modifier = modifier
             .fillMaxWidth()
@@ -1976,7 +2417,7 @@ fun EmailDraftBox(
         Column(modifier = Modifier.fillMaxWidth()) {
             // Header Bar with Copy button
             Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
+                color = Color(0xFF282828),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
@@ -1990,7 +2431,7 @@ fun EmailDraftBox(
                         Icon(
                             imageVector = Icons.Default.Email,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = Color.White,
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
@@ -1998,14 +2439,14 @@ fun EmailDraftBox(
                             text = "Email Draft",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = Color.White
                         )
                     }
 
                     // ChatGPT style Copy Button
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer,
+                        color = Color(0xFF383838),
                         modifier = Modifier
                             .clip(RoundedCornerShape(12.dp))
                             .clickable {
@@ -2020,7 +2461,7 @@ fun EmailDraftBox(
                             Icon(
                                 imageVector = Icons.Default.ContentCopy,
                                 contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                tint = Color.White,
                                 modifier = Modifier.size(13.dp)
                             )
                             Spacer(modifier = Modifier.width(5.dp))
@@ -2028,7 +2469,7 @@ fun EmailDraftBox(
                                 text = "Copy",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                                color = Color.White
                             )
                         }
                     }
@@ -2036,7 +2477,7 @@ fun EmailDraftBox(
             }
 
             HorizontalDivider(
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                color = Color(0xFF2E2E2E),
                 thickness = 0.5.dp
             )
 
@@ -2057,18 +2498,15 @@ fun ThinkingCard(
     isThinking: Boolean,
     isStreaming: Boolean
 ) {
-    // While thinking actively: expanded by default.
-    // Once thinking ends (response begins or stream completes): collapses automatically.
-    // User can tap header at any time to toggle expand/collapse manually.
     var userToggledState by remember { mutableStateOf<Boolean?>(null) }
     val isExpanded = userToggledState ?: (isThinking && isStreaming)
 
     Surface(
         shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+        color = Color(0xFF1E1E1E),
         border = BorderStroke(
             1.dp,
-            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+            Color(0xFF2E2E2E)
         ),
         modifier = Modifier
             .fillMaxWidth()
@@ -2090,7 +2528,7 @@ fun ThinkingCard(
                 Icon(
                     imageVector = Icons.Default.Psychology,
                     contentDescription = null,
-                    tint = if (isThinking && isStreaming) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = if (isThinking && isStreaming) Color(0xFF10A37F) else Color(0xFFB0B0B0),
                     modifier = Modifier.size(17.dp)
                 )
                 Spacer(modifier = Modifier.width(6.dp))
@@ -2098,27 +2536,27 @@ fun ThinkingCard(
                     text = if (isThinking && isStreaming) "Thinking live..." else "Thought process",
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
-                    color = if (isThinking && isStreaming) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (isThinking && isStreaming) Color(0xFF10A37F) else Color(0xFFB0B0B0)
                 )
                 if (isThinking && isStreaming) {
                     Spacer(modifier = Modifier.width(6.dp))
                     CircularProgressIndicator(
                         modifier = Modifier.size(10.dp),
                         strokeWidth = 1.5.dp,
-                        color = MaterialTheme.colorScheme.primary
+                        color = Color(0xFF10A37F)
                     )
                 }
                 Spacer(modifier = Modifier.weight(1f))
                 Text(
                     text = if (isExpanded) "Collapse" else "Expand",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
+                    color = Color(0xFF8E8E93),
                     modifier = Modifier.padding(end = 2.dp)
                 )
                 Icon(
                     imageVector = Icons.Default.ArrowDropDown,
                     contentDescription = if (isExpanded) "Collapse" else "Expand",
-                    tint = MaterialTheme.colorScheme.outline,
+                    tint = Color(0xFF8E8E93),
                     modifier = Modifier
                         .size(18.dp)
                         .graphicsLayer(rotationZ = if (isExpanded) 180f else 0f)
@@ -2128,7 +2566,7 @@ fun ThinkingCard(
             AnimatedVisibility(visible = isExpanded) {
                 Column(modifier = Modifier.padding(top = 6.dp)) {
                     HorizontalDivider(
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f),
+                        color = Color(0xFF2E2E2E),
                         thickness = 0.5.dp,
                         modifier = Modifier.padding(bottom = 6.dp)
                     )
@@ -2139,7 +2577,7 @@ fun ThinkingCard(
                             fontSize = 12.sp,
                             lineHeight = 16.sp
                         ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
+                        color = Color(0xFFCCCCCC)
                     )
                 }
             }
@@ -2161,65 +2599,386 @@ fun extractDomain(url: String): String {
 }
 
 @Composable
-fun SourcesCard(searchResults: List<SearchResult>) {
-    val context = LocalContext.current
+fun ChatGptSurfaceButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    shape: androidx.compose.ui.graphics.Shape = CircleShape,
+    color: Color = Color.Transparent,
+    border: BorderStroke? = null,
+    shadowElevation: androidx.compose.ui.unit.Dp = 0.dp,
+    content: @Composable () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.92f else 1f,
+        animationSpec = tween(durationMillis = 80),
+        label = "pressScale"
+    )
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(bottom = 6.dp)
+    Box(
+        modifier = modifier
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(shape)
+            .background(color)
+            .then(if (border != null) Modifier.border(border, shape) else Modifier)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                enabled = enabled,
+                onClick = onClick
+            ),
+        contentAlignment = Alignment.Center
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(bottom = 4.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Default.Language,
-                contentDescription = null,
-                modifier = Modifier.size(13.dp),
-                tint = Color(0xFF6B6B6B)
+        content()
+    }
+}
+
+@Composable
+fun DomainFaviconBadge(
+    url: String,
+    modifier: Modifier = Modifier,
+    size: androidx.compose.ui.unit.Dp = 16.dp
+) {
+    val host = remember(url) {
+        try { java.net.URI(url).host?.removePrefix("www.")?.lowercase() ?: "" } catch (_: Exception) { "" }
+    }
+    var faviconBmp by remember(url) { mutableStateOf(com.teja.gemmmobile.search.FaviconLoader.getCached(url)) }
+
+    LaunchedEffect(url) {
+        if (faviconBmp == null) {
+            val bmp = com.teja.gemmmobile.search.FaviconLoader.loadFavicon(url)
+            if (bmp != null) {
+                faviconBmp = bmp
+            }
+        }
+    }
+
+    val isLinkedIn = host.contains("linkedin")
+    val isGitHub = host.contains("github")
+    val isWikipedia = host.contains("wikipedia")
+    val isTwitter = host.contains("twitter") || host.contains("x.com")
+    val isYoutube = host.contains("youtube") || host.contains("youtu.be")
+    val isFacebook = host.contains("facebook") || host.contains("fb.com")
+    val isInstagram = host.contains("instagram")
+    val isSrm = host.contains("srm")
+
+    val bg = when {
+        isLinkedIn -> Color(0xFF0A66C2)
+        isGitHub -> Color(0xFF24292E)
+        isWikipedia -> Color(0xFF636466)
+        isTwitter -> Color(0xFF1D9BF0)
+        isYoutube -> Color(0xFFFF0000)
+        isFacebook -> Color(0xFF1877F2)
+        isInstagram -> Color(0xFFE1306C)
+        isSrm -> Color(0xFF0F9D58)
+        else -> Color(0xFF2A2A2E)
+    }
+
+    val label = when {
+        isLinkedIn -> "in"
+        isGitHub -> "gh"
+        isWikipedia -> "W"
+        isTwitter -> "𝕏"
+        isYoutube -> "▶"
+        isFacebook -> "f"
+        isInstagram -> "📷"
+        isSrm -> "S"
+        host.isNotEmpty() -> host.first().uppercase()
+        else -> "🌐"
+    }
+
+    // Circular favicon badge (exact ChatGPT style)
+    Box(
+        modifier = modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(if (faviconBmp != null) Color(0xFF1E1E22) else bg),
+        contentAlignment = Alignment.Center
+    ) {
+        val bmp = faviconBmp
+        if (bmp != null) {
+            androidx.compose.foundation.Image(
+                bitmap = bmp.asImageBitmap(),
+                contentDescription = host,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(1.dp)
+                    .clip(CircleShape),
+                contentScale = androidx.compose.ui.layout.ContentScale.Fit
             )
-            Spacer(modifier = Modifier.width(5.dp))
+        } else {
             Text(
-                text = "Searched ${searchResults.size} sites",
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = 12.sp),
-                fontWeight = FontWeight.Medium,
-                color = Color(0xFF6B6B6B)
+                text = label,
+                fontSize = (size.value * 0.52f).sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
             )
         }
+    }
+}
 
+/**
+ * Data structure for rich interactive profile cards (LinkedIn, GitHub, Portfolio).
+ */
+data class ProfileCardData(
+    val title: String,
+    val subtitle: String,
+    val url: String,
+    val brand: String,
+    val iconColor: Color,
+    val badgeLetter: String
+)
+
+fun extractProfileCards(results: List<SearchResult>): List<ProfileCardData> {
+    val cards = mutableListOf<ProfileCardData>()
+    for (res in results) {
+        val url = res.url.lowercase()
+        val title = res.title
+        when {
+            url.contains("linkedin.com/in/") || url.contains("linkedin.com/posts/") -> {
+                val isPost = url.contains("/posts/")
+                val cleanName = title.substringBefore("-").substringBefore("|").substringBefore("·").trim()
+                cards.add(
+                    ProfileCardData(
+                        title = if (cleanName.isNotBlank() && cleanName.length < 35) cleanName else "LinkedIn Profile",
+                        subtitle = if (isPost) "LinkedIn Activity" else "LinkedIn Profile • in.linkedin.com",
+                        url = res.url,
+                        brand = "LinkedIn",
+                        iconColor = Color(0xFF0A66C2),
+                        badgeLetter = "in"
+                    )
+                )
+            }
+            url.contains("github.com/") && !url.contains("/issues") && !url.contains("/pull") -> {
+                val cleanTitle = title.substringBefore("-").substringBefore("|").trim()
+                cards.add(
+                    ProfileCardData(
+                        title = cleanTitle.ifBlank { "GitHub Profile" },
+                        subtitle = "GitHub • Code & Projects",
+                        url = res.url,
+                        brand = "GitHub",
+                        iconColor = Color(0xFF8B5CF6),
+                        badgeLetter = "gh"
+                    )
+                )
+            }
+            url.contains("twitter.com/") || url.contains("x.com/") -> {
+                val handle = url.substringAfter("twitter.com/").substringAfter("x.com/").substringBefore("/").substringBefore("?").trim()
+                val cleanTitle = title.substringBefore("-").substringBefore("|").trim()
+                cards.add(
+                    ProfileCardData(
+                        title = cleanTitle.ifBlank { "@$handle" },
+                        subtitle = "X (Twitter) • Profile",
+                        url = res.url,
+                        brand = "X",
+                        iconColor = Color(0xFF1D9BF0),
+                        badgeLetter = "𝕏"
+                    )
+                )
+            }
+            url.contains("youtube.com/") || url.contains("youtu.be/") -> {
+                val cleanTitle = title.substringBefore("-").substringBefore("|").trim()
+                cards.add(
+                    ProfileCardData(
+                        title = cleanTitle.ifBlank { "YouTube Channel" },
+                        subtitle = "YouTube • Media",
+                        url = res.url,
+                        brand = "YouTube",
+                        iconColor = Color(0xFFFF0000),
+                        badgeLetter = "▶"
+                    )
+                )
+            }
+            url.contains("huggingface.co/") -> {
+                val cleanTitle = title.substringBefore("-").substringBefore("(").trim()
+                cards.add(
+                    ProfileCardData(
+                        title = cleanTitle.ifBlank { "Hugging Face" },
+                        subtitle = "Hugging Face • Models & Profile",
+                        url = res.url,
+                        brand = "Hugging Face",
+                        iconColor = Color(0xFFFFD21E),
+                        badgeLetter = "🤗"
+                    )
+                )
+            }
+            url.contains("srmist.edu") || url.contains("srmap.edu") || title.contains("SRM University", ignoreCase = true) -> {
+                cards.add(
+                    ProfileCardData(
+                        title = "SRM University-AP",
+                        subtitle = "Academic Portal & University",
+                        url = res.url,
+                        brand = "SRM",
+                        iconColor = Color(0xFF0F9D58),
+                        badgeLetter = "S"
+                    )
+                )
+            }
+        }
+    }
+    return cards.distinctBy { it.brand }.take(3)
+}
+
+@Composable
+fun ProfileAvatarBadge(
+    url: String,
+    brand: String,
+    modifier: Modifier = Modifier,
+    size: androidx.compose.ui.unit.Dp = 38.dp
+) {
+    var avatarBmp by remember(url) {
+        mutableStateOf(ProfileAvatarLoader.getCached(url))
+    }
+
+    LaunchedEffect(url) {
+        if (avatarBmp == null) {
+            val bmp = ProfileAvatarLoader.loadAvatar(url)
+            if (bmp != null) {
+                avatarBmp = bmp
+            }
+        }
+    }
+
+    Box(
+        modifier = modifier.size(size),
+        contentAlignment = Alignment.Center
+    ) {
+        val currentBmp = avatarBmp
+        if (currentBmp != null) {
+            androidx.compose.foundation.Image(
+                bitmap = currentBmp.asImageBitmap(),
+                contentDescription = brand,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+                    .border(1.dp, Color(0x33FFFFFF), CircleShape)
+            )
+            // Tiny bottom-right corner brand badge
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .offset(x = 2.dp, y = 2.dp)
+                    .size(13.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF18181B))
+                    .border(0.8.dp, Color(0xFF3E3E48), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                DomainFaviconBadge(
+                    url = url,
+                    size = 10.dp
+                )
+            }
+        } else {
+            DomainFaviconBadge(
+                url = url,
+                size = size
+            )
+        }
+    }
+}
+
+@Composable
+fun ProfileCardsRow(
+    cards: List<ProfileCardData>,
+    modifier: Modifier = Modifier
+) {
+    if (cards.isEmpty()) return
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            text = "PROFILES & LINKS",
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFF8E8E93),
+            letterSpacing = 0.5.sp
+        )
         LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            contentPadding = PaddingValues(vertical = 2.dp)
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(searchResults) { res ->
-                val domain = remember(res.url) { extractDomain(res.url).ifBlank { res.title } }
+            items(cards) { card ->
                 Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+                    shape = RoundedCornerShape(13.dp),
+                    color = Color(0xFF1E1E22),
+                    border = BorderStroke(1.dp, Color(0xFF323238)),
                     modifier = Modifier
-                        .clip(RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(13.dp))
                         .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             try {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(res.url))
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(card.url))
                                 context.startActivity(intent)
                             } catch (_: Exception) {}
                         }
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("🌐", fontSize = 11.sp)
-                        Spacer(modifier = Modifier.width(5.dp))
-                        Text(
-                            text = domain,
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1
+                        ProfileAvatarBadge(
+                            url = card.url,
+                            brand = card.brand,
+                            size = 38.dp
                         )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = card.title,
+                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.5.sp),
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = card.subtitle,
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = Color(0xFF9E9EA4),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color(0xFF2C2C32),
+                            border = BorderStroke(0.8.dp, Color(0xFF44444C))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.5.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Open profile",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                    fontWeight = FontWeight.Medium,
+                                    color = Color(0xFFE2E2E8)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Icon(
+                                    imageVector = Icons.Default.ArrowUpward,
+                                    contentDescription = "Open",
+                                    tint = Color(0xFF10A37F),
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .graphicsLayer { rotationZ = 45f }
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -2227,6 +2986,337 @@ fun SourcesCard(searchResults: List<SearchResult>) {
     }
 }
 
+@Composable
+fun ChatGptSearchingWebPill() {
+    val infiniteTransition = rememberInfiniteTransition(label = "pulseGlobe")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.45f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(650),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "globeAlpha"
+    )
+
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = Color(0xFF1B1B1E),
+        border = BorderStroke(1.dp, Color(0xFF2C2C30)),
+        modifier = Modifier.padding(vertical = 2.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Language,
+                contentDescription = null,
+                tint = Color(0xFF10A37F),
+                modifier = Modifier
+                    .size(14.dp)
+                    .graphicsLayer { this.alpha = alpha }
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "Searching the web…",
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
+                fontWeight = FontWeight.Medium,
+                color = Color(0xFFD1D1D6)
+            )
+        }
+    }
+}
+
+@Composable
+fun ChatGptSearchedSitesPill(
+    searchResults: List<SearchResult>
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = Color(0xFF1A1A1D),
+        border = BorderStroke(1.dp, Color(0xFF2B2B30)),
+        modifier = Modifier
+            .clip(RoundedCornerShape(14.dp))
+            .clickable { expanded = !expanded }
+            .padding(vertical = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier.animateContentSize(tween(180))
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Circular domain favicons row (overlapping like ChatGPT)
+                val topFavicons = searchResults.take(3)
+                if (topFavicons.isNotEmpty()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(end = 4.dp)
+                    ) {
+                        topFavicons.forEachIndexed { index, res ->
+                            Box(
+                                modifier = Modifier
+                                    .offset(x = (-3 * index).dp)
+                                    .clip(CircleShape)
+                                    .border(1.dp, Color(0xFF1A1A1D), CircleShape)
+                            ) {
+                                DomainFaviconBadge(url = res.url, size = 15.dp)
+                            }
+                        }
+                    }
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Language,
+                        contentDescription = null,
+                        tint = Color(0xFF10A37F),
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "Searched ${searchResults.size} sites",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
+                    fontWeight = FontWeight.Medium,
+                    color = Color(0xFFE2E2E6)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(
+                    imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = Color(0xFF8E8E93),
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+            if (expanded) {
+                HorizontalDivider(color = Color(0xFF26262A), thickness = 0.8.dp)
+                Column(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    for (res in searchResults) {
+                        val host = remember(res.url) { extractDomain(res.url) }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    try {
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(res.url))
+                                        context.startActivity(intent)
+                                    } catch (_: Exception) {}
+                                }
+                                .padding(horizontal = 6.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            DomainFaviconBadge(url = res.url, size = 18.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = host.ifBlank { res.title },
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                    color = Color.White,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (res.title.isNotBlank()) {
+                                    Text(
+                                        text = res.title,
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                                        color = Color(0xFF8E8E93),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(
+                                imageVector = Icons.Default.Language,
+                                contentDescription = "Open",
+                                tint = Color(0xFF8E8E93),
+                                modifier = Modifier.size(12.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ChatGptSourcesPill(
+    searchResults: List<SearchResult>,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = Color(0xFF1E1E1E),
+        border = BorderStroke(1.dp, Color(0xFF2E2E2E)),
+        modifier = Modifier
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            val topSources = searchResults.take(3)
+            for (res in topSources) {
+                DomainFaviconBadge(url = res.url)
+            }
+            Spacer(modifier = Modifier.width(2.dp))
+            Text(
+                text = "Sources",
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
+                fontWeight = FontWeight.Medium,
+                color = Color(0xFFD1D1D6)
+            )
+        }
+    }
+}
+
+@Composable
+fun SourcesBottomSheet(
+    visible: Boolean,
+    searchResults: List<SearchResult>,
+    onDismiss: () -> Unit
+) {
+    if (!visible) return
+    val context = LocalContext.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF171717),
+        shape = RoundedCornerShape(18.dp),
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Language,
+                        contentDescription = null,
+                        tint = Color(0xFF10A37F),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Sources (${searchResults.size})",
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        fontSize = 16.sp
+                    )
+                }
+                IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
+                    Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = Color(0xFF8E8E93))
+                }
+            }
+        },
+        text = {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(searchResults) { res ->
+                    val domain = remember(res.url) { extractDomain(res.url).ifBlank { res.title } }
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFF212121),
+                        border = BorderStroke(1.dp, Color(0xFF2C2C2C)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable {
+                                try {
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(res.url))
+                                    context.startActivity(intent)
+                                } catch (_: Exception) {}
+                            }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            DomainFaviconBadge(url = res.url, size = 22.dp)
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = res.title.ifBlank { domain },
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color.White,
+                                    fontSize = 13.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (res.snippet.isNotBlank()) {
+                                    Text(
+                                        text = res.snippet,
+                                        color = Color(0xFF8E8E93),
+                                        fontSize = 11.sp,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.padding(top = 2.dp)
+                                    )
+                                }
+                                Text(
+                                    text = domain,
+                                    color = Color(0xFF10A37F),
+                                    fontSize = 10.5.sp,
+                                    modifier = Modifier.padding(top = 2.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            val isProfile = res.url.contains("linkedin.com/in", ignoreCase = true) || res.url.contains("github.com/", ignoreCase = true)
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFF2C2C32),
+                                border = BorderStroke(0.8.dp, Color(0xFF44444C))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = if (isProfile) "Open profile" else "Open link",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                                        fontWeight = FontWeight.Medium,
+                                        color = Color(0xFFE2E2E8)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowUpward,
+                                        contentDescription = "Open",
+                                        tint = Color(0xFF10A37F),
+                                        modifier = Modifier
+                                            .size(11.dp)
+                                            .graphicsLayer { rotationZ = 45f }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {}
+    )
+}
+
+private enum class ActionButtonState {
+    MIC,
+    SEND,
+    STOP
+}
+
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun ChatInputBar(
     inputText: String,
@@ -2238,90 +3328,146 @@ fun ChatInputBar(
     onToggleWebSearch: () -> Unit,
     isEnabled: Boolean,
     onVoiceInput: () -> Unit = {},
+    onVoiceAssistant: () -> Unit = {},
     onAttach: () -> Unit = {},
     hasAttachment: Boolean = false
 ) {
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
+    val focusManager = LocalFocusManager.current
+    val isImeVisible = WindowInsets.isImeVisible
+
+    // Whenever keyboard is closed/dismissed, clear focus so cursor and text field reset completely
+    LaunchedEffect(isImeVisible) {
+        if (!isImeVisible) {
+            focusManager.clearFocus()
+        }
+    }
+
+    // Expand ONLY when keyboard is open (isImeVisible). When closed, returns to normal 80% floating bar.
+    val isExpanded = isImeVisible
+
+    // ChatGPT mobile signature floating island behavior:
+    // When idle / keyboard closed: ~80% width with 34.dp margins, floating 12.dp above nav bar.
+    // When keyboard open: smoothly expands to ~94% width with 10.dp margins, docking right above keyboard.
+    val horizontalPadding by animateDpAsState(
+        targetValue = if (isExpanded) 10.dp else 34.dp,
+        animationSpec = spring(
+            dampingRatio = 0.82f,
+            stiffness = Spring.StiffnessMediumLow
+        ),
+        label = "inputHorizontalPadding"
+    )
+
+    val bottomPadding by animateDpAsState(
+        targetValue = if (isExpanded) 4.dp else 12.dp,
+        animationSpec = spring(
+            dampingRatio = 0.82f,
+            stiffness = Spring.StiffnessMediumLow
+        ),
+        label = "inputBottomPadding"
+    )
+
+    // Floating Pill Island Container (ChatGPT AMOLED pure dark style)
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .navigationBarsPadding()
+            .then(
+                if (!isImeVisible) Modifier.navigationBarsPadding() else Modifier
+            )
+            .padding(start = horizontalPadding, end = horizontalPadding, top = 2.dp, bottom = bottomPadding),
+        contentAlignment = Alignment.Center
     ) {
-        Row(
+        Surface(
+            shape = RoundedCornerShape(32.dp),
+            color = Color(0xFF212121),
+            border = BorderStroke(1.dp, Color(0xFF2C2C2C)),
+            shadowElevation = 6.dp,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 12.dp, end = 12.dp, bottom = 8.dp, top = 4.dp),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                .animateContentSize(
+                    animationSpec = tween(durationMillis = 150)
+                )
         ) {
-            // 1. Left circular '+' action button (ChatGPT style)
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+            Row(
                 modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .clickable(onClick = onAttach)
+                    .fillMaxWidth()
+                    .padding(horizontal = 6.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.Bottom
             ) {
-                Box(contentAlignment = Alignment.Center) {
+                // 1. Left Plus (+) Action Button
+                ChatGptSurfaceButton(
+                    onClick = onAttach,
+                    shape = CircleShape,
+                    color = Color(0xFF2E2E2E),
+                    modifier = Modifier
+                        .size(38.dp)
+                        .padding(2.dp)
+                ) {
                     Icon(
                         imageVector = Icons.Default.Add,
                         contentDescription = "Add attachment",
-                        modifier = Modifier.size(22.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        modifier = Modifier.size(20.dp),
+                        tint = Color.White
                     )
                 }
-            }
 
-            // 2. Center Pill (Message TextField + subtle Web search toggle)
-            Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                modifier = Modifier
-                    .weight(1f)
-                    .defaultMinSize(minHeight = 42.dp)
-            ) {
+                Spacer(modifier = Modifier.width(4.dp))
+
+                // 2. Center Text & Tools Section
                 Row(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 9.dp),
+                        .weight(1f)
+                        .padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Clean ChatGPT globe search toggle button
-                    Box(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .clip(CircleShape)
-                            .clickable { onToggleWebSearch() }
-                            .background(
-                                if (isWebSearchEnabled) Color(0xFF10A37F).copy(alpha = 0.15f)
-                                else Color.Transparent
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Language,
-                            contentDescription = "Search the web",
-                            modifier = Modifier.size(18.dp),
-                            tint = if (isWebSearchEnabled) Color(0xFF10A37F) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                        )
+                    // Web Search Toggle inside the bar
+                    if (isWebSearchEnabled) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFF10A37F).copy(alpha = 0.2f),
+                            border = BorderStroke(1.dp, Color(0xFF10A37F).copy(alpha = 0.4f)),
+                            modifier = Modifier
+                                .height(28.dp)
+                                .padding(end = 6.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { onToggleWebSearch() }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Language,
+                                    contentDescription = "Search the web",
+                                    modifier = Modifier.size(13.dp),
+                                    tint = Color(0xFF10A37F)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Web",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFF10A37F)
+                                )
+                            }
+                        }
                     }
 
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    // BasicTextField - zero extra paddings or weird borders
+                    // Multi-line Expanding BasicTextField with focus listener
                     BasicTextField(
                         value = inputText,
                         onValueChange = onTextChanged,
                         enabled = isEnabled && !isGenerating,
                         textStyle = TextStyle(
-                            fontSize = 15.sp,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            lineHeight = 20.sp
+                            fontSize = 15.5.sp,
+                            color = Color.White,
+                            lineHeight = 21.sp,
+                            fontFamily = FontFamily.Default
                         ),
-                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                        maxLines = 5,
-                        modifier = Modifier.weight(1f),
+                        cursorBrush = SolidColor(Color.White),
+                        maxLines = 6,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 4.dp, vertical = 4.dp),
                         decorationBox = { innerTextField ->
                             Box(
                                 modifier = Modifier.fillMaxWidth(),
@@ -2329,10 +3475,14 @@ fun ChatInputBar(
                             ) {
                                 if (inputText.isEmpty()) {
                                     Text(
-                                        text = if (isWebSearchEnabled) "Search with Gemma..." else if (hasAttachment) "Ask about this..." else "Message",
+                                        text = when {
+                                            isWebSearchEnabled -> "Search with Gemma..."
+                                            hasAttachment -> "Ask about this..."
+                                            else -> "Ask Gemma..."
+                                        },
                                         style = MaterialTheme.typography.bodyMedium.copy(
-                                            fontSize = 15.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                            fontSize = 15.5.sp,
+                                            color = Color(0xFF8E8E93)
                                         )
                                     )
                                 }
@@ -2341,68 +3491,188 @@ fun ChatInputBar(
                         }
                     )
                 }
-            }
 
-            // 3. Right Action Button (Mic when idle, solid high-contrast Circle with Up Arrow when typing/attachment, Stop square when generating)
-            if (isGenerating) {
-                // Solid Stop Button (ChatGPT black circle with white stop square)
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier
-                        .size(42.dp)
-                        .clip(CircleShape)
-                        .clickable { onStop() }
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.Stop,
-                            contentDescription = "Stop generating",
-                            tint = MaterialTheme.colorScheme.surface,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                }
-            } else if (inputText.isNotBlank() || hasAttachment) {
-                // Solid Send Button (ChatGPT black circle with crisp white Up arrow)
-                val canSend = isEnabled
-                Surface(
-                    shape = CircleShape,
-                    color = if (canSend) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier
-                        .size(42.dp)
-                        .clip(CircleShape)
-                        .clickable(enabled = canSend) { onSend() }
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.ArrowUpward,
-                            contentDescription = "Send",
-                            tint = if (canSend) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
-            } else {
-                // Voice Mic Button (ChatGPT circular mic)
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
-                    modifier = Modifier
-                        .size(42.dp)
-                        .clip(CircleShape)
-                        .clickable(onClick = onVoiceInput)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.Mic,
-                            contentDescription = "Voice input",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(22.dp)
-                        )
+                Spacer(modifier = Modifier.width(4.dp))
+
+                // 3. Right Animated Action Button (Mic/Voice ⇄ Send ⇄ Stop)
+                AnimatedContent(
+                    targetState = when {
+                        isGenerating -> ActionButtonState.STOP
+                        inputText.isNotBlank() || hasAttachment -> ActionButtonState.SEND
+                        else -> ActionButtonState.MIC
+                    },
+                    transitionSpec = {
+                        (scaleIn(tween(140)) + fadeIn(tween(140)))
+                            .togetherWith(scaleOut(tween(110)) + fadeOut(tween(110)))
+                    },
+                    label = "chatActionTransition"
+                ) { state ->
+                    when (state) {
+                        ActionButtonState.STOP -> {
+                            // Coral Pink Circle with White Stop Square
+                            ChatGptSurfaceButton(
+                                onClick = onStop,
+                                shape = CircleShape,
+                                color = Color(0xFFF43F5E),
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .padding(2.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Stop,
+                                    contentDescription = "Stop generating",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+
+                        ActionButtonState.SEND -> {
+                            // Solid White Circle with Crisp Black Up Arrow
+                            val canSend = isEnabled && !isGenerating
+                            ChatGptSurfaceButton(
+                                onClick = onSend,
+                                enabled = canSend,
+                                shape = CircleShape,
+                                color = if (canSend) Color.White else Color(0xFF3A3A3C),
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .padding(2.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ArrowUpward,
+                                    contentDescription = "Send",
+                                    tint = if (canSend) Color.Black else Color(0xFF8E8E93),
+                                    modifier = Modifier.size(19.dp)
+                                )
+                            }
+                        }
+
+                        ActionButtonState.MIC -> {
+                            // ChatGPT Layout: White Mic icon + Coral Pink circular Voice Assistant soundwave button
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                ChatGptSurfaceButton(
+                                    onClick = onVoiceInput,
+                                    shape = CircleShape,
+                                    color = Color.Transparent,
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Mic,
+                                        contentDescription = "Voice input",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+
+                                ChatGptSurfaceButton(
+                                    onClick = onVoiceAssistant,
+                                    shape = CircleShape,
+                                    color = Color(0xFFF43F5E),
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .padding(2.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.GraphicEq,
+                                        contentDescription = "Voice assistant",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun FloatingMenuItem(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = Color.Transparent,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(14.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = Color.White
+            )
+        }
+    }
+}
+
+@Composable
+fun FloatingMenuItemWithToggle(
+    icon: ImageVector,
+    label: String,
+    isChecked: Boolean,
+    onToggle: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = Color.Transparent,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onToggle)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = if (isChecked) Color(0xFF10A37F) else Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(14.dp))
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = if (isChecked) Color(0xFF10A37F) else Color.White
+                )
+            }
+            Switch(
+                checked = isChecked,
+                onCheckedChange = { onToggle() },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = Color(0xFF10A37F),
+                    uncheckedThumbColor = Color(0xFF8E8E93),
+                    uncheckedTrackColor = Color(0xFF383838)
+                ),
+                modifier = Modifier.graphicsLayer(scaleX = 0.8f, scaleY = 0.8f)
+            )
         }
     }
 }
@@ -2418,7 +3688,8 @@ fun AttachmentDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add to chat", fontWeight = FontWeight.Bold) },
+        containerColor = Color(0xFF212121),
+        title = { Text("Add to chat", fontWeight = FontWeight.Bold, color = Color.White) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 AttachOption(emoji = "📷", label = "Camera", desc = "Take a photo for Gemma to examine") {
@@ -2441,7 +3712,7 @@ fun AttachmentDialog(
         },
         confirmButton = {},
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            TextButton(onClick = onDismiss) { Text("Cancel", color = Color.White) }
         }
     )
 }
@@ -2455,7 +3726,7 @@ private fun AttachOption(
 ) {
     Surface(
         shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        color = Color(0xFF2E2E2E),
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
@@ -2470,8 +3741,8 @@ private fun AttachOption(
             Text(emoji, fontSize = 22.sp)
             Spacer(modifier = Modifier.width(12.dp))
             Column {
-                Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                Text(desc, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = Color.White)
+                Text(desc, style = MaterialTheme.typography.bodySmall, color = Color(0xFF8E8E93))
             }
         }
     }
@@ -2722,4 +3993,86 @@ fun ModelReadySection(
             }
         }
     }
+}
+
+/**
+ * Intelligent ChatGPT-style follow-up suggestion extractor.
+ * Detects cut-off responses, parses Gemma's proactive questions/options,
+ * and adds context-aware prompt chips.
+ */
+fun extractFollowUpSuggestions(text: String): List<String> {
+    val trimmed = text.trim()
+    if (trimmed.isBlank()) return emptyList()
+
+    val suggestions = mutableListOf<String>()
+
+    val seemsCutOff = !trimmed.endsWith(".") && !trimmed.endsWith("?") &&
+            !trimmed.endsWith("!") && !trimmed.endsWith("```") &&
+            !trimmed.endsWith("\"") && !trimmed.endsWith(")") &&
+            !trimmed.endsWith(":") && trimmed.length > 50
+
+    if (seemsCutOff) {
+        suggestions.add("Continue generating")
+    }
+
+    // Try extracting from explicit closing questions:
+    // e.g. "Would you like to explore Supervised Learning next, or see a hands-on Python example?"
+    val lastQuestionMatch = Regex(
+        """(?:Would you like to|Do you want to|Should we)\s+([^?\n]+)\?""",
+        RegexOption.IGNORE_CASE
+    ).findAll(trimmed).lastOrNull()
+
+    if (lastQuestionMatch != null) {
+        val questionBody = lastQuestionMatch.groupValues[1].trim()
+        if (questionBody.contains(" or ", ignoreCase = true)) {
+            val parts = questionBody.split(Regex("""\s+or\s+""", RegexOption.IGNORE_CASE))
+            for (p in parts) {
+                val cleaned = p.replace(Regex("""^(explore|learn about|see|check out)\s+""", RegexOption.IGNORE_CASE), "")
+                    .replace(Regex("""\s+next$""", RegexOption.IGNORE_CASE), "")
+                    .replace(Regex("""[*_`"]"""), "")
+                    .trim()
+                if (cleaned.isNotBlank() && cleaned.length in 3..40) {
+                    suggestions.add(cleaned.replaceFirstChar { it.uppercase() })
+                }
+            }
+        } else {
+            val cleaned = questionBody.replace(Regex("""[*_`"]"""), "").trim()
+            if (cleaned.isNotBlank() && cleaned.length in 4..45) {
+                suggestions.add(cleaned.replaceFirstChar { it.uppercase() })
+            }
+        }
+    }
+
+    // Context-aware defaults based on topic if fewer than 3 suggestions
+    val lower = trimmed.lowercase()
+    if (lower.contains("machine learning") || lower.contains("deep learning") || lower.contains("supervised learning")) {
+        if (!suggestions.any { it.contains("supervised", ignoreCase = true) }) {
+            suggestions.add("Explain Supervised Learning")
+        }
+        if (!suggestions.any { it.contains("example", ignoreCase = true) }) {
+            suggestions.add("Practical Python example")
+        }
+    } else if (lower.contains("python") || lower.contains("kotlin") || lower.contains("java") || lower.contains("```")) {
+        if (!suggestions.any { it.contains("code", ignoreCase = true) }) {
+            suggestions.add("Explain how this code works")
+        }
+        if (!suggestions.any { it.contains("error", ignoreCase = true) }) {
+            suggestions.add("Add error handling & tests")
+        }
+    }
+
+    // Standard high-value ChatGPT-style follow-up actions
+    val fallbacks = listOf(
+        "Explain in simpler terms",
+        "Give real-world examples",
+        "Summarize key takeaways"
+    )
+    for (f in fallbacks) {
+        if (suggestions.size >= 4) break
+        if (!suggestions.any { it.equals(f, ignoreCase = true) }) {
+            suggestions.add(f)
+        }
+    }
+
+    return suggestions.distinct().take(4)
 }

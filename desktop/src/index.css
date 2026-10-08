@@ -4,21 +4,21 @@
 
 @layer base {
   body {
-    @apply bg-[#ffffff] text-[#0f172a] font-sans antialiased overflow-hidden select-none;
+    @apply bg-[#0d1117] text-[#e6edf3] font-sans antialiased overflow-hidden select-none;
   }
 }
 
-/* Antigravity Minimalist Light Style */
+/* Antigravity Signature Dark Theme */
 .antigravity-bg {
-  background-color: #ffffff;
+  background-color: #0d1117;
 }
 
-/* Subtle clean input shadow */
+/* Subtle clean dark input shadow */
 .antigravity-input-shadow {
-  box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.08), 0 0 1px 1px rgba(15, 23, 42, 0.05);
+  box-shadow: 0 8px 32px -4px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
-/* Custom Scrollbars for light theme */
+/* Custom Scrollbars for Antigravity dark theme */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -29,10 +29,10 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: #21262d;
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: #30363d;
 }

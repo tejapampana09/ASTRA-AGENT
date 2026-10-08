@@ -816,6 +816,14 @@ class ToolRegistry:
         self.executor = ToolExecutor(self.workspace_path)
         self.tools: Dict[str, Dict[str, Any]] = {t["name"]: t for t in TOOL_DEFINITIONS}
 
+    @property
+    def security(self) -> SecurityManager:
+        return self.executor.security
+
+    @property
+    def security_manager(self) -> SecurityManager:
+        return self.executor.security
+
     def get_definitions(self) -> List[Dict[str, Any]]:
         return TOOL_DEFINITIONS
 
