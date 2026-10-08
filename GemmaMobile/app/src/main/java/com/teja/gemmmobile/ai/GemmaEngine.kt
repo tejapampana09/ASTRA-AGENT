@@ -373,6 +373,8 @@ data class EngineChunk(
             }
         } finally {
             mutex.withLock {
+                try { conversation?.close() } catch (_: Throwable) {}
+                conversation = null
                 if (_engineState.value is EngineState.Generating) {
                     _engineState.value = EngineState.Ready(activeBackend)
                 }
