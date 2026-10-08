@@ -370,7 +370,37 @@ fun CodeBlockView(
 }
 
 /**
- * ChatGPT-style scrollable, copyable Data Table View.
+ * Cleans table cells, stripping surrounding quotes and balancing any stray asterisks
+ * so markdown text styles properly as bold/italic with zero raw stars rendered.
+ */
+fun cleanTableCell(raw: String): String {
+    var s = raw.replace("\\_", "_").trim()
+    // Strip surrounding quotes if any
+    if (s.length >= 2 && ((s.startsWith("\"") && s.endsWith("\"")) || (s.startsWith("'") && s.endsWith("'")))) {
+        s = s.substring(1, s.length - 1).trim()
+    }
+    // Balance trailing ** if missing leading **
+    if (s.endsWith("**") && !s.startsWith("**")) {
+        s = "**$s"
+    } else if (s.startsWith("**") && !s.endsWith("**")) {
+        s = "$s**"
+    }
+    // Balance single * if missing counterpart
+    val starsWithoutDouble = s.replace("**", "")
+    if (starsWithoutDouble.count { it == '*' } % 2 != 0) {
+        if (s.endsWith("*") && !s.endsWith("**")) {
+            s = "*$s"
+        } else if (s.startsWith("*") && !s.startsWith("**")) {
+            s = "$s*"
+        }
+    }
+    return s
+}
+
+/**
+ * ChatGPT-style clean, open, borderless Data Table View.
+ * Renders directly on the AMOLED pure dark background with crisp typography,
+ * subtle horizontal dividers, and inline markdown formatting (bold, italic, links).
  */
 @Composable
 fun MarkdownTableView(
@@ -378,130 +408,89 @@ fun MarkdownTableView(
     rows: List<List<String>>,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
-    val haptic = LocalHapticFeedback.current
     val scrollState = rememberScrollState()
+    val isCompact = headers.size <= 3
 
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = Color(0xFF18181B), // AMOLED dark surface matching ChatGPT
-        border = BorderStroke(1.dp, Color(0xFF2E2E36)),
+    Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .padding(vertical = 8.dp)
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            // Subtle Top Bar (ChatGPT Style: minimalist Table title and Copy button)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFF202024))
-                    .padding(horizontal = 14.dp, vertical = 7.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Table",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFF9E9EA4)
-                )
-
+        val tableContent: @Composable () -> Unit = {
+            Column(modifier = if (isCompact) Modifier.fillMaxWidth() else Modifier) {
+                // Header Row
                 Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .clickable {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            val csv = buildString {
-                                appendLine(headers.joinToString(","))
-                                rows.forEach { row -> appendLine(row.joinToString(",")) }
-                            }
-                            clipboard.setText(AnnotatedString(csv))
-                            Toast.makeText(context, "Table copied to clipboard", Toast.LENGTH_SHORT).show()
-                        }
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    modifier = if (isCompact) Modifier.fillMaxWidth().padding(vertical = 10.dp)
+                               else Modifier.padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.ContentCopy,
-                        contentDescription = "Copy",
-                        tint = Color(0xFF9E9EA4),
-                        modifier = Modifier.size(12.dp)
-                    )
-                    Text(
-                        text = "Copy",
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                        color = Color(0xFFB4B4BB),
-                        fontWeight = FontWeight.Medium
-                    )
+                    headers.forEachIndexed { colIndex, header ->
+                        val cellModifier = if (isCompact) {
+                            Modifier.weight(1f).padding(end = if (colIndex < headers.size - 1) 12.dp else 0.dp)
+                        } else {
+                            Modifier.widthIn(min = 120.dp, max = 240.dp).padding(end = 16.dp)
+                        }
+                        Box(modifier = cellModifier) {
+                            val cleanHeader = cleanTableCell(header)
+                            Text(
+                                text = buildInlineMarkdown(cleanHeader, defaultColor = Color.White),
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontSize = 14.sp,
+                                    lineHeight = 20.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                color = Color.White
+                            )
+                        }
+                    }
                 }
-            }
 
-            HorizontalDivider(color = Color(0xFF2E2E36), thickness = 0.8.dp)
+                // Header Divider line (matching ChatGPT: clean subtle separator under headers)
+                HorizontalDivider(color = Color(0xFF2C2C30), thickness = 0.8.dp)
 
-            // Horizontally scrollable table grid
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(scrollState)
-            ) {
-                Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
-                    // Header Row
+                // Data Rows
+                rows.forEachIndexed { rowIndex, row ->
                     Row(
-                        modifier = Modifier
-                            .background(Color(0xFF242428), RoundedCornerShape(8.dp))
-                            .padding(vertical = 9.dp),
+                        modifier = if (isCompact) Modifier.fillMaxWidth().padding(vertical = 10.dp)
+                                   else Modifier.padding(vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        headers.forEach { header ->
-                            Box(
-                                modifier = Modifier
-                                    .widthIn(min = 110.dp, max = 240.dp)
-                                    .padding(horizontal = 12.dp)
-                            ) {
+                        headers.indices.forEach { colIndex ->
+                            val rawCell = row.getOrNull(colIndex) ?: ""
+                            val cleanCell = cleanTableCell(rawCell)
+                            val cellModifier = if (isCompact) {
+                                Modifier.weight(1f).padding(end = if (colIndex < headers.size - 1) 12.dp else 0.dp)
+                            } else {
+                                Modifier.widthIn(min = 120.dp, max = 240.dp).padding(end = 16.dp)
+                            }
+                            Box(modifier = cellModifier) {
                                 Text(
-                                    text = header.trim(),
-                                    style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.5.sp),
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFECECF1)
+                                    text = buildInlineMarkdown(cleanCell, defaultColor = Color(0xFFECECEC)),
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontSize = 13.5.sp,
+                                        lineHeight = 19.5.sp
+                                    ),
+                                    color = Color(0xFFECECEC)
                                 )
                             }
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(2.dp))
-
-                    // Data Rows
-                    rows.forEachIndexed { rowIndex, row ->
-                        Row(
-                            modifier = Modifier
-                                .background(if (rowIndex % 2 == 0) Color(0xFF18181B) else Color(0xFF1D1D21))
-                                .padding(vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            row.forEachIndexed { colIndex, cell ->
-                                Box(
-                                    modifier = Modifier
-                                        .widthIn(min = 110.dp, max = 240.dp)
-                                        .padding(horizontal = 12.dp)
-                                ) {
-                                    val cleanCell = cell.replace("\\_", "_").trim()
-                                    Text(
-                                        text = cleanCell,
-                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp, lineHeight = 18.sp),
-                                        color = Color(0xFFD1D1D6)
-                                    )
-                                }
-                            }
-                        }
-                        if (rowIndex < rows.size - 1) {
-                            HorizontalDivider(color = Color(0xFF26262C), thickness = 0.5.dp)
-                        }
-                    }
+                    // Divider between rows (matching ChatGPT: ultra-thin subtle line)
+                    HorizontalDivider(color = Color(0xFF1E1E22), thickness = 0.5.dp)
                 }
+            }
+        }
+
+        if (isCompact) {
+            tableContent()
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(scrollState)
+            ) {
+                tableContent()
             }
         }
     }
@@ -1026,6 +1015,14 @@ fun buildInlineMarkdown(
                     }
                     i = nextStar + 2
                     continue
+                } else {
+                    val boldContent = text.substring(i + 2)
+                    if (boldContent.isNotEmpty()) {
+                        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                            append(boldContent)
+                        }
+                    }
+                    break
                 }
             }
 
@@ -1039,6 +1036,14 @@ fun buildInlineMarkdown(
                     }
                     i = nextStar + 1
                     continue
+                } else {
+                    val italicContent = text.substring(i + 1)
+                    if (italicContent.isNotEmpty()) {
+                        withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                            append(italicContent)
+                        }
+                    }
+                    break
                 }
             }
 

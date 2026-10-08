@@ -139,78 +139,54 @@ class GemmaEngine(
             // Cap thread count to at most 4 to prevent heavy multi-core CPU thermal throttling & overheating
             val threadCount = minOf(4, Runtime.getRuntime().availableProcessors().coerceAtLeast(2))
 
-            // Attempt 1: GPU with Vision
+            // Attempt 1: Try GPU (pure text backend, fast and efficient)
+            var testEngine: Engine? = null
             try {
-                Log.d(TAG, "[$TAG] Attempting GPU + Vision...")
+                Log.d(TAG, "[$TAG] Attempting GPU initialization...")
                 val config = EngineConfig(
                     modelPath = modelPath,
-                    backend = Backend.GPU(),
-                    visionBackend = Backend.GPU(),
-                    maxNumImages = 1
+                    backend = Backend.GPU()
                 )
-                val testEngine = Engine(config)
+                testEngine = Engine(config)
                 testEngine.initialize()
                 loadedEngine = testEngine
                 backendChosen = BackendType.GPU
-                Log.i(TAG, "[$TAG] Model loaded successfully on GPU (Vision + Text)")
-            } catch (e1: Throwable) {
-                lastGpuError = e1.message ?: "Unknown GPU error"
-                Log.w(TAG, "[$TAG] GPU + Vision failed: ${e1.message}. Attempting pure GPU text...")
-                // Attempt 2: Pure GPU text
+                Log.i(TAG, "[$TAG] Model loaded successfully on GPU")
+            } catch (eGpu: Throwable) {
+                lastGpuError = eGpu.message ?: "GPU unsupported or out of memory"
+                Log.w(TAG, "[$TAG] GPU initialization failed: $lastGpuError. Cleaning up before CPU fallback...")
+                try {
+                    testEngine?.close()
+                } catch (_: Throwable) {}
+                testEngine = null
+                System.gc()
+
+                Log.i(TAG, "[$TAG] Falling back to CPU with $threadCount threads")
+                _engineState.value = EngineState.Loading("Falling back to CPU...")
+
+                // Attempt 2: CPU fallback (clean, robust text engine with 4 threads)
                 try {
                     val config = EngineConfig(
                         modelPath = modelPath,
-                        backend = Backend.GPU()
+                        backend = Backend.CPU(threadCount = threadCount)
                     )
-                    val testEngine = Engine(config)
+                    testEngine = Engine(config)
                     testEngine.initialize()
                     loadedEngine = testEngine
-                    backendChosen = BackendType.GPU
-                    Log.i(TAG, "[$TAG] Model loaded successfully on GPU (Text only)")
-                } catch (e2: Throwable) {
-                    lastGpuError = e2.message ?: lastGpuError
-                    Log.w(TAG, "[$TAG] GPU initialization failed: $lastGpuError")
-                    Log.i(TAG, "[$TAG] Falling back to CPU")
-                    _engineState.value = EngineState.Loading("Falling back to CPU...")
-
-                    // Attempt 3: CPU with Vision
+                    backendChosen = BackendType.CPU_FALLBACK
+                    Log.i(TAG, "[$TAG] Model loaded successfully on CPU fallback ($threadCount threads)")
+                } catch (fatal: Throwable) {
                     try {
-                        val config = EngineConfig(
-                            modelPath = modelPath,
-                            backend = Backend.CPU(threadCount = threadCount),
-                            visionBackend = Backend.CPU(threadCount = threadCount),
-                            maxNumImages = 1
-                        )
-                        val testEngine = Engine(config)
-                        testEngine.initialize()
-                        loadedEngine = testEngine
-                        backendChosen = BackendType.CPU_FALLBACK
-                        Log.i(TAG, "[$TAG] Model loaded successfully on CPU fallback (Vision + Text)")
-                    } catch (e3: Throwable) {
-                        Log.w(TAG, "[$TAG] CPU + Vision failed: ${e3.message}. Attempting pure CPU text...")
-                        // Attempt 4: Pure CPU text
-                        try {
-                            val config = EngineConfig(
-                                modelPath = modelPath,
-                                backend = Backend.CPU(threadCount = threadCount)
-                            )
-                            val testEngine = Engine(config)
-                            testEngine.initialize()
-                            loadedEngine = testEngine
-                            backendChosen = BackendType.CPU_FALLBACK
-                            Log.i(TAG, "[$TAG] Model loaded successfully on CPU fallback (Text only)")
-                        } catch (fatal: Throwable) {
-                            if (fatal is CancellationException) throw fatal
-                            val fatalMsg = if (lastGpuError != null) {
-                                "Failed to load model: GPU error: [$lastGpuError]. CPU error: [${fatal.localizedMessage}]"
-                            } else {
-                                "Failed to load model: ${fatal.localizedMessage ?: "Unknown initialization error"}"
-                            }
-                            Log.e(TAG, "[$TAG] $fatalMsg", fatal)
-                            _engineState.value = EngineState.Error(fatalMsg)
-                            return@withContext Result.failure(Exception(fatalMsg, fatal))
-                        }
-                    }
+                        testEngine?.close()
+                    } catch (_: Throwable) {}
+                    testEngine = null
+                    System.gc()
+
+                    if (fatal is CancellationException) throw fatal
+                    val fatalMsg = "Failed to load model: GPU error: [$lastGpuError]. CPU error: [${fatal.localizedMessage}]"
+                    Log.e(TAG, "[$TAG] $fatalMsg", fatal)
+                    _engineState.value = EngineState.Error(fatalMsg)
+                    return@withContext Result.failure(Exception(fatalMsg, fatal))
                 }
             }
 
