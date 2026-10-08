@@ -1,8 +1,8 @@
 package com.teja.gemmmobile
 
 import com.teja.gemmmobile.storage.StorageManagerHelper
+import com.teja.gemmmobile.storage.ChatSession
 import com.teja.gemmmobile.ui.ChatMessage
-import com.teja.gemmmobile.ui.ChatSession
 import com.teja.gemmmobile.ui.MessageRole
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals

@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.teja.gemmmobile.memory.MemoryItem
 import com.teja.gemmmobile.memory.MemoryManager
 import com.teja.gemmmobile.memory.AutonomousBrainMemoryHelper
