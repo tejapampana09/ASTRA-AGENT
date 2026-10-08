@@ -306,18 +306,23 @@ fun InChatCameraOverlay(
                                             override fun onCaptureSuccess(image: ImageProxy) {
                                                 scope.launch(Dispatchers.IO) {
                                                     try {
-                                                        val bitmap = image.toBitmap()
+                                                        val rawBitmap = image.toBitmap()
                                                         image.close()
 
+                                                        val scaledBitmap = com.teja.gemmmobile.storage.StorageManagerHelper.scaleBitmapDown(rawBitmap, 768)
+                                                        if (scaledBitmap != rawBitmap) {
+                                                            try { rawBitmap.recycle() } catch (_: Throwable) {}
+                                                        }
+
                                                         val stream = ByteArrayOutputStream()
-                                                        bitmap.compress(Bitmap.CompressFormat.JPEG, 90, stream)
+                                                        scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 80, stream)
                                                         val bytes = stream.toByteArray()
 
                                                         val doc = ExtractedDocument(
-                                                            fileName = "Photo_${System.currentTimeMillis()}.jpg",
+                                                            fileName = "Photo_${System.currentTimeMillis() % 10000}.jpg",
                                                             text = "",
                                                             wordCount = 0,
-                                                            previewBitmap = bitmap,
+                                                            previewBitmap = scaledBitmap,
                                                             isImage = true,
                                                             imageBytes = bytes
                                                         )
