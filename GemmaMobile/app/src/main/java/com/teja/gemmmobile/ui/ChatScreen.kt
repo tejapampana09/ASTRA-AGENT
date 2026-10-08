@@ -210,7 +210,6 @@ fun ChatScreen(
     val installState by viewModel.installState.collectAsState()
     val engineState by viewModel.engineState.collectAsState()
     val messages by viewModel.messages.collectAsState()
-    val inputText by viewModel.inputText.collectAsState()
     val isGenerating by viewModel.isGenerating.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val config by viewModel.config.collectAsState()
@@ -487,14 +486,20 @@ fun ChatScreen(
         }
     }
 
-    // While generating: auto-scroll token-by-token ONLY if user hasn't scrolled up manually
-    LaunchedEffect(messages.lastOrNull()?.text?.length, messages.lastOrNull()?.thoughtText?.length) {
-        if (messages.isNotEmpty() && isGenerating && !listState.isScrollInProgress) {
-            val totalItems = listState.layoutInfo.totalItemsCount
-            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            // Only auto-scroll when within 3 items of the bottom
-            if (totalItems > 0 && lastVisible >= totalItems - 3) {
-                listState.scrollToItem(messages.size)
+    // While generating: smooth throttled auto-scroll so we don't spam scrollToItem on every single character
+    LaunchedEffect(isGenerating) {
+        if (isGenerating) {
+            while (true) {
+                kotlinx.coroutines.delay(60L) // smooth 60ms frame-aligned throttle
+                if (!isGenerating) break
+                if (!listState.isScrollInProgress && messages.isNotEmpty()) {
+                    val totalItems = listState.layoutInfo.totalItemsCount
+                    val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                    // Only auto-scroll when within 3 items of the bottom
+                    if (totalItems > 0 && lastVisible >= totalItems - 3) {
+                        listState.scrollToItem(messages.size)
+                    }
+                }
             }
         }
     }
@@ -861,6 +866,19 @@ fun ChatScreen(
                             }
                         )
                     } else {
+                        val onSpeakStable = remember(viewModel) {
+                            { id: String, text: String -> viewModel.toggleSpeak(id, text) }
+                        }
+                        val onShareStable = remember(context) {
+                            { text: String -> ExportHelper.shareMessage(context, text) }
+                        }
+                        val onRegenerateStable = remember(viewModel) {
+                            { viewModel.regenerateLastResponse() }
+                        }
+                        val onLongPressUserMessageStable = remember {
+                            { msg: ChatMessage -> activeUserMenuMessage = msg }
+                        }
+
                         LazyColumn(
                             state = listState,
                             modifier = Modifier
@@ -881,10 +899,10 @@ fun ChatScreen(
                                 MessageBubble(
                                     message = message,
                                     isSpeaking = isSpeaking && currentlySpeakingId == message.id,
-                                    onSpeak = { viewModel.toggleSpeak(message.id, if (message.text.isNotBlank()) message.text else message.thoughtText) },
-                                    onShare = { ExportHelper.shareMessage(context, if (message.text.isNotBlank()) message.text else message.thoughtText) },
-                                    onRegenerate = { viewModel.regenerateLastResponse() },
-                                    onLongPressUserMessage = { activeUserMenuMessage = it }
+                                    onSpeak = onSpeakStable,
+                                    onShare = onShareStable,
+                                    onRegenerate = onRegenerateStable,
+                                    onLongPressUserMessage = onLongPressUserMessageStable
                                 )
                             }
 
@@ -1358,154 +1376,28 @@ fun ChatScreen(
                         }
                     }
 
-                    // Input Dock Column (strictly holds document chips, editing pill, and ChatInputBar)
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .then(
-                                if (!isImeVisible) Modifier.navigationBarsPadding() else Modifier
-                            )
-                            .padding(bottom = if (isImeVisible) 4.dp else 8.dp)
-                    ) {
-                        // Document Quick Action Chips (when document is attached)
-                        if (attachedDocument != null && !attachedDocument!!.isImage) {
-                            androidx.compose.foundation.lazy.LazyRow(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 4.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                val docChips = listOf(
-                                    Pair("📑 Summarize document", "Summarize this document"),
-                                    Pair("📚 Extract all topics", "Extract all topics and sections"),
-                                    Pair("🎯 Key takeaways", "Key takeaways and findings"),
-                                    Pair("❓ Ask a question", "")
-                                )
-                                items(docChips) { (chipLabel, actionPrompt) ->
-                                    Surface(
-                                        shape = RoundedCornerShape(12.dp),
-                                        color = Color(0xFF1E1E24),
-                                        border = BorderStroke(1.dp, Color(0xFF33333E)),
-                                        modifier = Modifier.liquidBounceClick(scaleDown = 0.95f) {
-                                            if (actionPrompt.isNotBlank()) {
-                                                viewModel.onInputTextChanged(actionPrompt)
-                                                viewModel.sendMessage()
-                                            } else {
-                                                keyboardController?.show()
-                                            }
-                                        }
-                                    ) {
-                                        Text(
-                                            text = chipLabel,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = Color(0xFFD6D6E0),
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
-                                        )
-                                    }
-                                }
+                    // Input Dock Column isolated from ChatScreen root to guarantee zero recomposition while typing
+                    ChatInputDock(
+                        viewModel = viewModel,
+                        isGenerating = isGenerating,
+                        isWebSearchEnabled = isWebSearchEnabled,
+                        engineState = engineState,
+                        attachedDocument = attachedDocument,
+                        editingMessageId = editingMessageId,
+                        onCancelEdit = { editingMessageId = null },
+                        onToggleAttachmentMenu = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            showAttachmentMenu = !showAttachmentMenu
+                        },
+                        onLaunchVoice = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to Gemma…")
                             }
+                            voiceLauncher.launch(intent)
                         }
-
-                        // Editing message pill (ChatGPT style)
-                        if (editingMessageId != null) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(start = 16.dp, end = 16.dp, bottom = 4.dp)
-                            ) {
-                                Surface(
-                                    shape = RoundedCornerShape(14.dp),
-                                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
-                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Edit,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                            modifier = Modifier.size(13.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = "Editing message",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontWeight = FontWeight.Medium,
-                                            color = MaterialTheme.colorScheme.onSecondaryContainer
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Icon(
-                                            imageVector = Icons.Default.Close,
-                                            contentDescription = "Cancel edit",
-                                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                            modifier = Modifier
-                                                .size(14.dp)
-                                                .clip(CircleShape)
-                                                .clickable {
-                                                    editingMessageId = null
-                                                    viewModel.onInputTextChanged("")
-                                                }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        // Floating ChatGPT style Input Bar
-                        ChatInputBar(
-                            inputText = inputText,
-
-                            onTextChanged = { viewModel.onInputTextChanged(it) },
-                            onSend = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                if (editingMessageId != null) {
-                                    val targetId = editingMessageId!!
-                                    editingMessageId = null
-                                    viewModel.editAndResendMessage(targetId, inputText)
-                                    viewModel.onInputTextChanged("")
-                                } else {
-                                    viewModel.sendMessage()
-                                    viewModel.onInputTextChanged("")
-                                }
-                            },
-                            onStop = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                viewModel.stopGeneration()
-                            },
-                            isGenerating = isGenerating,
-                            isWebSearchEnabled = isWebSearchEnabled,
-                            onToggleWebSearch = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                viewModel.toggleWebSearch()
-                            },
-                            isEnabled = engineState is EngineState.Ready || engineState is EngineState.Generating,
-                            onVoiceInput = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to Gemma…")
-                                }
-                                voiceLauncher.launch(intent)
-                            },
-                            onVoiceAssistant = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to Gemma…")
-                                }
-                                voiceLauncher.launch(intent)
-                            },
-                            onAttach = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                showAttachmentMenu = !showAttachmentMenu
-                            },
-                            hasAttachment = attachedDocument != null,
-                            attachedDocument = attachedDocument,
-                            onRemoveAttachment = { viewModel.clearAttachedDocument() }
-                        )
-                    }
+                    )
                 }
             }
         }
@@ -2196,8 +2088,8 @@ fun BackendBadge(engineState: EngineState) {
 fun MessageBubble(
     message: ChatMessage,
     isSpeaking: Boolean = false,
-    onSpeak: () -> Unit = {},
-    onShare: () -> Unit = {},
+    onSpeak: (String, String) -> Unit = { _, _ -> },
+    onShare: (String) -> Unit = {},
     onRegenerate: () -> Unit = {},
     onLongPressUserMessage: (ChatMessage) -> Unit = {}
 ) {
@@ -2569,7 +2461,7 @@ fun MessageBubble(
                                     .size(28.dp)
                                     .clip(CircleShape)
                                     .liquidBounceClick(scaleDown = 0.85f, alphaDown = 0.75f) {
-                                        onSpeak()
+                                        onSpeak(message.id, effectiveText)
                                     },
                                 contentAlignment = Alignment.Center
                             ) {
@@ -2586,7 +2478,7 @@ fun MessageBubble(
                                     .size(28.dp)
                                     .clip(CircleShape)
                                     .liquidBounceClick(scaleDown = 0.85f, alphaDown = 0.75f) {
-                                        onShare()
+                                        onShare(effectiveText)
                                     },
                                 contentAlignment = Alignment.Center
                             ) {
@@ -4066,6 +3958,161 @@ private enum class ActionButtonState {
 
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
+private fun ChatInputDock(
+    viewModel: ChatViewModel,
+    isGenerating: Boolean,
+    isWebSearchEnabled: Boolean,
+    engineState: EngineState,
+    attachedDocument: ExtractedDocument?,
+    editingMessageId: String?,
+    onCancelEdit: () -> Unit,
+    onToggleAttachmentMenu: () -> Unit,
+    onLaunchVoice: () -> Unit
+) {
+    val inputText by viewModel.inputText.collectAsState()
+    val haptic = LocalHapticFeedback.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val isImeVisible = WindowInsets.isImeVisible
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (!isImeVisible) Modifier.navigationBarsPadding() else Modifier
+            )
+            .padding(bottom = if (isImeVisible) 4.dp else 8.dp)
+    ) {
+        // Document Quick Action Chips (when document is attached)
+        if (attachedDocument != null && !attachedDocument.isImage) {
+            androidx.compose.foundation.lazy.LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val docChips = listOf(
+                    Pair("📑 Summarize document", "Summarize this document"),
+                    Pair("📚 Extract all topics", "Extract all topics and sections"),
+                    Pair("🎯 Key takeaways", "Key takeaways and findings"),
+                    Pair("❓ Ask a question", "")
+                )
+                items(docChips) { (chipLabel, actionPrompt) ->
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFF1E1E24),
+                        border = BorderStroke(1.dp, Color(0xFF33333E)),
+                        modifier = Modifier.liquidBounceClick(scaleDown = 0.95f) {
+                            if (actionPrompt.isNotBlank()) {
+                                viewModel.onInputTextChanged(actionPrompt)
+                                viewModel.sendMessage()
+                            } else {
+                                keyboardController?.show()
+                            }
+                        }
+                    ) {
+                        Text(
+                            text = chipLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFFD6D6E0),
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        // Editing message pill (ChatGPT style)
+        if (editingMessageId != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, bottom = 4.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Editing message",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Cancel edit",
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier
+                                .size(14.dp)
+                                .clip(CircleShape)
+                                .clickable {
+                                    onCancelEdit()
+                                    viewModel.onInputTextChanged("")
+                                }
+                        )
+                    }
+                }
+            }
+        }
+
+        // Floating ChatGPT style Input Bar
+        ChatInputBar(
+            inputText = inputText,
+            onTextChanged = { viewModel.onInputTextChanged(it) },
+            onSend = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                if (editingMessageId != null) {
+                    val targetId = editingMessageId
+                    onCancelEdit()
+                    viewModel.editAndResendMessage(targetId, inputText)
+                    viewModel.onInputTextChanged("")
+                } else {
+                    viewModel.sendMessage()
+                    viewModel.onInputTextChanged("")
+                }
+            },
+            onStop = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                viewModel.stopGeneration()
+            },
+            isGenerating = isGenerating,
+            isWebSearchEnabled = isWebSearchEnabled,
+            onToggleWebSearch = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                viewModel.toggleWebSearch()
+            },
+            isEnabled = engineState is EngineState.Ready || engineState is EngineState.Generating,
+            onVoiceInput = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onLaunchVoice()
+            },
+            onVoiceAssistant = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onLaunchVoice()
+            },
+            onAttach = onToggleAttachmentMenu,
+            hasAttachment = attachedDocument != null,
+            attachedDocument = attachedDocument,
+            onRemoveAttachment = { viewModel.clearAttachedDocument() }
+        )
+    }
+}
+
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
 fun ChatInputBar(
     inputText: String,
     onTextChanged: (String) -> Unit,
@@ -4111,22 +4158,14 @@ fun ChatInputBar(
     )
 
     // ChatGPT mobile floating island behavior:
-    // When idle / keyboard closed: 80% width centered pill (ChatGPT mobile idle style).
-    // When active / focused / typing / keyboard open: smooth, fast spring expansion to full width (100%).
-    val widthFraction by animateFloatAsState(
-        targetValue = if (isExpanded) 1f else 0.80f,
-        animationSpec = spring(
-            dampingRatio = 0.72f,
-            stiffness = Spring.StiffnessMediumLow
-        ),
-        label = "inputWidthFraction"
-    )
-
+    // ChatGPT mobile floating island behavior:
+    // When idle / keyboard closed: 32.dp horizontal margin (~82% width centered pill, ChatGPT mobile idle style).
+    // When active / focused / typing / keyboard open: smooth, fast spring expansion to full width (8.dp margin).
     val horizontalPadding by animateDpAsState(
-        targetValue = if (isExpanded) 10.dp else 14.dp,
+        targetValue = if (isExpanded) 8.dp else 32.dp,
         animationSpec = spring(
-            dampingRatio = 0.72f,
-            stiffness = Spring.StiffnessMediumLow
+            dampingRatio = 0.78f,
+            stiffness = Spring.StiffnessMedium
         ),
         label = "inputHorizontalPadding"
     )
@@ -4134,33 +4173,28 @@ fun ChatInputBar(
     val bottomPadding by animateDpAsState(
         targetValue = if (isExpanded) 2.dp else 4.dp,
         animationSpec = spring(
-            dampingRatio = 0.72f,
-            stiffness = Spring.StiffnessMediumLow
+            dampingRatio = 0.78f,
+            stiffness = Spring.StiffnessMedium
         ),
         label = "inputBottomPadding"
     )
 
-    // Floating Pill Island Container (ChatGPT AMOLED pure dark style)
-    Box(
+    // Floating Pill Island Surface (ChatGPT AMOLED pure dark style)
+    Surface(
+        shape = RoundedCornerShape(cornerRadius),
+        color = Color(0xFF212121),
+        border = BorderStroke(1.dp, Color(0xFF2C2C2C)),
+        shadowElevation = 6.dp,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = horizontalPadding, end = horizontalPadding, top = 2.dp, bottom = bottomPadding),
-        contentAlignment = Alignment.Center
-    ) {
-        Surface(
-            shape = RoundedCornerShape(cornerRadius),
-            color = Color(0xFF212121),
-            border = BorderStroke(1.dp, Color(0xFF2C2C2C)),
-            shadowElevation = 6.dp,
-            modifier = Modifier
-                .fillMaxWidth(widthFraction)
-                .animateContentSize(
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMedium
-                    )
+            .padding(start = horizontalPadding, end = horizontalPadding, top = 2.dp, bottom = bottomPadding)
+            .animateContentSize(
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMedium
                 )
-        ) {
+            )
+    ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -4455,7 +4489,6 @@ fun ChatInputBar(
             }
         }
     }
-}
 }
 
 @Composable

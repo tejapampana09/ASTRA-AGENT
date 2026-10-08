@@ -63,6 +63,9 @@ private val REGEX_HTML_LINK = Regex("""<a\s+(?:[^>]*?\s+)?href=["']([^"']+)["'][
 private val REGEX_RAW_HREF = Regex("""href=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE)
 private val REGEX_HTML_SELF_CLOSING = Regex("""<a\s+(?:[^>]*?\s+)?href=["']([^"']+)["'][^>]*\/?>""", RegexOption.IGNORE_CASE)
 
+private val markdownBlockCache = android.util.LruCache<String, List<MarkdownBlock>>(300)
+private val renderedLineCache = android.util.LruCache<String, List<RenderedLine>>(400)
+
 sealed class MarkdownBlock {
     data class Code(val language: String, val code: String) : MarkdownBlock()
     data class Table(val headers: List<String>, val rows: List<List<String>>) : MarkdownBlock()
@@ -154,78 +157,87 @@ private fun TextBlockView(
     codeBgColor: Color,
     searchResults: List<SearchResult> = emptyList()
 ) {
-    val parsedLines = remember(content, textColor, linkColor, codeBgColor, searchResults) {
-        val sanitized = sanitizeMarkdown(content, searchResults)
-        val rawLines = sanitized.lines()
-        val result = mutableListOf<RenderedLine>()
+    val cacheKey = remember(content, textColor, linkColor, codeBgColor, searchResults.size) {
+        "$content|${textColor.value}|${linkColor.value}|${codeBgColor.value}|${searchResults.size}"
+    }
+    val parsedLines = remember(cacheKey) {
+        val cached = renderedLineCache.get(cacheKey)
+        if (cached != null) {
+            cached
+        } else {
+            val sanitized = sanitizeMarkdown(content, searchResults)
+            val rawLines = sanitized.lines()
+            val result = mutableListOf<RenderedLine>()
 
-        for ((index, line) in rawLines.withIndex()) {
-            val trimmed = line.trim()
-            if (trimmed.isEmpty()) {
-                if (index > 0 && index < rawLines.size - 1) {
-                    result.add(RenderedLine.Blank)
+            for ((index, line) in rawLines.withIndex()) {
+                val trimmed = line.trim()
+                if (trimmed.isEmpty()) {
+                    if (index > 0 && index < rawLines.size - 1) {
+                        result.add(RenderedLine.Blank)
+                    }
+                    continue
                 }
-                continue
-            }
 
-            when {
-                trimmed.startsWith("### ") -> {
-                    result.add(
-                        RenderedLine.Header(
-                            annotatedText = buildInlineMarkdown(trimmed.removePrefix("### ").trim(), textColor, linkColor, codeBgColor),
-                            level = 3
+                when {
+                    trimmed.startsWith("### ") -> {
+                        result.add(
+                            RenderedLine.Header(
+                                annotatedText = buildInlineMarkdown(trimmed.removePrefix("### ").trim(), textColor, linkColor, codeBgColor),
+                                level = 3
+                            )
                         )
-                    )
-                }
-                trimmed.startsWith("## ") -> {
-                    result.add(
-                        RenderedLine.Header(
-                            annotatedText = buildInlineMarkdown(trimmed.removePrefix("## ").trim(), textColor, linkColor, codeBgColor),
-                            level = 2
+                    }
+                    trimmed.startsWith("## ") -> {
+                        result.add(
+                            RenderedLine.Header(
+                                annotatedText = buildInlineMarkdown(trimmed.removePrefix("## ").trim(), textColor, linkColor, codeBgColor),
+                                level = 2
+                            )
                         )
-                    )
-                }
-                trimmed.startsWith("# ") -> {
-                    result.add(
-                        RenderedLine.Header(
-                            annotatedText = buildInlineMarkdown(trimmed.removePrefix("# ").trim(), textColor, linkColor, codeBgColor),
-                            level = 1
+                    }
+                    trimmed.startsWith("# ") -> {
+                        result.add(
+                            RenderedLine.Header(
+                                annotatedText = buildInlineMarkdown(trimmed.removePrefix("# ").trim(), textColor, linkColor, codeBgColor),
+                                level = 1
+                            )
                         )
-                    )
-                }
-                trimmed.startsWith("* ") || trimmed.startsWith("- ") || trimmed.startsWith("• ") -> {
-                    val c = when {
-                        trimmed.startsWith("* ") -> trimmed.removePrefix("* ")
-                        trimmed.startsWith("- ") -> trimmed.removePrefix("- ")
-                        else -> trimmed.removePrefix("• ")
-                    }.trim()
-                    result.add(
-                        RenderedLine.Bullet(
-                            prefix = "•",
-                            annotatedText = buildInlineMarkdown(c, textColor, linkColor, codeBgColor)
+                    }
+                    trimmed.startsWith("* ") || trimmed.startsWith("- ") || trimmed.startsWith("• ") -> {
+                        val c = when {
+                            trimmed.startsWith("* ") -> trimmed.removePrefix("* ")
+                            trimmed.startsWith("- ") -> trimmed.removePrefix("- ")
+                            else -> trimmed.removePrefix("• ")
+                        }.trim()
+                        result.add(
+                            RenderedLine.Bullet(
+                                prefix = "•",
+                                annotatedText = buildInlineMarkdown(c, textColor, linkColor, codeBgColor)
+                            )
                         )
-                    )
-                }
-                trimmed.matches(REGEX_NUMBERED_LIST) -> {
-                    val prefix = trimmed.substringBefore(". ") + "."
-                    val c = trimmed.substringAfter(". ").trim()
-                    result.add(
-                        RenderedLine.Bullet(
-                            prefix = prefix,
-                            annotatedText = buildInlineMarkdown(c, textColor, linkColor, codeBgColor)
+                    }
+                    trimmed.matches(REGEX_NUMBERED_LIST) -> {
+                        val prefix = trimmed.substringBefore(". ") + "."
+                        val c = trimmed.substringAfter(". ").trim()
+                        result.add(
+                            RenderedLine.Bullet(
+                                prefix = prefix,
+                                annotatedText = buildInlineMarkdown(c, textColor, linkColor, codeBgColor)
+                            )
                         )
-                    )
-                }
-                else -> {
-                    result.add(
-                        RenderedLine.Paragraph(
-                            annotatedText = buildInlineMarkdown(trimmed, textColor, linkColor, codeBgColor)
+                    }
+                    else -> {
+                        result.add(
+                            RenderedLine.Paragraph(
+                                annotatedText = buildInlineMarkdown(trimmed, textColor, linkColor, codeBgColor)
+                            )
                         )
-                    )
+                    }
                 }
             }
+            renderedLineCache.put(cacheKey, result)
+            result
         }
-        result
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -369,9 +381,179 @@ fun CodeBlockView(
     }
 }
 
+private val GREEK_MAP = listOf(
+    "\\alpha" to "α", "\\Alpha" to "Α",
+    "\\beta" to "β", "\\Beta" to "Β",
+    "\\gamma" to "γ", "\\Gamma" to "Γ",
+    "\\delta" to "δ", "\\Delta" to "Δ",
+    "\\epsilon" to "ε", "\\varepsilon" to "ε",
+    "\\zeta" to "ζ",
+    "\\eta" to "η",
+    "\\theta" to "θ", "\\Theta" to "Θ", "\\vartheta" to "θ",
+    "\\iota" to "ι",
+    "\\kappa" to "κ",
+    "\\lambda" to "λ", "\\Lambda" to "Λ",
+    "\\mu" to "μ",
+    "\\nu" to "ν",
+    "\\xi" to "ξ", "\\Xi" to "Ξ",
+    "\\pi" to "π", "\\Pi" to "Π",
+    "\\rho" to "ρ", "\\varrho" to "ρ",
+    "\\sigma" to "σ", "\\Sigma" to "Σ",
+    "\\tau" to "τ",
+    "\\upsilon" to "υ", "\\Upsilon" to "Υ",
+    "\\phi" to "φ", "\\Phi" to "Φ", "\\varphi" to "φ",
+    "\\chi" to "χ",
+    "\\psi" to "ψ", "\\Psi" to "Ψ",
+    "\\omega" to "ω", "\\Omega" to "Ω"
+)
+
+private val MATH_SYMBOLS_MAP = listOf(
+    "\\cdot" to " · ",
+    "\\times" to " × ",
+    "\\div" to " ÷ ",
+    "\\pm" to "±",
+    "\\mp" to "∓",
+    "\\neq" to " ≠ ", "\\ne" to " ≠ ",
+    "\\leq" to " ≤ ", "\\le" to " ≤ ",
+    "\\geq" to " ≥ ", "\\ge" to " ≥ ",
+    "\\approx" to " ≈ ",
+    "\\sim" to " ∼ ",
+    "\\simeq" to " ≃ ",
+    "\\equiv" to " ≡ ",
+    "\\propto" to " ∝ ",
+    "\\in" to " ∈ ",
+    "\\notin" to " ∉ ",
+    "\\subset" to " ⊂ ",
+    "\\subseteq" to " ⊆ ",
+    "\\cup" to " ∪ ",
+    "\\cap" to " ∩ ",
+    "\\rightarrow" to " → ", "\\to" to " → ",
+    "\\leftarrow" to " ← ",
+    "\\Rightarrow" to " ⇒ ", "\\Leftarrow" to " ⇐ ",
+    "\\leftrightarrow" to " ↔ ",
+    "\\infty" to "∞",
+    "\\partial" to "∂",
+    "\\nabla" to "∇",
+    "\\forall" to "∀",
+    "\\exists" to "∃",
+    "\\sum" to "∑",
+    "\\prod" to "∏",
+    "\\int" to "∫",
+    "\\parallel" to " ‖ ",
+    "\\|" to " ‖ ",
+    "\\sqrt" to "√",
+    "\\dots" to "…", "\\cdots" to "…", "\\ldots" to "…",
+    "\\quad" to " ", "\\qquad" to "  ", "\\," to " ", "\\;" to " "
+)
+
+private val REGEX_MATH_TEXT_WRAPPERS = Regex("""\\(?:text|mathrm|mathbf|boldsymbol|operatorname)\{([^}]+)\}""")
+private val REGEX_MATH_FRAC = Regex("""\\frac\{([^}]+)\}\{([^}]+)\}""")
+private val REGEX_MATH_SQRT = Regex("""\\sqrt\{([^}]+)\}""")
+private val REGEX_PAREN_BAR = Regex("""\(([^()|]+)\|([^()|]+)\)""")
+
 /**
- * Cleans table cells, stripping surrounding quotes and balancing any stray asterisks
- * so markdown text styles properly as bold/italic with zero raw stars rendered.
+ * Transforms raw LaTeX math equations and symbols into clean, readable Unicode math representation (ChatGPT style).
+ * Supports Greek letters (\mu -> μ, \sigma -> σ), operators (\cdot -> ·, \sim -> ∼), \text{...}, superscripts,
+ * subscripts, and removes raw bounding dollar signs ($...$ and $$...$$).
+ */
+fun formatLatexMath(input: String): String {
+    if (!input.contains('$') && !input.contains('\\')) return input
+
+    var s = input
+
+    // 1. Text wrappers: \text{KL} -> KL, \mathrm{...} -> ..., etc.
+    s = s.replace(REGEX_MATH_TEXT_WRAPPERS, "$1")
+
+    // 2. Fractions: \frac{a}{b} -> (a / b)
+    s = s.replace(REGEX_MATH_FRAC, "($1 / $2)")
+
+    // 3. Square root: \sqrt{x} -> √(x)
+    s = s.replace(REGEX_MATH_SQRT, "√($1)")
+
+    // 4. Brackets: \left(, \right), etc.
+    s = s.replace("\\left(", "(")
+        .replace("\\right)", ")")
+        .replace("\\left[", "[")
+        .replace("\\right]", "]")
+        .replace("\\left\\{", "{")
+        .replace("\\right\\}", "}")
+        .replace("\\{", "{")
+        .replace("\\}", "}")
+
+    // 5. Greek letters replacement
+    for ((latex, unicode) in GREEK_MAP) {
+        s = s.replace(latex, unicode)
+    }
+
+    // 6. Math symbols replacement
+    for ((latex, unicode) in MATH_SYMBOLS_MAP) {
+        s = s.replace(latex, unicode)
+    }
+
+    // 7. Common sub/superscripts
+    s = s.replace("_{KL}", "_KL")
+        .replace("_{total}", "_total")
+        .replace("^{2}", "²")
+        .replace("^2", "²")
+        .replace("^{3}", "³")
+        .replace("^3", "³")
+        .replace("^{T}", "ᵀ")
+        .replace("^T", "ᵀ")
+        .replace("^{*}", "*")
+        .replace("^{-1}", "⁻¹")
+
+    // 8. Conditionals (z|x) -> (z | x)
+    s = s.replace(REGEX_PAREN_BAR, "($1 | $2)")
+    s = s.replace("||", " ‖ ")
+
+    // 9. Strip surrounding $ and $$
+    s = s.replace(Regex("""\$\$([^$\n]+)\$\$""")) { match ->
+        match.groupValues[1].trim()
+    }
+    s = s.replace(Regex("""\$([^$\n]+)\$""")) { match ->
+        match.groupValues[1].trim()
+    }
+
+    // 10. Clean duplicate spaces
+    s = s.replace(Regex("""[ \t]{2,}"""), " ")
+
+    return s
+}
+
+/**
+ * Splits a table line on '|' while correctly preserving pipes inside math formulas (e.g. $Q(z|x)$) or backticks.
+ */
+fun splitTableRow(line: String): List<String> {
+    val cells = mutableListOf<String>()
+    val current = StringBuilder()
+    var inMath = false
+    var inCode = false
+    var i = 0
+    val len = line.length
+
+    while (i < len) {
+        val c = line[i]
+        if (c == '`') {
+            inCode = !inCode
+            current.append(c)
+        } else if (c == '$' && !inCode) {
+            inMath = !inMath
+            current.append(c)
+        } else if (c == '|' && !inMath && !inCode) {
+            cells.add(current.toString().trim())
+            current.clear()
+        } else {
+            current.append(c)
+        }
+        i++
+    }
+    cells.add(current.toString().trim())
+    return cells
+}
+
+/**
+ * Cleans table cells, stripping surrounding quotes, formatting LaTeX math cleanly,
+ * and balancing any stray asterisks so markdown text styles properly as bold/italic with zero raw stars rendered.
  */
 fun cleanTableCell(raw: String): String {
     var s = raw.replace("\\_", "_").trim()
@@ -379,6 +561,8 @@ fun cleanTableCell(raw: String): String {
     if (s.length >= 2 && ((s.startsWith("\"") && s.endsWith("\"")) || (s.startsWith("'") && s.endsWith("'")))) {
         s = s.substring(1, s.length - 1).trim()
     }
+    // Clean and beautify any LaTeX / mathematical notation
+    s = formatLatexMath(s)
     // Balance trailing ** if missing leading **
     if (s.endsWith("**") && !s.startsWith("**")) {
         s = "**$s"
@@ -501,9 +685,14 @@ fun MarkdownTableView(
  */
 fun parseMarkdownBlocks(input: String): List<MarkdownBlock> {
     if (input.isBlank()) return emptyList()
+    val cached = markdownBlockCache.get(input)
+    if (cached != null) return cached
+
     // Fast-path: 90%+ of text messages have no code blocks and no tables
     if (!input.contains("```") && !input.contains('|')) {
-        return listOf(MarkdownBlock.Text(input))
+        val result = listOf(MarkdownBlock.Text(input))
+        markdownBlockCache.put(input, result)
+        return result
     }
 
     val blocks = mutableListOf<MarkdownBlock>()
@@ -540,7 +729,9 @@ fun parseMarkdownBlocks(input: String): List<MarkdownBlock> {
         }
     }
 
-    return if (blocks.isEmpty() && input.isNotBlank()) listOf(MarkdownBlock.Text(input)) else blocks
+    val result = if (blocks.isEmpty() && input.isNotBlank()) listOf(MarkdownBlock.Text(input)) else blocks
+    markdownBlockCache.put(input, result)
+    return result
 }
 
 /**
@@ -593,7 +784,7 @@ fun parseMarkdownTable(raw: String): MarkdownBlock.Table? {
     val separatorLine = lines[1]
     if (!headerLine.startsWith("|") || !separatorLine.startsWith("|")) return null
 
-    val rawHeaders = headerLine.split("|").map { it.trim() }
+    val rawHeaders = splitTableRow(headerLine)
     val headers = if (rawHeaders.size > 2 && rawHeaders.first().isEmpty() && rawHeaders.last().isEmpty()) {
         rawHeaders.subList(1, rawHeaders.size - 1)
     } else {
@@ -605,7 +796,7 @@ fun parseMarkdownTable(raw: String): MarkdownBlock.Table? {
     for (i in 2 until lines.size) {
         val line = lines[i]
         if (line.startsWith("|")) {
-            val rawCells = line.split("|").map { it.trim() }
+            val rawCells = splitTableRow(line)
             val cells = if (rawCells.size > 2 && rawCells.first().isEmpty() && rawCells.last().isEmpty()) {
                 rawCells.subList(1, rawCells.size - 1)
             } else {
@@ -779,14 +970,8 @@ fun getSourceBrand(url: String, title: String): Pair<String, String> {
  */
 fun sanitizeMarkdown(input: String, searchResults: List<SearchResult> = emptyList()): String {
     var s = input
-    // 1. Math/LaTeX cleanups
-    if (s.contains('$') || s.contains('\\')) {
-        s = s.replace(REGEX_TEXT_1, "$1")
-        s = s.replace(REGEX_TEXT_2, "$1")
-        s = s.replace(REGEX_TEXT_3, "$1")
-        s = s.replace(REGEX_TEXT_4, "$1")
-        s = s.replace(REGEX_TEXT_5, "$1")
-    }
+    // 1. Math/LaTeX format & beautification
+    s = formatLatexMath(s)
 
     // 2. Strip robotic disclaimers so response sounds natural like ChatGPT
     val roboticPrefixes = listOf(
@@ -899,11 +1084,12 @@ fun sanitizeMarkdown(input: String, searchResults: List<SearchResult> = emptyLis
  * Parses inline spans: links, **bold**, *italic*, and `code` into an AnnotatedString with clickable URL annotations.
  */
 fun buildInlineMarkdown(
-    text: String,
+    rawText: String,
     defaultColor: Color,
     linkColor: Color = Color(0xFF58A6FF),
     codeBgColor: Color = Color(0xFFEEEEEE)
 ): AnnotatedString {
+    val text = formatLatexMath(rawText)
     return buildAnnotatedString {
         var i = 0
         val length = text.length

@@ -1,5 +1,6 @@
 package com.teja.gemmmobile.search
 
+import androidx.compose.runtime.Immutable
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -18,6 +19,7 @@ private const val TAG = "WebSearchClient"
 /**
  * Clean data model for a single web search snippet.
  */
+@Immutable
 data class SearchResult(
     val title: String,
     val url: String,
