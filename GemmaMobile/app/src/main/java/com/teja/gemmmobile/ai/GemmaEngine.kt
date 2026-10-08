@@ -338,38 +338,68 @@ data class EngineChunk(
                     }
 
                     val messageFlow = if (currentImageBytes != null && currentImageBytes.isNotEmpty()) {
+                        var visionBytes = currentImageBytes
+                        var visionFlow: kotlinx.coroutines.flow.Flow<Message>? = null
+
+                        // Attempt 1: send as-is (JPEG)
                         try {
                             val contents = Contents.of(
-                                Content.ImageBytes(currentImageBytes),
+                                Content.ImageBytes(visionBytes!!),
                                 Content.Text(prompt)
                             )
-                            targetConv.sendMessageAsync(contents = contents, thinkingConfig = thinkingConfig)
-                        } catch (e: Throwable) {
-                            Log.w(TAG, "[$TAG] Model does not accept image bytes, falling back to text prompt: ${e.message}")
-                            currentImageBytes = null
-                            targetConv.sendMessageAsync(text = prompt, thinkingConfig = thinkingConfig)
+                            visionFlow = targetConv.sendMessageAsync(contents = contents, thinkingConfig = thinkingConfig)
+                            Log.d(TAG, "[$TAG] Vision: sending JPEG bytes (${visionBytes.size} bytes)")
+                        } catch (e1: Throwable) {
+                            Log.w(TAG, "[$TAG] Vision JPEG failed: ${e1.message}. Trying PNG re-encode...")
+                            // Attempt 2: re-encode to PNG
+                            try {
+                                val bmp = android.graphics.BitmapFactory.decodeByteArray(visionBytes, 0, visionBytes!!.size)
+                                if (bmp != null) {
+                                    val pngStream = java.io.ByteArrayOutputStream()
+                                    bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, pngStream)
+                                    val pngBytes = pngStream.toByteArray()
+                                    val contents = Contents.of(
+                                        Content.ImageBytes(pngBytes),
+                                        Content.Text(prompt)
+                                    )
+                                    visionFlow = targetConv.sendMessageAsync(contents = contents, thinkingConfig = thinkingConfig)
+                                    Log.d(TAG, "[$TAG] Vision: PNG re-encode succeeded (${pngBytes.size} bytes)")
+                                } else throw IllegalStateException("Bitmap decode failed")
+                            } catch (e2: Throwable) {
+                                Log.w(TAG, "[$TAG] Vision PNG also failed: ${e2.message}. Emitting error to user.")
+                                // Both formats failed — emit clear message, don't confuse model
+                                emit(EngineChunk(text = "I wasn't able to process this image. The on-device model may not support image inputs, or the image format is unsupported. Try describing what you'd like to know and I'll help with text."))
+                                succeeded = true
+                                currentImageBytes = null
+                                break
+                            }
                         }
+
+                        visionFlow ?: targetConv.sendMessageAsync(text = prompt, thinkingConfig = thinkingConfig)
                     } else {
                         targetConv.sendMessageAsync(text = prompt, thinkingConfig = thinkingConfig)
                     }
 
                     var emittedAny = false
-                    messageFlow.collect { message: Message ->
-                        val thoughtChannel = message.channels["thought"]
-                            ?: message.channels["thinking"]
-                            ?: ""
-                        val textContent = message.toString()
+                    if (!succeeded) {
+                        messageFlow.collect { message: Message ->
+                            val thoughtChannel = message.channels["thought"]
+                                ?: message.channels["thinking"]
+                                ?: ""
+                            val textContent = message.toString()
 
-                        if (thoughtChannel.isNotEmpty() || textContent.isNotEmpty()) {
-                            emittedAny = true
-                            emit(EngineChunk(text = textContent, thought = thoughtChannel))
+                            if (thoughtChannel.isNotEmpty() || textContent.isNotEmpty()) {
+                                emittedAny = true
+                                emit(EngineChunk(text = textContent, thought = thoughtChannel))
+                            }
                         }
                     }
 
-                    if (!emittedAny && currentImageBytes != null) {
-                        Log.w(TAG, "[$TAG] Vision input yielded 0 tokens, retrying as text prompt...")
+                    if (!succeeded && !emittedAny && currentImageBytes != null) {
+                        // Model accepted but returned nothing — emit clear message
+                        Log.w(TAG, "[$TAG] Vision input yielded 0 tokens.")
+                        emit(EngineChunk(text = "I received the image but couldn't generate a response. The model may not fully support vision on this device. Please try again or describe the image in text."))
                         currentImageBytes = null
-                        continue
                     }
 
                     succeeded = true
@@ -388,9 +418,10 @@ data class EngineChunk(
                         break
                     }
                     if (currentImageBytes != null && attempt < 2) {
-                        Log.w(TAG, "[$TAG] Vision generation failed ($errStr), retrying attempt $attempt with text prompt.")
-                        currentImageBytes = null
-                        continue
+                        Log.w(TAG, "[$TAG] Vision generation failed ($errStr), emitting error to user.")
+                        emit(EngineChunk(text = "I wasn't able to analyze this image. The model may not support vision on this device. Try describing what's in the image and I'll help with text."))
+                        succeeded = true
+                        break
                     }
                     Log.e(TAG, "[$TAG] Generation failure", e)
                     throw e
