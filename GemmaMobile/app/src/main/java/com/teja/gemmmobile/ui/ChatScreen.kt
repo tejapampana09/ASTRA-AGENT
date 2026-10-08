@@ -179,6 +179,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.animation.core.Animatable
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -360,6 +368,73 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val canScrollForward by remember { derivedStateOf { listState.canScrollForward } }
     var isScrollToBottomVisible by remember { mutableStateOf(false) }
+
+    // ChatGPT-style Pull Down / Overdrag to Start New Chat
+    val pullOffsetAnim = remember { Animatable(0f) }
+    val density = LocalDensity.current
+    val pullTriggerThresholdPx = with(density) { 76.dp.toPx() }
+    val pullMaxOffsetPx = with(density) { 130.dp.toPx() }
+    var hasTriggeredThresholdHaptic by remember { mutableStateOf(false) }
+
+    val pullToNewChatConnection = remember(messages.isNotEmpty(), listState) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                // When dragging finger up while pull indicator is active, consume upward delta to collapse offset
+                if (pullOffsetAnim.value > 0f && available.y < 0f && source == NestedScrollSource.UserInput) {
+                    val newOffset = (pullOffsetAnim.value + available.y).coerceAtLeast(0f)
+                    scope.launch { pullOffsetAnim.snapTo(newOffset) }
+                    if (newOffset < pullTriggerThresholdPx) {
+                        hasTriggeredThresholdHaptic = false
+                    }
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
+            }
+
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (messages.isNotEmpty() && source == NestedScrollSource.UserInput && available.y > 0f) {
+                    val isAtTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+                    if (isAtTop) {
+                        // Resistance diminishes as pull increases (rubber-band feel)
+                        val resistance = 0.45f * (1f - (pullOffsetAnim.value / (pullMaxOffsetPx * 1.5f)).coerceIn(0f, 0.65f))
+                        val newOffset = (pullOffsetAnim.value + available.y * resistance).coerceAtMost(pullMaxOffsetPx)
+                        scope.launch { pullOffsetAnim.snapTo(newOffset) }
+                        if (newOffset >= pullTriggerThresholdPx && !hasTriggeredThresholdHaptic) {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            hasTriggeredThresholdHaptic = true
+                        } else if (newOffset < pullTriggerThresholdPx) {
+                            hasTriggeredThresholdHaptic = false
+                        }
+                        return Offset(0f, available.y)
+                    }
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (pullOffsetAnim.value > 0f) {
+                    val triggered = pullOffsetAnim.value >= pullTriggerThresholdPx
+                    if (triggered) {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        withContext(Dispatchers.Main) {
+                            viewModel.createNewChat()
+                            Toast.makeText(context, "New chat started", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    hasTriggeredThresholdHaptic = false
+                    pullOffsetAnim.animateTo(
+                        targetValue = 0f,
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioMediumBouncy,
+                            stiffness = Spring.StiffnessMediumLow
+                        )
+                    )
+                    return available
+                }
+                return Velocity.Zero
+            }
+        }
+    }
 
     // Floating Scroll Down Button Auto-Hide (ChatGPT style):
     // Appears on scroll interaction, stays for 2 seconds, then smoothly auto-hides.
@@ -777,7 +852,12 @@ fun ChatScreen(
                     } else {
                         LazyColumn(
                             state = listState,
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .nestedScroll(pullToNewChatConnection)
+                                .graphicsLayer {
+                                    translationY = pullOffsetAnim.value * 0.45f
+                                },
                             contentPadding = PaddingValues(
                                 start = 16.dp,
                                 end = 16.dp,
@@ -1066,6 +1146,53 @@ fun ChatScreen(
                                 )
                             }
                         }
+                    }
+                }
+            }
+
+            // ChatGPT-style Floating Indicator for Pull-Down New Chat
+            if (pullOffsetAnim.value > 2f) {
+                val pullProgress = (pullOffsetAnim.value / pullTriggerThresholdPx).coerceIn(0f, 1f)
+                val isTriggered = pullOffsetAnim.value >= pullTriggerThresholdPx
+                val pillTranslationY = with(density) {
+                    WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 54.dp + (pullOffsetAnim.value * 0.35f).toDp()
+                }
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = Color(0xEE1E1E22),
+                    border = BorderStroke(
+                        1.dp,
+                        if (isTriggered) Color(0xFF10A37F) else Color(0x33FFFFFF)
+                    ),
+                    shadowElevation = 6.dp,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .offset(y = pillTranslationY)
+                        .graphicsLayer {
+                            alpha = (pullProgress * 1.5f).coerceIn(0f, 1f)
+                            scaleX = 0.85f + 0.15f * pullProgress
+                            scaleY = 0.85f + 0.15f * pullProgress
+                        }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = null,
+                            tint = if (isTriggered) Color(0xFF10A37F) else Color(0xFFCCCCCC),
+                            modifier = Modifier
+                                .size(16.dp)
+                                .rotate(pullProgress * 90f)
+                        )
+                        Text(
+                            text = if (isTriggered) "Release for new chat" else "Pull down for new chat",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (isTriggered) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (isTriggered) Color.White else Color(0xFFAAAAAA)
+                        )
                     }
                 }
             }
