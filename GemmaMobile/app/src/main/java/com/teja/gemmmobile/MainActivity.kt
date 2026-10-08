@@ -15,6 +15,8 @@ import androidx.compose.ui.graphics.Color
 import com.teja.gemmmobile.ui.ChatScreen
 import com.teja.gemmmobile.ui.ChatViewModel
 
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.material3.darkColorScheme
 
 // Sleek Translucent Obsidian Dark color scheme — liquid frosted glass aesthetic
@@ -56,12 +58,31 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
 
         setContent {
-            MaterialTheme(colorScheme = GemmaColorScheme) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    ChatScreen(viewModel = chatViewModel)
+            val currentTheme by chatViewModel.selectedTheme.collectAsState()
+            val colorScheme = androidx.compose.material3.darkColorScheme(
+                primary = currentTheme.accent,
+                onPrimary = Color.White,
+                primaryContainer = currentTheme.surface,
+                onPrimaryContainer = Color.White,
+                secondary = currentTheme.accent,
+                onSecondary = Color.White,
+                surface = currentTheme.surface,
+                onSurface = Color.White,
+                surfaceVariant = currentTheme.userBubble,
+                onSurfaceVariant = Color(0xFFC7C7CC),
+                background = currentTheme.background,
+                onBackground = Color.White,
+                outline = currentTheme.border
+            )
+
+            androidx.compose.runtime.CompositionLocalProvider(com.teja.gemmmobile.ui.LocalChatTheme provides currentTheme) {
+                MaterialTheme(colorScheme = colorScheme) {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = currentTheme.background
+                    ) {
+                        ChatScreen(viewModel = chatViewModel)
+                    }
                 }
             }
         }

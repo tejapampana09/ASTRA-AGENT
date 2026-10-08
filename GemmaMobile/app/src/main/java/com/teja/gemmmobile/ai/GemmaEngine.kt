@@ -337,8 +337,20 @@ data class EngineChunk(
         check(eng != null && eng.isInitialized()) { "Model is not initialized. Please install model first." }
 
         val effectiveSysPrompt = systemInstruction ?: currentConfig.systemPrompt
-        val basePromptTokens = com.teja.gemmmobile.context.ContextManager.estimateTokens(prompt) +
-            com.teja.gemmmobile.context.ContextManager.estimateTokens(effectiveSysPrompt)
+        val sysTokens = com.teja.gemmmobile.context.ContextManager.estimateTokens(effectiveSysPrompt)
+        val maxAllowedPromptTokens = 1200
+        val rawPromptTokens = com.teja.gemmmobile.context.ContextManager.estimateTokens(prompt)
+        val safePrompt = if (rawPromptTokens > maxAllowedPromptTokens) {
+            val excessChars = (rawPromptTokens - maxAllowedPromptTokens) * 3
+            if (prompt.length > excessChars + 300) {
+                prompt.substring(excessChars)
+            } else {
+                prompt.takeLast(1000)
+            }
+        } else {
+            prompt
+        }
+        val basePromptTokens = com.teja.gemmmobile.context.ContextManager.estimateTokens(safePrompt) + sysTokens
         val effectiveThinking = enableThinkingOverride ?: currentConfig.enableThinking
         val effectiveThinkingBudget = if (effectiveThinking) minOf(currentConfig.thinkingBudget, 160) else 0
 
@@ -438,9 +450,9 @@ data class EngineChunk(
                             }
                         }
 
-                        visionFlow ?: targetConv.sendMessageAsync(text = prompt, thinkingConfig = thinkingConfig)
+                        visionFlow ?: targetConv.sendMessageAsync(text = safePrompt, thinkingConfig = thinkingConfig)
                     } else {
-                        targetConv.sendMessageAsync(text = prompt, thinkingConfig = thinkingConfig)
+                        targetConv.sendMessageAsync(text = safePrompt, thinkingConfig = thinkingConfig)
                     }
 
                     var emittedAny = false

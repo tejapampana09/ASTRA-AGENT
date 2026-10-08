@@ -41,13 +41,21 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.imeNestedScroll
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -98,9 +106,8 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloseFullscreen
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -108,12 +115,15 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -177,6 +187,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.animation.core.Animatable
@@ -216,6 +227,7 @@ fun ChatScreen(
     val memories by viewModel.memories.collectAsState()
     val memoryUpdatedEvent by viewModel.memoryUpdatedEvent.collectAsState()
     val isWebSearchEnabled by viewModel.isWebSearchEnabled.collectAsState()
+    val currentTheme by viewModel.selectedTheme.collectAsState()
 
     var showSettingsPage by remember { mutableStateOf(false) }
     var showMemoryDialog by remember { mutableStateOf(false) }
@@ -587,6 +599,8 @@ fun ChatScreen(
         SettingsScreen(
             currentConfig = config,
             isWebSearchEnabled = isWebSearchEnabled,
+            selectedTheme = currentTheme,
+            onSelectTheme = { viewModel.setTheme(it) },
             memories = memories,
             onDeleteMemory = { viewModel.removeMemory(it) },
             onClearAllMemories = { viewModel.clearMemories() },
@@ -695,7 +709,7 @@ fun ChatScreen(
                 modifier = Modifier
                     .width(320.dp)
                     .fillMaxHeight(),
-                drawerContainerColor = Color(0xF5101016)
+                drawerContainerColor = currentTheme.surface
             ) {
                 RecentChatsDrawer(
                     sessions = sessions,
@@ -752,15 +766,7 @@ fun ChatScreen(
         Box(
             modifier = modifier
                 .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            Color(0xFF0D0D12),
-                            Color(0xFF08080C),
-                            Color(0xFF050508)
-                        )
-                    )
-                )
+                .background(currentTheme.background)
         ) {
             // Main content depending on engine & install state
             when {
@@ -981,9 +987,9 @@ fun ChatScreen(
                         .height(WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 68.dp)
                         .background(
                             Brush.verticalGradient(
-                                0.0f to Color(0xEE0A0A0E),
-                                0.55f to Color(0x990A0A0E),
-                                0.85f to Color(0x330A0A0E),
+                                0.0f to currentTheme.background.copy(alpha = 0.95f),
+                                0.55f to currentTheme.background.copy(alpha = 0.60f),
+                                0.85f to currentTheme.background.copy(alpha = 0.20f),
                                 1.0f to Color.Transparent
                             )
                         )
@@ -998,11 +1004,11 @@ fun ChatScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Left: Translucent Circular Hamburger Button ( = )
+                    // Left: Solid Circular Hamburger Button ( = )
                     Surface(
                         shape = CircleShape,
-                        color = Color(0xB3181824),
-                        border = BorderStroke(0.8.dp, Brush.verticalGradient(listOf(Color(0x3DFFFFFF), Color(0x14FFFFFF)))),
+                        color = currentTheme.surface,
+                        border = BorderStroke(1.dp, currentTheme.border),
                         modifier = Modifier
                             .size(38.dp)
                             .clip(CircleShape)
@@ -1040,8 +1046,8 @@ fun ChatScreen(
                     Box {
                         Surface(
                             shape = RoundedCornerShape(20.dp),
-                            color = Color(0xB3181824),
-                            border = BorderStroke(0.8.dp, Brush.verticalGradient(listOf(Color(0x3DFFFFFF), Color(0x14FFFFFF)))),
+                            color = currentTheme.surface,
+                            border = BorderStroke(1.dp, currentTheme.border),
                             modifier = Modifier.height(38.dp)
                         ) {
                             Row(
@@ -1271,23 +1277,29 @@ fun ChatScreen(
 
             // Bottom Vignette & Floating Input Dock
             if (installState is ModelInstallState.Installed && (engineState is EngineState.Ready || engineState is EngineState.Generating)) {
+                var inputDockHeightPx by remember { mutableIntStateOf(0) }
+                val density = LocalDensity.current
+                val inputDockHeightDp = with(density) {
+                    if (inputDockHeightPx > 0) inputDockHeightPx.toDp() else 74.dp
+                }
+
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .align(Alignment.BottomCenter)
-                        .imePadding()
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
                 ) {
-                    // Smooth Bottom Vignette Gradient (Transparent -> AMOLED Black)
+                    // Smooth Bottom Vignette Gradient (Transparent -> Theme background)
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 96.dp)
+                            .height(inputDockHeightDp + 48.dp)
                             .background(
                                 Brush.verticalGradient(
                                     0.0f to Color.Transparent,
-                                    0.25f to Color.Black.copy(alpha = 0.40f),
-                                    0.65f to Color.Black.copy(alpha = 0.90f),
-                                    1.0f to Color.Black
+                                    0.25f to currentTheme.background.copy(alpha = 0.40f),
+                                    0.65f to currentTheme.background.copy(alpha = 0.90f),
+                                    1.0f to currentTheme.background
                                 )
                             )
                             .align(Alignment.BottomCenter)
@@ -1301,16 +1313,13 @@ fun ChatScreen(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
                             .padding(
-                                bottom = with(density) {
-                                    val navBottom = if (!isImeVisible) WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() else 0.dp
-                                    navBottom + if (isScrollToBottomVisible && canScrollForward) 124.dp else 78.dp
-                                }
+                                bottom = inputDockHeightDp + if (isScrollToBottomVisible && canScrollForward) 58.dp else 12.dp
                             )
                     ) {
                         Surface(
                             shape = RoundedCornerShape(20.dp),
-                            color = Color(0xFF1E1E1E),
-                            border = BorderStroke(1.dp, Color(0xFF333333)),
+                            color = currentTheme.surface,
+                            border = BorderStroke(1.dp, currentTheme.border),
                             modifier = Modifier
                                 .clip(RoundedCornerShape(20.dp))
                                 .liquidBounceClick(scaleDown = 0.94f) { showMemoryDialog = true }
@@ -1345,27 +1354,22 @@ fun ChatScreen(
                         }
                     }
 
-                    // Independent Floating Scroll-to-Bottom Arrow (higher up, decoupled so chat bar NEVER repositions)
+                    // Independent Floating Scroll-to-Bottom Arrow (firmly anchored above input bar with zero overlap)
                     AnimatedVisibility(
                         visible = isScrollToBottomVisible && canScrollForward,
                         enter = fadeIn(tween(180)) + scaleIn(tween(180), initialScale = 0.85f),
                         exit = fadeOut(tween(220)) + scaleOut(tween(220), targetScale = 0.85f),
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .padding(
-                                bottom = with(density) {
-                                    val navBottom = if (!isImeVisible) WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() else 0.dp
-                                    navBottom + 78.dp
-                                }
-                            )
+                            .padding(bottom = inputDockHeightDp + 12.dp)
                     ) {
                         Surface(
                             shape = CircleShape,
-                            color = Color(0xD9181824),
+                            color = currentTheme.surface,
                             shadowElevation = 8.dp,
-                            border = BorderStroke(1.dp, Brush.verticalGradient(listOf(Color(0x3DFFFFFF), Color(0x14FFFFFF)))),
+                            border = BorderStroke(1.dp, currentTheme.border),
                             modifier = Modifier
-                                .size(36.dp)
+                                .size(38.dp)
                                 .clip(CircleShape)
                                 .liquidBounceClick(scaleDown = 0.86f) {
                                     scope.launch {
@@ -1384,7 +1388,7 @@ fun ChatScreen(
                         }
                     }
 
-                    // Input Dock Column isolated from ChatScreen root to guarantee zero recomposition while typing
+                    // Input Dock Column firmly anchored at bottom
                     ChatInputDock(
                         viewModel = viewModel,
                         isGenerating = isGenerating,
@@ -1392,6 +1396,7 @@ fun ChatScreen(
                         engineState = engineState,
                         attachedDocument = attachedDocument,
                         editingMessageId = editingMessageId,
+                        showAttachmentMenu = showAttachmentMenu,
                         onCancelEdit = { editingMessageId = null },
                         onToggleAttachmentMenu = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -1404,7 +1409,12 @@ fun ChatScreen(
                                 putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to Gemma…")
                             }
                             voiceLauncher.launch(intent)
-                        }
+                        },
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .onGloballyPositioned { coordinates ->
+                                inputDockHeightPx = coordinates.size.height
+                            }
                     )
                 }
             }
@@ -1428,24 +1438,37 @@ fun ChatScreen(
 
     AnimatedVisibility(
         visible = showAttachmentMenu,
-        enter = fadeIn(tween(140)) + scaleIn(tween(140), initialScale = 0.92f),
-        exit = fadeOut(tween(100)) + scaleOut(tween(100), targetScale = 0.92f)
+        enter = fadeIn(animationSpec = tween(220, easing = FastOutSlowInEasing)) +
+                scaleIn(
+                    animationSpec = spring(
+                        dampingRatio = 0.72f,
+                        stiffness = Spring.StiffnessMediumLow
+                    ),
+                    initialScale = 0.20f,
+                    transformOrigin = TransformOrigin(0.08f, 1.0f)
+                ),
+        exit = fadeOut(animationSpec = tween(150)) +
+               scaleOut(
+                   animationSpec = spring(
+                       dampingRatio = 0.85f,
+                       stiffness = Spring.StiffnessMedium
+                   ),
+                   targetScale = 0.20f,
+                   transformOrigin = TransformOrigin(0.08f, 1.0f)
+               )
     ) {
-        // Floating Dark Card anchored directly above the + button with imePadding so it stays above keyboard!
+        // Floating Dark Card anchored directly above the + button with windowInsetsPadding so it stays with keyboard!
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .imePadding()
-                .then(
-                    if (!isImeVisible) Modifier.navigationBarsPadding() else Modifier
-                )
-                .padding(start = 16.dp, bottom = 64.dp),
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
+                .padding(start = 18.dp, bottom = 68.dp),
             contentAlignment = Alignment.BottomStart
         ) {
             Surface(
                 shape = RoundedCornerShape(22.dp),
-                color = Color(0xEB14141E),
-                border = BorderStroke(1.dp, Brush.verticalGradient(listOf(Color(0x3DFFFFFF), Color(0x12FFFFFF)))),
+                color = currentTheme.surface,
+                border = BorderStroke(1.dp, currentTheme.border),
                 shadowElevation = 12.dp,
                 modifier = Modifier
                     .width(260.dp)
@@ -1935,6 +1958,7 @@ fun EmptyChatHero(
     onPromptSelected: (String) -> Unit,
     onExamineSelected: () -> Unit = {}
 ) {
+    val currentTheme = LocalChatTheme.current
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     Column(
         modifier = Modifier
@@ -1957,8 +1981,8 @@ fun EmptyChatHero(
         ) {
             Surface(
                 shape = CircleShape,
-                color = Color(0xB3181824),
-                border = BorderStroke(1.dp, Brush.verticalGradient(listOf(Color(0x40FFFFFF), Color(0x12FFFFFF)))),
+                color = currentTheme.surface,
+                border = BorderStroke(1.dp, currentTheme.border),
                 modifier = Modifier.size(62.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
@@ -1984,7 +2008,7 @@ fun EmptyChatHero(
             )
         }
 
-        // Sleek 2x2 Frosted Glass Prompt Cards (matching reference image)
+        // Sleek 2x2 Prompt Cards (ChatGPT style)
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -2058,10 +2082,11 @@ private fun GlassHeroCard(
     subtitle: String,
     onClick: () -> Unit
 ) {
+    val currentTheme = LocalChatTheme.current
     Surface(
         shape = RoundedCornerShape(18.dp),
-        color = Color(0xB3161622),
-        border = BorderStroke(1.dp, Brush.verticalGradient(listOf(Color(0x30FFFFFF), Color(0x0CFFFFFF)))),
+        color = currentTheme.surface,
+        border = BorderStroke(1.dp, currentTheme.border),
         modifier = modifier
             .clip(RoundedCornerShape(18.dp))
             .liquidBounceClick(scaleDown = 0.96f, onClick = onClick)
@@ -2206,8 +2231,8 @@ fun MessageBubble(
             val currentDisplayBitmap = displayBitmap
             Surface(
                 shape = RoundedCornerShape(20.dp),
-                color = Color(0xD91F1F2A), // Frosted translucent obsidian glass
-                border = BorderStroke(1.dp, Brush.verticalGradient(listOf(Color(0x35FFFFFF), Color(0x10FFFFFF)))),
+                color = LocalChatTheme.current.userBubble,
+                border = BorderStroke(0.8.dp, LocalChatTheme.current.border),
                 modifier = Modifier
                     .widthIn(max = 295.dp)
                     .clip(RoundedCornerShape(20.dp))
@@ -4028,22 +4053,21 @@ private fun ChatInputDock(
     engineState: EngineState,
     attachedDocument: ExtractedDocument?,
     editingMessageId: String?,
+    showAttachmentMenu: Boolean = false,
     onCancelEdit: () -> Unit,
     onToggleAttachmentMenu: () -> Unit,
-    onLaunchVoice: () -> Unit
+    onLaunchVoice: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val inputText by viewModel.inputText.collectAsState()
     val haptic = LocalHapticFeedback.current
     val keyboardController = LocalSoftwareKeyboardController.current
-    val isImeVisible = WindowInsets.isImeVisible
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .then(
-                if (!isImeVisible) Modifier.navigationBarsPadding() else Modifier
-            )
-            .padding(bottom = if (isImeVisible) 4.dp else 8.dp)
+            .padding(bottom = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         // Document Quick Action Chips (when document is attached)
         if (attachedDocument != null && !attachedDocument.isImage) {
@@ -4101,7 +4125,7 @@ private fun ChatInputDock(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Edit,
+                            Icons.Default.Edit,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onSecondaryContainer,
                             modifier = Modifier.size(13.dp)
@@ -4115,7 +4139,7 @@ private fun ChatInputDock(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Icon(
-                            imageVector = Icons.Default.Close,
+                            Icons.Default.Close,
                             contentDescription = "Cancel edit",
                             tint = MaterialTheme.colorScheme.onSecondaryContainer,
                             modifier = Modifier
@@ -4169,7 +4193,8 @@ private fun ChatInputDock(
             onAttach = onToggleAttachmentMenu,
             hasAttachment = attachedDocument != null,
             attachedDocument = attachedDocument,
-            onRemoveAttachment = { viewModel.clearAttachedDocument() }
+            onRemoveAttachment = { viewModel.clearAttachedDocument() },
+            showAttachmentMenu = showAttachmentMenu
         )
     }
 }
@@ -4190,7 +4215,8 @@ fun ChatInputBar(
     onAttach: () -> Unit = {},
     hasAttachment: Boolean = false,
     attachedDocument: ExtractedDocument? = null,
-    onRemoveAttachment: () -> Unit = {}
+    onRemoveAttachment: () -> Unit = {},
+    showAttachmentMenu: Boolean = false
 ) {
     val focusManager = LocalFocusManager.current
     val isImeVisible = WindowInsets.isImeVisible
@@ -4204,53 +4230,60 @@ fun ChatInputBar(
         }
     }
 
-    // Dynamic Expansion: Expands instantly when keyboard opens, field is focused, text is typed, or attachment present
-    val isExpanded = isImeVisible || isFocused || inputText.isNotEmpty() || attachedDocument != null
-    val isMultiLine = remember(inputText, attachedDocument) {
-        inputText.contains('\n') || inputText.length > 45 || attachedDocument != null
+    var lineCount by remember { mutableIntStateOf(1) }
+    var isMaximized by remember { mutableStateOf(false) }
+
+    LaunchedEffect(inputText.isEmpty()) {
+        if (inputText.isEmpty()) {
+            isMaximized = false
+            lineCount = 1
+        }
     }
 
-    // ChatGPT smooth morph: Circular pill (28.dp) when single-line, rounded card (20.dp) when multi-line or attachment
-    val cornerRadius by animateDpAsState(
-        targetValue = if (isMultiLine) 20.dp else 28.dp,
+    val isMultiLine = lineCount > 1 || inputText.contains('\n') || inputText.length > 40 || attachedDocument != null || isMaximized
+
+    // Dynamic Expansion: 85% width when idle, 95% width when clicked/focused/typing like ChatGPT
+    val isFocusedOrActive = isFocused || isImeVisible || inputText.isNotEmpty() || hasAttachment || isMultiLine
+    val targetWidthFraction = if (isFocusedOrActive) 0.95f else 0.85f
+
+    val animatedWidthFraction by animateFloatAsState(
+        targetValue = targetWidthFraction,
         animationSpec = spring(
-            dampingRatio = 0.75f,
-            stiffness = Spring.StiffnessMedium
+            dampingRatio = 0.82f,
+            stiffness = Spring.StiffnessMediumLow
+        ),
+        label = "inputWidthFraction"
+    )
+
+    // ChatGPT smooth morph: Circular pill (28.dp) when single-line, rounded card (22.dp) when multi-line (matching screenshot)
+    val cornerRadius by animateDpAsState(
+        targetValue = if (isMultiLine) 22.dp else 28.dp,
+        animationSpec = spring(
+            dampingRatio = 0.80f,
+            stiffness = Spring.StiffnessMediumLow
         ),
         label = "inputCornerRadius"
     )
 
-    // ChatGPT mobile floating island behavior:
-    // ChatGPT mobile floating island behavior:
-    // When idle / keyboard closed: 32.dp horizontal margin (~82% width centered pill, ChatGPT mobile idle style).
-    // When active / focused / typing / keyboard open: smooth, fast spring expansion to full width (8.dp margin).
-    val horizontalPadding by animateDpAsState(
-        targetValue = if (isExpanded) 8.dp else 32.dp,
+    val currentTheme = LocalChatTheme.current
+
+    val plusRotation by animateFloatAsState(
+        targetValue = if (showAttachmentMenu) 45f else 0f,
         animationSpec = spring(
-            dampingRatio = 0.78f,
+            dampingRatio = 0.72f,
             stiffness = Spring.StiffnessMedium
         ),
-        label = "inputHorizontalPadding"
+        label = "plusRotation"
     )
 
-    val bottomPadding by animateDpAsState(
-        targetValue = if (isExpanded) 2.dp else 4.dp,
-        animationSpec = spring(
-            dampingRatio = 0.78f,
-            stiffness = Spring.StiffnessMedium
-        ),
-        label = "inputBottomPadding"
-    )
-
-    // Floating Pill Island Surface (Frosted Translucent Obsidian Glass)
+    // Floating Pill Island Surface (Solid ChatGPT Style)
     Surface(
         shape = RoundedCornerShape(cornerRadius),
-        color = Color(0xD914141C),
-        border = BorderStroke(1.dp, Brush.verticalGradient(listOf(Color(0x3DFFFFFF), Color(0x12FFFFFF)))),
+        color = currentTheme.surface,
+        border = BorderStroke(1.dp, currentTheme.border),
         shadowElevation = 8.dp,
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = horizontalPadding, end = horizontalPadding, top = 2.dp, bottom = bottomPadding)
+            .fillMaxWidth(animatedWidthFraction)
             .animateContentSize(
                 animationSpec = spring(
                     dampingRatio = Spring.DampingRatioNoBouncy,
@@ -4258,154 +4291,132 @@ fun ChatInputBar(
                 )
             )
     ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 6.dp, vertical = 6.dp)
-            ) {
-                // Uploaded Image / Document Preview INSIDE Chatbox (ChatGPT style)
-                if (attachedDocument != null) {
-                    val doc = attachedDocument
-                    if (doc.isImage && doc.previewBitmap != null) {
-                        Box(
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 6.dp, vertical = 6.dp)
+        ) {
+            // Uploaded Image / Document Preview INSIDE Chatbox (ChatGPT style)
+            if (attachedDocument != null) {
+                val doc = attachedDocument
+                if (doc.isImage && doc.previewBitmap != null) {
+                    Box(
+                        modifier = Modifier
+                            .padding(start = 6.dp, top = 2.dp, bottom = 6.dp)
+                            .size(64.dp)
+                    ) {
+                        androidx.compose.foundation.Image(
+                            painter = androidx.compose.ui.graphics.painter.BitmapPainter(doc.previewBitmap.asImageBitmap()),
+                            contentDescription = "Attached image",
                             modifier = Modifier
-                                .padding(start = 6.dp, top = 2.dp, bottom = 6.dp)
-                                .size(64.dp)
+                                .size(60.dp)
+                                .align(Alignment.BottomStart)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFF2A2A2A)),
+                            contentScale = ContentScale.Crop
+                        )
+                        Surface(
+                            shape = CircleShape,
+                            color = Color(0xDD000000),
+                            border = BorderStroke(1.dp, Color(0x44FFFFFF)),
+                            modifier = Modifier
+                                .size(20.dp)
+                                .align(Alignment.TopEnd)
+                                .clip(CircleShape)
+                                .clickable { onRemoveAttachment() }
                         ) {
-                            androidx.compose.foundation.Image(
-                                painter = androidx.compose.ui.graphics.painter.BitmapPainter(doc.previewBitmap.asImageBitmap()),
-                                contentDescription = "Attached image",
-                                modifier = Modifier
-                                    .size(60.dp)
-                                    .align(Alignment.BottomStart)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(Color(0xFF2A2A2A)),
-                                contentScale = ContentScale.Crop
-                            )
-                            Surface(
-                                shape = CircleShape,
-                                color = Color(0xDD000000),
-                                border = BorderStroke(1.dp, Color(0x44FFFFFF)),
-                                modifier = Modifier
-                                    .size(20.dp)
-                                    .align(Alignment.TopEnd)
-                                    .clip(CircleShape)
-                                    .clickable { onRemoveAttachment() }
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Remove attachment",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(11.dp)
-                                    )
-                                }
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Remove attachment",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(11.dp)
+                                )
                             }
                         }
-                    } else {
-                        val isPdf = doc.fileName.endsWith(".pdf", ignoreCase = true)
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = Color(0x662A2A38),
-                            border = BorderStroke(0.8.dp, Color(0x2EFFFFFF)),
-                            modifier = Modifier.padding(start = 6.dp, top = 2.dp, bottom = 6.dp)
+                    }
+                } else {
+                    val isPdf = doc.fileName.endsWith(".pdf", ignoreCase = true)
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = Color(0x662A2A38),
+                        border = BorderStroke(0.8.dp, Color(0x2EFFFFFF)),
+                        modifier = Modifier.padding(start = 6.dp, top = 2.dp, bottom = 6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            Icon(
+                                imageVector = if (isPdf) Icons.Default.PictureAsPdf else Icons.Default.Description,
+                                contentDescription = null,
+                                tint = if (isPdf) Color(0xFFFF857D) else Color(0xFF66D9B8),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = doc.fileName,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Medium,
+                                color = Color.White,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.widthIn(max = 180.dp)
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF383840))
+                                    .clickable { onRemoveAttachment() },
+                                contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    imageVector = if (isPdf) Icons.Default.PictureAsPdf else Icons.Default.Description,
-                                    contentDescription = null,
-                                    tint = if (isPdf) Color(0xFFFF857D) else Color(0xFF66D9B8),
-                                    modifier = Modifier.size(16.dp)
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Remove",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(11.dp)
                                 )
-                                Text(
-                                    text = doc.fileName,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Medium,
-                                    color = Color.White,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.widthIn(max = 180.dp)
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .size(18.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(0xFF383840))
-                                        .clickable { onRemoveAttachment() },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Remove",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(11.dp)
-                                    )
-                                }
                             }
                         }
                     }
                 }
+            }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.Bottom
-                ) {
-                // 1. Left Plus (+) Action Button
-                ChatGptSurfaceButton(
-                    onClick = onAttach,
-                    shape = CircleShape,
-                    color = Color(0x2E30303E),
-                    border = BorderStroke(0.8.dp, Color(0x2EFFFFFF)),
+            if (isMultiLine) {
+                // =========================================================================
+                // MULTI-LINE EXPANDED CARD LAYOUT (EXACTLY MATCHING USER'S SCREENSHOT)
+                // =========================================================================
+                Column(
                     modifier = Modifier
-                        .size(38.dp)
-                        .padding(2.dp)
+                        .fillMaxWidth()
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = "Add attachment",
-                        modifier = Modifier.size(20.dp),
-                        tint = Color.White
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(4.dp))
-
-                // 2. Center Text & Tools Section
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Web Search Toggle inside the bar
+                    // Web search badge if active
                     if (isWebSearchEnabled) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             color = Color(0x3310A37F),
                             border = BorderStroke(1.dp, Color(0x6610A37F)),
                             modifier = Modifier
-                                .height(28.dp)
-                                .padding(end = 6.dp)
+                                .height(26.dp)
+                                .padding(bottom = 4.dp)
                                 .clip(RoundedCornerShape(12.dp))
                                 .clickable { onToggleWebSearch() }
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 7.dp),
+                                modifier = Modifier.padding(horizontal = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Language,
                                     contentDescription = "Search the web",
-                                    modifier = Modifier.size(13.dp),
+                                    modifier = Modifier.size(12.dp),
                                     tint = Color(0xFF10A37F)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
-                                    text = "Web",
+                                    text = "Web Search Active",
                                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
                                     fontWeight = FontWeight.SemiBold,
                                     color = Color(0xFF10A37F)
@@ -4414,67 +4425,306 @@ fun ChatInputBar(
                         }
                     }
 
-                    // Multi-line Expanding BasicTextField with focus listener
-                    BasicTextField(
-                        value = inputText,
-                        onValueChange = onTextChanged,
-                        enabled = isEnabled && !isGenerating,
-                        textStyle = TextStyle(
-                            fontSize = 15.5.sp,
-                            color = Color.White,
-                            lineHeight = 21.sp,
-                            fontFamily = FontFamily.Default
-                        ),
-                        cursorBrush = SolidColor(Color.White),
-                        maxLines = 6,
+                    // Full-width Text Area on TOP
+                    Box(
                         modifier = Modifier
-                            .weight(1f)
-                            .onFocusChanged { isFocused = it.isFocused }
-                            .padding(horizontal = 4.dp, vertical = 4.dp),
-                        decorationBox = { innerTextField ->
-                            Box(
-                                modifier = Modifier.fillMaxWidth(),
-                                contentAlignment = Alignment.CenterStart
-                            ) {
-                                if (inputText.isEmpty()) {
-                                    Text(
-                                        text = when {
-                                             isWebSearchEnabled -> "Search with Gemma..."
-                                             hasAttachment -> "Ask about this..."
-                                             else -> "Ask Gemma..."
-                                        },
-                                        style = MaterialTheme.typography.bodyMedium.copy(
-                                            fontSize = 15.5.sp,
-                                            color = Color(0xFF8E8E93)
+                            .fillMaxWidth()
+                            .heightIn(min = 44.dp, max = if (isMaximized) 320.dp else 170.dp)
+                            .padding(start = 4.dp, end = 4.dp, top = 4.dp, bottom = 6.dp)
+                    ) {
+                        BasicTextField(
+                            value = inputText,
+                            onValueChange = onTextChanged,
+                            enabled = isEnabled && !isGenerating,
+                            onTextLayout = { lineCount = it.lineCount },
+                            textStyle = TextStyle(
+                                fontSize = 16.sp,
+                                color = Color.White,
+                                lineHeight = 22.sp,
+                                fontFamily = FontFamily.Default
+                            ),
+                            cursorBrush = SolidColor(Color.White),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { isFocused = it.isFocused },
+                            decorationBox = { innerTextField ->
+                                Box(modifier = Modifier.fillMaxWidth()) {
+                                    if (inputText.isEmpty()) {
+                                        Text(
+                                            text = if (isWebSearchEnabled) "Search with Gemma..." else "Ask Gemma...",
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                fontSize = 16.sp,
+                                                color = Color(0xFF8E8E93)
+                                            )
                                         )
+                                    }
+                                    innerTextField()
+                                }
+                            }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(2.dp))
+
+                    // Dedicated Bottom Controls Row (Matching Screenshot: [+] on left, [⤢][🎤][(↑)] on right)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 2.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Left: Plus (+) Button
+                        IconButton(
+                            onClick = onAttach,
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = "Add attachment",
+                                tint = Color.White,
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .graphicsLayer { rotationZ = plusRotation }
+                            )
+                        }
+
+                        // Right Controls: [ ⤢ ] [ 🎤 ] [ (↑) ]
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // Expand/Minimize diagonal arrows icon
+                            IconButton(
+                                onClick = { isMaximized = !isMaximized },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isMaximized) Icons.Default.CloseFullscreen else Icons.Default.OpenInFull,
+                                    contentDescription = "Expand input",
+                                    tint = Color(0xFFCCCCCC),
+                                    modifier = Modifier.size(19.dp)
+                                )
+                            }
+
+                            // Mic Icon
+                            IconButton(
+                                onClick = onVoiceInput,
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Mic,
+                                    contentDescription = "Voice input",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+
+                            // Coral Pink Circular Send Button (or Stop Button)
+                            if (isGenerating) {
+                                ChatGptSurfaceButton(
+                                    onClick = onStop,
+                                    shape = CircleShape,
+                                    color = Color(0xFFF43F5E),
+                                    modifier = Modifier.size(38.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Stop,
+                                        contentDescription = "Stop",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
                                     )
                                 }
-                                innerTextField()
+                            } else {
+                                val canSend = isEnabled && inputText.isNotBlank()
+                                ChatGptSurfaceButton(
+                                    onClick = onSend,
+                                    enabled = canSend,
+                                    shape = CircleShape,
+                                    color = if (canSend) Color(0xFFF43F5E) else Color(0x38F43F5E),
+                                    modifier = Modifier.size(38.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowUpward,
+                                        contentDescription = "Send",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
                             }
                         }
-                    )
+                    }
                 }
+            } else {
+                // =========================================================================
+                // SINGLE-LINE FLOATING ROUND BAR LAYOUT ("without text round and floating bar")
+                // =========================================================================
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Left Plus (+) Button
+                    ChatGptSurfaceButton(
+                        onClick = onAttach,
+                        shape = CircleShape,
+                        color = currentTheme.userBubble,
+                        border = BorderStroke(0.8.dp, currentTheme.border),
+                        modifier = Modifier
+                            .size(38.dp)
+                            .padding(2.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Add attachment",
+                            modifier = Modifier
+                                .size(20.dp)
+                                .graphicsLayer { rotationZ = plusRotation },
+                            tint = Color.White
+                        )
+                    }
 
-                Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
 
-                // 3. Right Animated Action Button (Mic/Voice ⇄ Send ⇄ Stop)
-                AnimatedContent(
-                    targetState = when {
-                        isGenerating -> ActionButtonState.STOP
-                        inputText.isNotBlank() || hasAttachment -> ActionButtonState.SEND
-                        else -> ActionButtonState.MIC
-                    },
-                    transitionSpec = {
-                        (scaleIn(spring(stiffness = Spring.StiffnessMedium)) + fadeIn(tween(90)))
-                            .togetherWith(scaleOut(spring(stiffness = Spring.StiffnessMedium)) + fadeOut(tween(90)))
-                    },
-                    label = "chatActionTransition"
-                ) { state ->
-                    when (state) {
-                        ActionButtonState.STOP -> {
-                            // Coral Pink Circle with White Stop Square
+                    // Center: Web Badge + Single-line Text Field
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (isWebSearchEnabled) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0x3310A37F),
+                                border = BorderStroke(1.dp, Color(0x6610A37F)),
+                                modifier = Modifier
+                                    .height(28.dp)
+                                    .padding(end = 6.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable { onToggleWebSearch() }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Language,
+                                        contentDescription = "Search the web",
+                                        modifier = Modifier.size(13.dp),
+                                        tint = Color(0xFF10A37F)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Web",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFF10A37F)
+                                    )
+                                }
+                            }
+                        }
+
+                        BasicTextField(
+                            value = inputText,
+                            onValueChange = onTextChanged,
+                            enabled = isEnabled && !isGenerating,
+                            onTextLayout = { lineCount = it.lineCount },
+                            textStyle = TextStyle(
+                                fontSize = 15.5.sp,
+                                color = Color.White,
+                                lineHeight = 21.sp,
+                                fontFamily = FontFamily.Default
+                            ),
+                            cursorBrush = SolidColor(Color.White),
+                            maxLines = 1,
+                            modifier = Modifier
+                                .weight(1f)
+                                .onFocusChanged { isFocused = it.isFocused }
+                                .padding(horizontal = 4.dp, vertical = 4.dp),
+                            decorationBox = { innerTextField ->
+                                Box(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    contentAlignment = Alignment.CenterStart
+                                ) {
+                                    if (inputText.isEmpty()) {
+                                        Text(
+                                            text = when {
+                                                isWebSearchEnabled -> "Search with Gemma..."
+                                                hasAttachment -> "Ask about this..."
+                                                else -> "Ask Gemma..."
+                                            },
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                fontSize = 15.5.sp,
+                                                color = Color(0xFF8E8E93)
+                                            )
+                                        )
+                                    }
+                                    innerTextField()
+                                }
+                            }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(4.dp))
+
+                    // Right Actions
+                    if (isGenerating) {
+                        ChatGptSurfaceButton(
+                            onClick = onStop,
+                            shape = CircleShape,
+                            color = Color(0xFFF43F5E),
+                            modifier = Modifier
+                                .size(38.dp)
+                                .padding(2.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Stop,
+                                contentDescription = "Stop generating",
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    } else if (inputText.isNotBlank() || hasAttachment) {
+                        val canSend = isEnabled && !isGenerating
+                        ChatGptSurfaceButton(
+                            onClick = onSend,
+                            enabled = canSend,
+                            shape = CircleShape,
+                            color = if (canSend) Color(0xFFF43F5E) else Color(0x38F43F5E),
+                            modifier = Modifier
+                                .size(38.dp)
+                                .padding(2.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ArrowUpward,
+                                contentDescription = "Send",
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    } else {
+                        // Empty idle: White Mic icon + Coral Pink circular Voice Assistant button
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
                             ChatGptSurfaceButton(
-                                onClick = onStop,
+                                onClick = onVoiceInput,
+                                shape = CircleShape,
+                                color = currentTheme.userBubble,
+                                border = BorderStroke(0.8.dp, currentTheme.border),
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Mic,
+                                    contentDescription = "Voice input",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            ChatGptSurfaceButton(
+                                onClick = onVoiceAssistant,
                                 shape = CircleShape,
                                 color = Color(0xFFF43F5E),
                                 modifier = Modifier
@@ -4482,72 +4732,11 @@ fun ChatInputBar(
                                     .padding(2.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Stop,
-                                    contentDescription = "Stop generating",
+                                    imageVector = Icons.Default.GraphicEq,
+                                    contentDescription = "Voice assistant",
                                     tint = Color.White,
-                                    modifier = Modifier.size(16.dp)
+                                    modifier = Modifier.size(20.dp)
                                 )
-                            }
-                        }
-
-                        ActionButtonState.SEND -> {
-                            // Solid White Circle with Crisp Black Up Arrow
-                            val canSend = isEnabled && !isGenerating
-                            ChatGptSurfaceButton(
-                                onClick = onSend,
-                                enabled = canSend,
-                                shape = CircleShape,
-                                color = if (canSend) Color.White else Color(0x3830303C),
-                                border = if (canSend) null else BorderStroke(0.8.dp, Color(0x1AFFFFFF)),
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .padding(2.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.ArrowUpward,
-                                    contentDescription = "Send",
-                                    tint = if (canSend) Color.Black else Color(0xFF8E8E93),
-                                    modifier = Modifier.size(19.dp)
-                                )
-                            }
-                        }
-
-                        ActionButtonState.MIC -> {
-                            // ChatGPT Layout: White Mic icon + Coral Pink circular Voice Assistant soundwave button
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                ChatGptSurfaceButton(
-                                    onClick = onVoiceInput,
-                                    shape = CircleShape,
-                                    color = Color(0x2430303E),
-                                    border = BorderStroke(0.8.dp, Color(0x20FFFFFF)),
-                                    modifier = Modifier.size(36.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Mic,
-                                        contentDescription = "Voice input",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-
-                                ChatGptSurfaceButton(
-                                    onClick = onVoiceAssistant,
-                                    shape = CircleShape,
-                                    color = Color(0xFFF43F5E),
-                                    modifier = Modifier
-                                        .size(38.dp)
-                                        .padding(2.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.GraphicEq,
-                                        contentDescription = "Voice assistant",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
                             }
                         }
                     }

@@ -27,14 +27,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -92,6 +95,8 @@ import com.teja.gemmmobile.ai.GemmaConfig
 fun SettingsScreen(
     currentConfig: GemmaConfig,
     isWebSearchEnabled: Boolean,
+    selectedTheme: AppTheme = AppTheme.CHATGPT_DARK,
+    onSelectTheme: (AppTheme) -> Unit = {},
     memories: List<MemoryItem> = emptyList(),
     onDeleteMemory: (String) -> Unit = {},
     onClearAllMemories: () -> Unit = {},
@@ -125,7 +130,7 @@ fun SettingsScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF000000))
+            .background(selectedTheme.background)
             .statusBarsPadding()
             .navigationBarsPadding()
     ) {
@@ -200,6 +205,112 @@ fun SettingsScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
+
+                // SECTION: Appearance & Theme (ChatGPT style)
+                item {
+                    SettingsSectionHeader(
+                        icon = Icons.Default.Palette,
+                        title = "Appearance & Theme"
+                    )
+                }
+
+                item {
+                    SettingsCard {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "Color Scheme",
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 14.sp,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "Choose the authentic color palette for backgrounds, chat surfaces, and bubbles.",
+                                fontSize = 11.sp,
+                                color = Color(0xFF8E8E93)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+
+                            AppTheme.entries.forEach { theme ->
+                                val isSelected = theme == selectedTheme
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (isSelected) Color(0xFF262626) else Color(0xFF191919),
+                                    border = BorderStroke(
+                                        if (isSelected) 1.5.dp else 0.5.dp,
+                                        if (isSelected) theme.accent else Color(0xFF333333)
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onSelectTheme(theme)
+                                        }
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            // Palette preview swatch: 3 adjacent circles (bg, surface, accent)
+                                            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(16.dp)
+                                                        .clip(CircleShape)
+                                                        .background(theme.background)
+                                                        .border(0.8.dp, Color(0xFF555555), CircleShape)
+                                                )
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(16.dp)
+                                                        .clip(CircleShape)
+                                                        .background(theme.surface)
+                                                        .border(0.8.dp, Color(0xFF555555), CircleShape)
+                                                )
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(16.dp)
+                                                        .clip(CircleShape)
+                                                        .background(theme.accent)
+                                                )
+                                            }
+
+                                            Column {
+                                                Text(
+                                                    text = theme.title,
+                                                    fontSize = 13.5.sp,
+                                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                    color = Color.White
+                                                )
+                                                Text(
+                                                    text = theme.subtitle,
+                                                    fontSize = 11.sp,
+                                                    color = Color(0xFF8E8E93)
+                                                )
+                                            }
+                                        }
+
+                                        if (isSelected) {
+                                            Icon(
+                                                imageVector = Icons.Default.CheckCircle,
+                                                contentDescription = "Selected",
+                                                tint = theme.accent,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // SECTION 0: Hardware Acceleration & Compute Engine
                 item {

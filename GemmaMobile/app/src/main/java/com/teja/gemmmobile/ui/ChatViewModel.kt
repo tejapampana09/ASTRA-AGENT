@@ -108,6 +108,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _isWebSearchEnabled = MutableStateFlow(false)
     val isWebSearchEnabled: StateFlow<Boolean> = _isWebSearchEnabled.asStateFlow()
 
+    private val _selectedTheme = MutableStateFlow(
+        AppTheme.fromName(
+            getApplication<Application>()
+                .getSharedPreferences("app_settings", Context.MODE_PRIVATE)
+                .getString("app_theme", AppTheme.CHATGPT_DARK.name)
+        )
+    )
+    val selectedTheme: StateFlow<AppTheme> = _selectedTheme.asStateFlow()
+
+    fun setTheme(theme: AppTheme) {
+        _selectedTheme.value = theme
+        getApplication<Application>()
+            .getSharedPreferences("app_settings", Context.MODE_PRIVATE)
+            .edit()
+            .putString("app_theme", theme.name)
+            .apply()
+    }
+
     private val ttsManager = TtsManager(application)
     val isSpeaking: StateFlow<Boolean> = ttsManager.isSpeaking
     val currentlySpeakingId: StateFlow<String?> = ttsManager.currentMessageId
@@ -759,28 +777,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val effectiveSystemPrompt = when {
                     imageBytes != null -> "You are a helpful assistant. Directly and accurately describe what is in the image in plain language."
                     searchContext.isNotBlank() -> {
-                        """
-$baseSystemPrompt
-
-## WEB SEARCH MODE
-You are provided with real-time web search results and extracted webpage content. Use them as your primary source of truth.
-
-### RULES & GROUNDING:
-1. **Lead with the direct answer** — give the most important fact or answer in the first 1-2 sentences.
-2. **Ground strictly on evidence** — prefer facts supported by the extracted webpage content. If sources disagree, explicitly state the disagreement.
-3. **Cite source URLs** — mention the source names and reference URLs provided in the results. Do NOT invent URLs or links not present in the sources.
-4. **Dates and Recency** — for "latest/current/today" queries, prioritize recent updates found in the sources. If the fetched content is insufficient, say so instead of hallucinating.
-5. **Structure clearly** — use ## headings, bullet points, bold text, and tables where useful.
-6. **Language** — reply in the SAME language as the user's question (e.g. English, Telugu).
-
-### FORMATTING BY QUERY TYPE:
-- **News / Events**: Headline summary → Key details (who, what, when, where) → Impact/context
-- **How-to / Tutorial**: Numbered steps → Code block if applicable → Tips
-- **Comparison / "vs"**: Markdown table with pros/cons or key differences
-- **Person / Entity**: Name, Role, Key facts → Recent updates
-- **Price / Score / Stats**: State the exact figure first, then explain context
-- **General knowledge**: Direct answer → Explanation → Follow-up suggestions
-                        """.trimIndent()
+                        "$baseSystemPrompt\n\nWhen live web results are provided, use them as your primary source of truth. Give a direct answer and cite the source URLs."
                     }
                     else -> baseSystemPrompt
                 }

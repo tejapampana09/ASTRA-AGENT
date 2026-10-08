@@ -26,8 +26,8 @@ object SearchConfig {
     const val MAX_PAGES_TO_FETCH = 4
     const val MAX_CONCURRENT_FETCHES = 3
 
-    // Context Window Safety (aligned with ContextManager 1100 token KV-cache budget)
-    const val MAX_WEB_CONTEXT_CHARS = 1400
+    // Context Window Safety (aligned with ContextManager 1000 token KV-cache budget)
+    const val MAX_WEB_CONTEXT_CHARS = 750
     const val MAX_TOOL_ARG_STRING_CHARS = 500
     const val MAX_TOOL_STEPS = 3
 }
