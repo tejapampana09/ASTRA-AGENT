@@ -55,14 +55,6 @@ class MainActivity : ComponentActivity() {
 
         handleIntent(intent)
 
-        // Move task to back on back press so background response generation,
-        // conversation state, and model engine are never aborted when closing the chat view
-        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                moveTaskToBack(true)
-            }
-        })
-
         setContent {
             MaterialTheme(colorScheme = GemmaColorScheme) {
                 Surface(

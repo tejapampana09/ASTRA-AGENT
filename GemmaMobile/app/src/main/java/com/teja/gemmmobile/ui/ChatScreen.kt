@@ -8,6 +8,10 @@ import android.speech.RecognizerIntent
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -487,6 +491,11 @@ fun ChatScreen(
         )
     }
 
+    val activity = LocalContext.current as? Activity
+    BackHandler(enabled = !showSettingsPage && !drawerState.isOpen) {
+        activity?.moveTaskToBack(true)
+    }
+
     if (showSettingsPage) {
         SettingsScreen(
             currentConfig = config,
@@ -497,8 +506,12 @@ fun ChatScreen(
                 showSettingsPage = false
             },
             onResetDefaults = { viewModel.resetConfig() },
-            onBack = { showSettingsPage = false }
+            onBack = {
+                scope.launch { drawerState.snapTo(androidx.compose.material3.DrawerValue.Closed) }
+                showSettingsPage = false
+            }
         )
+        return
     }
 
     if (showMemoryDialog) {
@@ -642,192 +655,12 @@ fun ChatScreen(
             }
         }
     ) {
-        Scaffold(
-            modifier = modifier.fillMaxSize(),
-            containerColor = Color.Black,
-            contentWindowInsets = WindowInsets(0, 0, 0, 0),
-            topBar = {
-                TopAppBar(
-                    navigationIcon = {
-                        Surface(
-                            shape = CircleShape,
-                            color = Color(0xFF212121),
-                            modifier = Modifier
-                                .padding(start = 12.dp)
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .clickable { scope.launch { drawerState.open() } }
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.Menu,
-                                    contentDescription = "Open drawer",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                    },
-                    title = {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            Text(
-                                text = "Gemma",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color.White
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            BackendBadge(engineState = engineState)
-                        }
-                    },
-                    actions = {
-                        // Circular dark new chat button (ChatGPT style)
-                        Surface(
-                            shape = CircleShape,
-                            color = Color(0xFF212121),
-                            modifier = Modifier
-                                .padding(end = 12.dp)
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .clickable { viewModel.createNewChat() }
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.Edit,
-                                    contentDescription = "New chat",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(19.dp)
-                                )
-                            }
-                        }
-
-                        if (messages.isNotEmpty()) {
-                            var showMenu by remember { mutableStateOf(false) }
-                            Box(modifier = Modifier.padding(end = 8.dp)) {
-                                Surface(
-                                    shape = CircleShape,
-                                    color = Color(0xFF212121),
-                                    modifier = Modifier
-                                        .size(40.dp)
-                                        .clip(CircleShape)
-                                        .clickable { showMenu = true }
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(
-                                            imageVector = Icons.Default.MoreVert,
-                                            contentDescription = "Chat options",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                }
-                                DropdownMenu(
-                                    expanded = showMenu,
-                                    onDismissRequest = { showMenu = false },
-                                    modifier = Modifier.background(Color(0xFF262626))
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("Share conversation", color = Color.White) },
-                                        leadingIcon = {
-                                            Icon(
-                                                imageVector = Icons.Default.Share,
-                                                contentDescription = null,
-                                                tint = Color.White,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        },
-                                        onClick = {
-                                            showMenu = false
-                                            viewModel.getCurrentSession()?.let { session ->
-                                                ExportHelper.shareSession(context, session)
-                                            }
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Rename", color = Color.White) },
-                                        leadingIcon = {
-                                            Icon(
-                                                imageVector = Icons.Default.DriveFileRenameOutline,
-                                                contentDescription = null,
-                                                tint = Color.White,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        },
-                                        onClick = {
-                                            showMenu = false
-                                            renameText = viewModel.getCurrentSession()?.title ?: ""
-                                            showRenameDialog = true
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Delete conversation", color = MaterialTheme.colorScheme.error) },
-                                        leadingIcon = {
-                                            Icon(
-                                                imageVector = Icons.Default.Delete,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.error,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        },
-                                        onClick = {
-                                            showMenu = false
-                                            showDeleteConfirmDialog = true
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = Color.Black
-                    )
-                )
-        }
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
+        Box(
+            modifier = modifier
                 .fillMaxSize()
-                .padding(top = innerPadding.calculateTopPadding())
-                .imePadding()
+                .background(Color.Black)
         ) {
-            // Error banner
-            AnimatedVisibility(
-                visible = errorMessage != null,
-                enter = fadeIn(),
-                exit = fadeOut()
-            ) {
-                errorMessage?.let { error ->
-                    Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 4.dp),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = error,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            TextButton(onClick = { viewModel.dismissError() }) {
-                                Text("Dismiss", color = MaterialTheme.colorScheme.onErrorContainer)
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Decide main content based on installation & engine state
+            // Main content depending on engine & install state
             when {
                 installState !is ModelInstallState.Installed -> {
                     ModelManagementSection(
@@ -927,347 +760,595 @@ fun ChatScreen(
                 }
 
                 else -> {
-                    // Chat Interface
-                    Box(modifier = Modifier.weight(1f)) {
-                        if (messages.isEmpty()) {
-                            EmptyChatHero(
-                                onPromptSelected = { prompt ->
-                                    viewModel.onInputTextChanged(prompt)
-                                    viewModel.sendMessage()
-                                },
-                                onExamineSelected = {
-                                    imagePickerLauncher.launch("image/*")
-                                }
-                            )
-                        } else {
-                            LazyColumn(
-                                state = listState,
-                                modifier = Modifier
-                                    .fillMaxSize(),
-                                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 28.dp),
-                                verticalArrangement = Arrangement.spacedBy(16.dp)
-                            ) {
-                                items(messages, key = { it.id }) { message ->
-                                    MessageBubble(
-                                        message = message,
-                                        isSpeaking = isSpeaking && currentlySpeakingId == message.id,
-                                        onSpeak = { viewModel.toggleSpeak(message.id, if (message.text.isNotBlank()) message.text else message.thoughtText) },
-                                        onShare = { ExportHelper.shareMessage(context, if (message.text.isNotBlank()) message.text else message.thoughtText) },
-                                        onRegenerate = { viewModel.regenerateLastResponse() },
-                                        onLongPressUserMessage = { activeUserMenuMessage = it }
-                                    )
-                                }
+                    // Chat Interface - Full-Page Edge-to-Edge with Vignette Transparency
+                    if (messages.isEmpty()) {
+                        EmptyChatHero(
+                            onPromptSelected = { prompt ->
+                                viewModel.onInputTextChanged(prompt)
+                                viewModel.sendMessage()
+                            },
+                            onExamineSelected = {
+                                imagePickerLauncher.launch("image/*")
+                            }
+                        )
+                    } else {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(
+                                start = 16.dp,
+                                end = 16.dp,
+                                top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 58.dp,
+                                bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 92.dp
+                            ),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            items(messages, key = { it.id }) { message ->
+                                MessageBubble(
+                                    message = message,
+                                    isSpeaking = isSpeaking && currentlySpeakingId == message.id,
+                                    onSpeak = { viewModel.toggleSpeak(message.id, if (message.text.isNotBlank()) message.text else message.thoughtText) },
+                                    onShare = { ExportHelper.shareMessage(context, if (message.text.isNotBlank()) message.text else message.thoughtText) },
+                                    onRegenerate = { viewModel.regenerateLastResponse() },
+                                    onLongPressUserMessage = { activeUserMenuMessage = it }
+                                )
+                            }
 
-                                val lastMsg = messages.lastOrNull()
-                                val lastContent = (if (lastMsg?.text?.isNotBlank() == true) lastMsg.text else lastMsg?.thoughtText.orEmpty()).trim()
-                                if (!isGenerating && lastMsg?.role == MessageRole.ASSISTANT && lastContent.isNotBlank()) {
-                                    item(key = "follow_up_chips") {
-                                        val followUps = remember(lastMsg.id, lastContent) {
-                                            extractFollowUpSuggestions(lastContent)
-                                        }
-                                        if (followUps.isNotEmpty()) {
-                                            LazyRow(
-                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(vertical = 4.dp)
-                                            ) {
-                                                items(followUps) { chip ->
-                                                    ChatGptSurfaceButton(
-                                                        onClick = {
-                                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                            val promptToSend = if (chip.equals("Continue generating", ignoreCase = true)) {
-                                                                "Continue from where you left off"
-                                                            } else {
-                                                                chip
-                                                            }
-                                                            viewModel.onInputTextChanged(promptToSend)
-                                                            viewModel.sendMessage()
-                                                        },
-                                                        shape = RoundedCornerShape(16.dp),
-                                                        color = Color(0xFF212121),
-                                                        border = BorderStroke(1.dp, Color(0xFF2E2E2E)),
-                                                        shadowElevation = 1.dp
-                                                    ) {
-                                                        Text(
-                                                            text = chip,
-                                                            style = MaterialTheme.typography.labelMedium,
-                                                            color = Color(0xFFECECEC),
-                                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                                                        )
-                                                    }
+                            val lastMsg = messages.lastOrNull()
+                            val lastContent = (if (lastMsg?.text?.isNotBlank() == true) lastMsg.text else lastMsg?.thoughtText.orEmpty()).trim()
+                            if (!isGenerating && lastMsg?.role == MessageRole.ASSISTANT && lastContent.isNotBlank()) {
+                                item(key = "follow_up_chips") {
+                                    val followUps = remember(lastMsg.id, lastContent) {
+                                        extractFollowUpSuggestions(lastContent)
+                                    }
+                                    if (followUps.isNotEmpty()) {
+                                        LazyRow(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 4.dp)
+                                        ) {
+                                            items(followUps) { chip ->
+                                                ChatGptSurfaceButton(
+                                                    onClick = {
+                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                        val promptToSend = if (chip.equals("Continue generating", ignoreCase = true)) {
+                                                            "Continue from where you left off"
+                                                        } else {
+                                                            chip
+                                                        }
+                                                        viewModel.onInputTextChanged(promptToSend)
+                                                        viewModel.sendMessage()
+                                                    },
+                                                    shape = RoundedCornerShape(16.dp),
+                                                    color = Color(0xFF212121),
+                                                    border = BorderStroke(1.dp, Color(0xFF2E2E2E)),
+                                                    shadowElevation = 1.dp
+                                                ) {
+                                                    Text(
+                                                        text = chip,
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        color = Color(0xFFECECEC),
+                                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                                    )
                                                 }
                                             }
                                         }
                                     }
                                 }
-
-                                item(key = "bottom_anchor") {
-                                    Spacer(modifier = Modifier.height(16.dp))
-                                }
                             }
 
-                            // Top Vignette (ultra-subtle gentle transparent feathering under top app bar)
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(8.dp)
-                                    .align(Alignment.TopCenter)
-                                    .background(
-                                        Brush.verticalGradient(
-                                            colors = listOf(
-                                                Color.Black.copy(alpha = 0.08f),
-                                                Color.Transparent
-                                            )
-                                        )
-                                    )
-                            )
-
-                            // Bottom Vignette - Chat Box Paina (ultra-subtle gentle transparent feathering above input dock)
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(10.dp)
-                                    .align(Alignment.BottomCenter)
-                                    .background(
-                                        Brush.verticalGradient(
-                                            colors = listOf(
-                                                Color.Transparent,
-                                                Color.Black.copy(alpha = 0.08f)
-                                            )
-                                        )
-                                    )
-                            )
-                        }
-
-                        // Floating Scroll-to-Bottom Button (ChatGPT style: auto-hides after 2s inactivity)
-                        androidx.compose.animation.AnimatedVisibility(
-                            visible = isScrollToBottomVisible && canScrollForward,
-                            enter = fadeIn(tween(180)) + scaleIn(tween(180), initialScale = 0.85f),
-                            exit = fadeOut(tween(220)) + scaleOut(tween(220), targetScale = 0.85f),
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(bottom = 12.dp)
-                        ) {
-                            Surface(
-                                shape = CircleShape,
-                                color = Color(0xFF212121),
-                                shadowElevation = 4.dp,
-                                border = BorderStroke(1.dp, Color(0xFF383838)),
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .clickable {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        scope.launch {
-                                            listState.animateScrollToItem(messages.size)
-                                        }
-                                    }
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        imageVector = Icons.Default.KeyboardArrowDown,
-                                        contentDescription = "Scroll to bottom",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
+                            item(key = "bottom_anchor") {
+                                Spacer(modifier = Modifier.height(16.dp))
                             }
                         }
                     }
+                }
+            }
 
-                    // Chat Box Bottom Dock
-                    Box(
+            // Floating Scroll-to-Bottom Button (ChatGPT style: auto-hides after 2s inactivity)
+            androidx.compose.animation.AnimatedVisibility(
+                visible = isScrollToBottomVisible && canScrollForward,
+                enter = fadeIn(tween(180)) + scaleIn(tween(180), initialScale = 0.85f),
+                exit = fadeOut(tween(220)) + scaleOut(tween(220), targetScale = 0.85f),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 86.dp)
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = Color(0xFF212121),
+                    shadowElevation = 4.dp,
+                    border = BorderStroke(1.dp, Color(0xFF383838)),
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            scope.launch {
+                                listState.animateScrollToItem(messages.size)
+                            }
+                        }
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowDown,
+                            contentDescription = "Scroll to bottom",
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+            }
+
+            // Top Vignette & Floating Controls Header (Edge-to-Edge ChatGPT style)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.TopCenter)
+            ) {
+                // Top Vignette Gradient: Smooth feathering from status bar into chat
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 68.dp)
+                        .background(
+                            Brush.verticalGradient(
+                                0.0f to Color.Black,
+                                0.45f to Color.Black.copy(alpha = 0.85f),
+                                0.75f to Color.Black.copy(alpha = 0.40f),
+                                1.0f to Color.Transparent
+                            )
+                        )
+                )
+
+                // Floating Action Bar Row
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 14.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Left: Translucent Circular Hamburger Button ( = )
+                    Surface(
+                        shape = CircleShape,
+                        color = Color(0x99242428),
+                        border = BorderStroke(0.5.dp, Color(0x33FFFFFF)),
                         modifier = Modifier
-                            .fillMaxWidth()
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .clickable {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                scope.launch { drawerState.open() }
+                            }
                     ) {
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            // Attached Document / Image Preview (ChatGPT Floating Thumbnail Style)
-                            if (attachedDocument != null) {
-                                val doc = attachedDocument!!
-                                Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.Menu,
+                                contentDescription = "Open drawer",
+                                tint = Color(0xFFECECEC),
+                                modifier = Modifier.size(19.dp)
+                            )
+                        }
+                    }
+
+                    // Center: Subtle Gemma title & status badge
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            text = "Gemma",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFFECECEC)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        BackendBadge(engineState = engineState)
+                    }
+
+                    // Right: Floating Pill Container [ ✎  |  ⋮ ]
+                    var showTopMenu by remember { mutableStateOf(false) }
+                    Box {
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = Color(0x99242428),
+                            border = BorderStroke(0.5.dp, Color(0x33FFFFFF)),
+                            modifier = Modifier.height(38.dp)
                         ) {
-                            if (doc.isImage && doc.previewBitmap != null) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            ) {
+                                // New Chat Pencil Icon
                                 Box(
                                     modifier = Modifier
-                                        .size(58.dp)
-                                ) {
-                                    androidx.compose.foundation.Image(
-                                        painter = androidx.compose.ui.graphics.painter.BitmapPainter(doc.previewBitmap!!.asImageBitmap()),
-                                        contentDescription = "Image preview",
-                                        modifier = Modifier
-                                            .size(54.dp)
-                                            .align(Alignment.BottomStart)
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(Color(0xFF212121)),
-                                        contentScale = ContentScale.Crop
-                                    )
-                                    // Circular Close Button floating at top right of image
-                                    Surface(
-                                        shape = CircleShape,
-                                        color = Color(0xFF212121),
-                                        border = BorderStroke(1.dp, Color(0xFF383838)),
-                                        modifier = Modifier
-                                            .size(20.dp)
-                                            .align(Alignment.TopEnd)
-                                            .clickable { viewModel.clearAttachedDocument() }
-                                    ) {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Icon(
-                                                imageVector = Icons.Default.Close,
-                                                contentDescription = "Remove image",
-                                                tint = Color.White,
-                                                modifier = Modifier.size(11.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                            } else {
-                                Surface(
-                                    shape = RoundedCornerShape(14.dp),
-                                    color = Color(0xFF212121),
-                                    border = BorderStroke(1.dp, Color(0xFF2E2E2E))
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Description,
-                                            contentDescription = "File",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Text(
-                                            text = doc.fileName,
-                                            style = MaterialTheme.typography.labelMedium,
-                                            fontWeight = FontWeight.Medium,
-                                            color = Color.White,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.widthIn(max = 200.dp)
-                                        )
-                                        Icon(
-                                            imageVector = Icons.Default.Close,
-                                            contentDescription = "Remove",
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                            modifier = Modifier
-                                                .size(16.dp)
-                                                .clip(CircleShape)
-                                                .clickable { viewModel.clearAttachedDocument() }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-
-                    // Editing message pill (ChatGPT style)
-                    if (editingMessageId != null) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 16.dp, end = 16.dp, bottom = 4.dp)
-                        ) {
-                            Surface(
-                                shape = RoundedCornerShape(14.dp),
-                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                        .size(34.dp)
+                                        .clip(CircleShape)
+                                        .clickable {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            viewModel.createNewChat()
+                                        },
+                                    contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Edit,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                        modifier = Modifier.size(13.dp)
+                                        contentDescription = "New chat",
+                                        tint = Color(0xFFECECEC),
+                                        modifier = Modifier.size(17.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "Editing message",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Medium,
-                                        color = MaterialTheme.colorScheme.onSecondaryContainer
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+
+                                Spacer(modifier = Modifier.width(2.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .width(1.dp)
+                                        .height(16.dp)
+                                        .background(Color(0x33FFFFFF))
+                                )
+                                Spacer(modifier = Modifier.width(2.dp))
+
+                                // 3-Dots More Options Icon
+                                Box(
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clip(CircleShape)
+                                        .clickable {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            showTopMenu = true
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
                                     Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Cancel edit",
-                                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                        modifier = Modifier
-                                            .size(14.dp)
-                                            .clip(CircleShape)
-                                            .clickable {
-                                                editingMessageId = null
-                                                viewModel.onInputTextChanged("")
-                                            }
+                                        imageVector = Icons.Default.MoreVert,
+                                        contentDescription = "More options",
+                                        tint = Color(0xFFECECEC),
+                                        modifier = Modifier.size(19.dp)
                                     )
                                 }
                             }
                         }
-                    }
 
-                    // Floating ChatGPT style Input Bar
-                    ChatInputBar(
-                        inputText = inputText,
-                        onTextChanged = { viewModel.onInputTextChanged(it) },
-                        onSend = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            if (editingMessageId != null) {
-                                val targetId = editingMessageId!!
-                                editingMessageId = null
-                                viewModel.editAndResendMessage(targetId, inputText)
-                                viewModel.onInputTextChanged("")
-                            } else {
-                                viewModel.sendMessage()
-                                viewModel.onInputTextChanged("")
+                        // Floating dropdown menu anchored directly to the pill
+                        DropdownMenu(
+                            expanded = showTopMenu,
+                            onDismissRequest = { showTopMenu = false },
+                            modifier = Modifier
+                                .background(Color(0xFF262626))
+                                .border(0.5.dp, Color(0xFF383838), RoundedCornerShape(12.dp))
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Settings", color = Color.White, fontWeight = FontWeight.Medium) },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Settings, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                                },
+                                onClick = {
+                                    showTopMenu = false
+                                    showSettingsPage = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Memories", color = Color.White) },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Psychology, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                                },
+                                onClick = {
+                                    showTopMenu = false
+                                    showMemoryDialog = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (isWebSearchEnabled) "Web Search (ON)" else "Web Search (OFF)",
+                                        color = if (isWebSearchEnabled) Color(0xFF10A37F) else Color.White
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Language,
+                                        contentDescription = null,
+                                        tint = if (isWebSearchEnabled) Color(0xFF10A37F) else Color.White,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                onClick = {
+                                    showTopMenu = false
+                                    viewModel.toggleWebSearch()
+                                }
+                            )
+                            if (messages.isNotEmpty()) {
+                                HorizontalDivider(color = Color(0xFF383838), thickness = 0.5.dp)
+                                DropdownMenuItem(
+                                    text = { Text("Share conversation", color = Color.White) },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Share, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                                    },
+                                    onClick = {
+                                        showTopMenu = false
+                                        viewModel.getCurrentSession()?.let { session ->
+                                            ExportHelper.shareSession(context, session)
+                                        }
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Rename", color = Color.White) },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.DriveFileRenameOutline, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                                    },
+                                    onClick = {
+                                        showTopMenu = false
+                                        renameText = viewModel.getCurrentSession()?.title ?: ""
+                                        showRenameDialog = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Delete conversation", color = MaterialTheme.colorScheme.error) },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+                                    },
+                                    onClick = {
+                                        showTopMenu = false
+                                        showDeleteConfirmDialog = true
+                                    }
+                                )
                             }
-                        },
-                        onStop = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            viewModel.stopGeneration()
-                        },
-                        isGenerating = isGenerating,
-                        isWebSearchEnabled = isWebSearchEnabled,
-                        onToggleWebSearch = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            viewModel.toggleWebSearch()
-                        },
-                        isEnabled = engineState is EngineState.Ready,
-                        onVoiceInput = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                                putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to Gemma…")
-                            }
-                            voiceLauncher.launch(intent)
-                        },
-                        onVoiceAssistant = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                                putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to Gemma…")
-                            }
-                            voiceLauncher.launch(intent)
-                        },
-                        onAttach = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            showAttachmentMenu = !showAttachmentMenu
-                        },
-                        hasAttachment = attachedDocument != null
-                    )
+                        }
+                    }
                 }
             }
-        }
-    }
+
+            // Top Error Banner (floating under top bar)
+            AnimatedVisibility(
+                visible = errorMessage != null,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 54.dp)
+            ) {
+                errorMessage?.let { error ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = error,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            TextButton(onClick = { viewModel.dismissError() }) {
+                                Text("Dismiss", color = MaterialTheme.colorScheme.onErrorContainer)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Bottom Vignette & Floating Input Dock
+            if (installState is ModelInstallState.Installed && (engineState is EngineState.Ready || engineState is EngineState.Generating)) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.BottomCenter)
+                        .imePadding()
+                ) {
+                    // Smooth Bottom Vignette Gradient (Transparent -> AMOLED Black)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 96.dp)
+                            .background(
+                                Brush.verticalGradient(
+                                    0.0f to Color.Transparent,
+                                    0.25f to Color.Black.copy(alpha = 0.40f),
+                                    0.65f to Color.Black.copy(alpha = 0.90f),
+                                    1.0f to Color.Black
+                                )
+                            )
+                            .align(Alignment.BottomCenter)
+                    )
+
+                    // Input Dock Column
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(bottom = 4.dp)
+                    ) {
+                        // Attached Document / Image Preview (ChatGPT Floating Thumbnail Style)
+                        if (attachedDocument != null) {
+                            val doc = attachedDocument!!
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (doc.isImage && doc.previewBitmap != null) {
+                                    Box(
+                                        modifier = Modifier.size(58.dp)
+                                    ) {
+                                        androidx.compose.foundation.Image(
+                                            painter = androidx.compose.ui.graphics.painter.BitmapPainter(doc.previewBitmap!!.asImageBitmap()),
+                                            contentDescription = "Image preview",
+                                            modifier = Modifier
+                                                .size(54.dp)
+                                                .align(Alignment.BottomStart)
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(Color(0xFF212121)),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = Color(0xFF212121),
+                                            border = BorderStroke(1.dp, Color(0xFF383838)),
+                                            modifier = Modifier
+                                                .size(20.dp)
+                                                .align(Alignment.TopEnd)
+                                                .clickable { viewModel.clearAttachedDocument() }
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Close,
+                                                    contentDescription = "Remove image",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(11.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    Surface(
+                                        shape = RoundedCornerShape(14.dp),
+                                        color = Color(0xFF212121),
+                                        border = BorderStroke(1.dp, Color(0xFF2E2E2E))
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Description,
+                                                contentDescription = "File",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Text(
+                                                text = doc.fileName,
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.Medium,
+                                                color = Color.White,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.widthIn(max = 200.dp)
+                                            )
+                                            Icon(
+                                                imageVector = Icons.Default.Close,
+                                                contentDescription = "Remove",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                                modifier = Modifier
+                                                    .size(16.dp)
+                                                    .clip(CircleShape)
+                                                    .clickable { viewModel.clearAttachedDocument() }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Editing message pill (ChatGPT style)
+                        if (editingMessageId != null) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 16.dp, end = 16.dp, bottom = 4.dp)
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Edit,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Editing message",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "Cancel edit",
+                                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            modifier = Modifier
+                                                .size(14.dp)
+                                                .clip(CircleShape)
+                                                .clickable {
+                                                    editingMessageId = null
+                                                    viewModel.onInputTextChanged("")
+                                                }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Floating ChatGPT style Input Bar
+                        ChatInputBar(
+                            inputText = inputText,
+                            onTextChanged = { viewModel.onInputTextChanged(it) },
+                            onSend = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                if (editingMessageId != null) {
+                                    val targetId = editingMessageId!!
+                                    editingMessageId = null
+                                    viewModel.editAndResendMessage(targetId, inputText)
+                                    viewModel.onInputTextChanged("")
+                                } else {
+                                    viewModel.sendMessage()
+                                    viewModel.onInputTextChanged("")
+                                }
+                            },
+                            onStop = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.stopGeneration()
+                            },
+                            isGenerating = isGenerating,
+                            isWebSearchEnabled = isWebSearchEnabled,
+                            onToggleWebSearch = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.toggleWebSearch()
+                            },
+                            isEnabled = engineState is EngineState.Ready || engineState is EngineState.Generating,
+                            onVoiceInput = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to Gemma…")
+                                }
+                                voiceLauncher.launch(intent)
+                            },
+                            onVoiceAssistant = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to Gemma…")
+                                }
+                                voiceLauncher.launch(intent)
+                            },
+                            onAttach = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                showAttachmentMenu = !showAttachmentMenu
+                            },
+                            hasAttachment = attachedDocument != null
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -1387,7 +1468,6 @@ fun ChatScreen(
         },
         recentFiles = recentFiles
     )
-}
 }
 
 @Composable
@@ -1709,12 +1789,15 @@ fun RecentChatsDrawer(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // User Avatar "TP" (Teja Pampana)
+                // User Avatar "TP" (Teja Pampana) -> Opens Settings on click (ChatGPT style)
                 Surface(
                     shape = CircleShape,
                     color = Color(0xFF2E2E2E),
                     border = BorderStroke(1.dp, Color(0xFF383838)),
-                    modifier = Modifier.size(36.dp)
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .clickable { onOpenSettings() }
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Text(
