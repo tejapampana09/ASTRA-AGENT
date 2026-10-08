@@ -154,7 +154,7 @@ class GemmaEngine(
 
             if (preferCpu) {
                 // Initialize directly on CPU: Smooth, responsive, zero GPU lockups, zero phone freezing!
-                // Uses CPU vision with 2 threads to leave UI/SurfaceFlinger cores free
+                // Strictly 100% CPU: both text and vision execute on CPU threads.
                 var cpuEngineLoaded = false
                 try {
                     Log.d(TAG, "[$TAG] Initializing CPU model with CPU vision backend (2 threads) and 2048 token budget...")
@@ -171,20 +171,20 @@ class GemmaEngine(
                     loadedEngine = testEngine
                     backendChosen = BackendType.CPU
                     cpuEngineLoaded = true
-                    Log.i(TAG, "[$TAG] Model loaded successfully on CPU with CPU vision backend")
+                    Log.i(TAG, "[$TAG] Model loaded successfully on CPU with CPU vision backend (2 threads)")
                 } catch (cpuVisionErr: Throwable) {
                     try { testEngine?.close() } catch (_: Throwable) {}
                     testEngine = null
-                    Log.w(TAG, "[$TAG] CPU vision (2 threads) failed: ${cpuVisionErr.message}. Trying GPU vision backend...")
+                    Log.w(TAG, "[$TAG] CPU vision (2 threads) failed: ${cpuVisionErr.message}. Trying CPU vision with 4 threads...")
                 }
 
                 if (!cpuEngineLoaded) {
                     try {
-                        Log.d(TAG, "[$TAG] Initializing CPU model with GPU vision backend...")
+                        Log.d(TAG, "[$TAG] Initializing CPU model with CPU vision backend (4 threads)...")
                         val config = EngineConfig(
                             modelPath = modelPath,
                             backend = Backend.CPU(threadCount = 4),
-                            visionBackend = Backend.GPU(),
+                            visionBackend = Backend.CPU(threadCount = 4),
                             maxNumTokens = 2048,
                             maxNumImages = 1,
                             cacheDir = effectiveCacheDir
@@ -194,11 +194,11 @@ class GemmaEngine(
                         loadedEngine = testEngine
                         backendChosen = BackendType.CPU
                         cpuEngineLoaded = true
-                        Log.i(TAG, "[$TAG] Model loaded successfully on CPU with GPU vision backend")
-                    } catch (gpuVisionErr: Throwable) {
+                        Log.i(TAG, "[$TAG] Model loaded successfully on CPU with CPU vision backend (4 threads)")
+                    } catch (cpuVisionErr: Throwable) {
                         try { testEngine?.close() } catch (_: Throwable) {}
                         testEngine = null
-                        Log.w(TAG, "[$TAG] GPU vision failed: ${gpuVisionErr.message}. Trying text-only fallback...")
+                        Log.w(TAG, "[$TAG] CPU vision failed: ${cpuVisionErr.message}. Falling back to text-only CPU...")
                     }
                 }
 
