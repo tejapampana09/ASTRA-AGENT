@@ -296,7 +296,8 @@ fun ChatScreen(
                         DocumentOcrHelper.processTextUri(context, it)
                     }
                     viewModel.attachDocument(doc)
-                    Toast.makeText(context, "Attached ${doc.fileName} (${doc.wordCount} words)", Toast.LENGTH_SHORT).show()
+                    val info = if (doc.isImage) "" else " (${doc.wordCount} words)"
+                    Toast.makeText(context, "Attached ${doc.fileName}$info", Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
                     Toast.makeText(context, "Error reading file: ${e.message}", Toast.LENGTH_LONG).show()
                 } finally {
@@ -306,7 +307,7 @@ fun ChatScreen(
         }
     }
 
-    // Camera Capture Launcher — native multimodal + OCR extraction
+    // Camera Capture Launcher — pure native multimodal vision
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicturePreview()
     ) { bitmap: Bitmap? ->
@@ -317,7 +318,7 @@ fun ChatScreen(
                     val doc = DocumentOcrHelper.processImageBitmap(it, name)
                     viewModel.attachDocument(doc)
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(context, "📷 Photo attached (${doc.wordCount} words detected)", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "📷 Photo attached", Toast.LENGTH_SHORT).show()
                     }
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) {
@@ -328,7 +329,7 @@ fun ChatScreen(
         }
     }
 
-    // Image Picker Launcher — native multimodal + OCR extraction
+    // Image Picker Launcher — pure native multimodal vision
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -338,7 +339,7 @@ fun ChatScreen(
                     val doc = DocumentOcrHelper.processImageUri(context, it)
                     viewModel.attachDocument(doc)
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(context, "🖼️ Image attached (${doc.wordCount} words detected)", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "🖼️ Image attached", Toast.LENGTH_SHORT).show()
                     }
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) {

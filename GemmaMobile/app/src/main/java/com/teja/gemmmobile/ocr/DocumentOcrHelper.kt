@@ -48,14 +48,10 @@ object DocumentOcrHelper {
             try { android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size) } catch (_: Exception) { null }
         } else null
 
-        val image = InputImage.fromFilePath(context, uri)
-        val visionText = recognizer.process(image).await()
-        val text = visionText.text.trim()
-        val words = if (text.isBlank()) 0 else text.split(Regex("""\s+""")).size
         ExtractedDocument(
             fileName = fileName,
-            text = text,
-            wordCount = words,
+            text = "",
+            wordCount = 0,
             previewBitmap = bitmap,
             isImage = true,
             imageUri = uri,
@@ -65,19 +61,14 @@ object DocumentOcrHelper {
 
     suspend fun processImageBitmap(bitmap: Bitmap, name: String = "Photo"): ExtractedDocument = withContext(Dispatchers.IO) {
         val scaled = com.teja.gemmmobile.storage.StorageManagerHelper.scaleBitmapDown(bitmap, 1024)
-        val image = InputImage.fromBitmap(scaled, 0)
-        val visionText = recognizer.process(image).await()
-        val text = visionText.text.trim()
-        val words = if (text.isBlank()) 0 else text.split(Regex("""\s+""")).size
-
         val stream = java.io.ByteArrayOutputStream()
         scaled.compress(Bitmap.CompressFormat.JPEG, 80, stream)
         val bytes = stream.toByteArray()
 
         ExtractedDocument(
             fileName = name,
-            text = text,
-            wordCount = words,
+            text = "",
+            wordCount = 0,
             previewBitmap = scaled,
             isImage = true,
             imageBytes = bytes
