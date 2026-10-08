@@ -369,19 +369,27 @@ fun ChatScreen(
     val canScrollForward by remember { derivedStateOf { listState.canScrollForward } }
     var isScrollToBottomVisible by remember { mutableStateOf(false) }
 
-    // ChatGPT-style Pull Down / Overdrag to Start New Chat
+    // ChatGPT-style Drag Up at end of page to Start New Chat
     val pullOffsetAnim = remember { Animatable(0f) }
     val density = LocalDensity.current
     val pullTriggerThresholdPx = with(density) { 76.dp.toPx() }
     val pullMaxOffsetPx = with(density) { 130.dp.toPx() }
     var hasTriggeredThresholdHaptic by remember { mutableStateOf(false) }
 
+    LaunchedEffect(messages.isEmpty()) {
+        if (messages.isEmpty()) {
+            pullOffsetAnim.snapTo(0f)
+            hasTriggeredThresholdHaptic = false
+        }
+    }
+
     val pullToNewChatConnection = remember(messages.isNotEmpty(), listState) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                // When dragging finger up while pull indicator is active, consume upward delta to collapse offset
-                if (pullOffsetAnim.value > 0f && available.y < 0f && source == NestedScrollSource.UserInput) {
-                    val newOffset = (pullOffsetAnim.value + available.y).coerceAtLeast(0f)
+                if (messages.isEmpty()) return Offset.Zero
+                // If user was pulling up and now drags finger DOWN (available.y > 0f), consume downward delta to collapse offset
+                if (pullOffsetAnim.value > 0f && available.y > 0f && source == NestedScrollSource.UserInput) {
+                    val newOffset = (pullOffsetAnim.value - available.y).coerceAtLeast(0f)
                     scope.launch { pullOffsetAnim.snapTo(newOffset) }
                     if (newOffset < pullTriggerThresholdPx) {
                         hasTriggeredThresholdHaptic = false
@@ -392,12 +400,14 @@ fun ChatScreen(
             }
 
             override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-                if (messages.isNotEmpty() && source == NestedScrollSource.UserInput && available.y > 0f) {
-                    val isAtTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
-                    if (isAtTop) {
-                        // Resistance diminishes as pull increases (rubber-band feel)
+                // When at the bottom of the list and user drags finger UP (available.y < 0f)
+                if (messages.isNotEmpty() && source == NestedScrollSource.UserInput && available.y < 0f) {
+                    val isAtBottom = !listState.canScrollForward
+                    if (isAtBottom) {
+                        val upwardDelta = -available.y
+                        // Diminishing resistance as offset grows (smooth rubber-band physics)
                         val resistance = 0.45f * (1f - (pullOffsetAnim.value / (pullMaxOffsetPx * 1.5f)).coerceIn(0f, 0.65f))
-                        val newOffset = (pullOffsetAnim.value + available.y * resistance).coerceAtMost(pullMaxOffsetPx)
+                        val newOffset = (pullOffsetAnim.value + upwardDelta * resistance).coerceAtMost(pullMaxOffsetPx)
                         scope.launch { pullOffsetAnim.snapTo(newOffset) }
                         if (newOffset >= pullTriggerThresholdPx && !hasTriggeredThresholdHaptic) {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -412,6 +422,7 @@ fun ChatScreen(
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
+                if (messages.isEmpty()) return Velocity.Zero
                 if (pullOffsetAnim.value > 0f) {
                     val triggered = pullOffsetAnim.value >= pullTriggerThresholdPx
                     if (triggered) {
@@ -856,7 +867,7 @@ fun ChatScreen(
                                 .fillMaxSize()
                                 .nestedScroll(pullToNewChatConnection)
                                 .graphicsLayer {
-                                    translationY = pullOffsetAnim.value * 0.45f
+                                    translationY = -pullOffsetAnim.value * 0.45f
                                 },
                             contentPadding = PaddingValues(
                                 start = 16.dp,
@@ -1150,53 +1161,6 @@ fun ChatScreen(
                 }
             }
 
-            // ChatGPT-style Floating Indicator for Pull-Down New Chat
-            if (pullOffsetAnim.value > 2f) {
-                val pullProgress = (pullOffsetAnim.value / pullTriggerThresholdPx).coerceIn(0f, 1f)
-                val isTriggered = pullOffsetAnim.value >= pullTriggerThresholdPx
-                val pillTranslationY = with(density) {
-                    WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 54.dp + (pullOffsetAnim.value * 0.35f).toDp()
-                }
-                Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = Color(0xEE1E1E22),
-                    border = BorderStroke(
-                        1.dp,
-                        if (isTriggered) Color(0xFF10A37F) else Color(0x33FFFFFF)
-                    ),
-                    shadowElevation = 6.dp,
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .offset(y = pillTranslationY)
-                        .graphicsLayer {
-                            alpha = (pullProgress * 1.5f).coerceIn(0f, 1f)
-                            scaleX = 0.85f + 0.15f * pullProgress
-                            scaleY = 0.85f + 0.15f * pullProgress
-                        }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = null,
-                            tint = if (isTriggered) Color(0xFF10A37F) else Color(0xFFCCCCCC),
-                            modifier = Modifier
-                                .size(16.dp)
-                                .rotate(pullProgress * 90f)
-                        )
-                        Text(
-                            text = if (isTriggered) "Release for new chat" else "Pull down for new chat",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = if (isTriggered) FontWeight.SemiBold else FontWeight.Normal,
-                            color = if (isTriggered) Color.White else Color(0xFFAAAAAA)
-                        )
-                    }
-                }
-            }
-
             // Top Error Banner (floating under top bar)
             AnimatedVisibility(
                 visible = errorMessage != null,
@@ -1233,6 +1197,54 @@ fun ChatScreen(
                 }
             }
 
+            // ChatGPT-style Floating Indicator for Drag-Up New Chat at end of page
+            if (messages.isNotEmpty() && pullOffsetAnim.value > 2f) {
+                val pullProgress = (pullOffsetAnim.value / pullTriggerThresholdPx).coerceIn(0f, 1f)
+                val isTriggered = pullOffsetAnim.value >= pullTriggerThresholdPx
+                val pillBottomOffset = with(density) {
+                    val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+                    navBottom + 82.dp + (pullOffsetAnim.value * 0.35f).toDp()
+                }
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = Color(0xEE1E1E22),
+                    border = BorderStroke(
+                        1.dp,
+                        if (isTriggered) Color(0xFF10A37F) else Color(0x33FFFFFF)
+                    ),
+                    shadowElevation = 6.dp,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = pillBottomOffset)
+                        .graphicsLayer {
+                            alpha = (pullProgress * 1.5f).coerceIn(0f, 1f)
+                            scaleX = 0.85f + 0.15f * pullProgress
+                            scaleY = 0.85f + 0.15f * pullProgress
+                        }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowUpward,
+                            contentDescription = null,
+                            tint = if (isTriggered) Color(0xFF10A37F) else Color(0xFFCCCCCC),
+                            modifier = Modifier
+                                .size(16.dp)
+                                .rotate(pullProgress * 180f)
+                        )
+                        Text(
+                            text = if (isTriggered) "Release for new chat" else "Pull up for new chat",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (isTriggered) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (isTriggered) Color.White else Color(0xFFAAAAAA)
+                        )
+                    }
+                }
+            }
+
             // Bottom Vignette & Floating Input Dock
             if (installState is ModelInstallState.Installed && (engineState is EngineState.Ready || engineState is EngineState.Generating)) {
                 Box(
@@ -1257,7 +1269,99 @@ fun ChatScreen(
                             .align(Alignment.BottomCenter)
                     )
 
-                    // Input Dock Column
+                    // Independent Floating ChatGPT style Memory Updated Notification
+                    AnimatedVisibility(
+                        visible = memoryUpdatedEvent != null,
+                        enter = fadeIn() + slideInVertically { it / 2 },
+                        exit = fadeOut() + slideOutVertically { it / 2 },
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(
+                                bottom = with(density) {
+                                    val navBottom = if (!isImeVisible) WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() else 0.dp
+                                    navBottom + if (isScrollToBottomVisible && canScrollForward) 124.dp else 78.dp
+                                }
+                            )
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = Color(0xFF1E1E1E),
+                            border = BorderStroke(1.dp, Color(0xFF333333)),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .clickable { showMemoryDialog = true }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "🧠",
+                                    fontSize = 13.sp
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = memoryUpdatedEvent ?: "Memory updated",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = Color(0xFFECECEC),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Dismiss memory notification",
+                                    tint = Color(0xFF8E8E93),
+                                    modifier = Modifier
+                                        .size(13.dp)
+                                        .clickable { viewModel.clearMemoryUpdatedEvent() }
+                                )
+                            }
+                        }
+                    }
+
+                    // Independent Floating Scroll-to-Bottom Arrow (higher up, decoupled so chat bar NEVER repositions)
+                    AnimatedVisibility(
+                        visible = isScrollToBottomVisible && canScrollForward,
+                        enter = fadeIn(tween(180)) + scaleIn(tween(180), initialScale = 0.85f),
+                        exit = fadeOut(tween(220)) + scaleOut(tween(220), targetScale = 0.85f),
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(
+                                bottom = with(density) {
+                                    val navBottom = if (!isImeVisible) WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() else 0.dp
+                                    navBottom + 78.dp
+                                }
+                            )
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = Color(0xFF212121),
+                            shadowElevation = 6.dp,
+                            border = BorderStroke(1.dp, Color(0xFF383838)),
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .clickable {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    scope.launch {
+                                        listState.animateScrollToItem(messages.size)
+                                    }
+                                }
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Scroll to bottom",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // Input Dock Column (strictly holds document chips, editing pill, and ChatInputBar)
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1348,88 +1452,6 @@ fun ChatScreen(
                                                 }
                                         )
                                     }
-                                }
-                            }
-                        }
-
-                        // Floating ChatGPT style Memory Updated Notification
-                        AnimatedVisibility(
-                            visible = memoryUpdatedEvent != null,
-                            enter = fadeIn() + slideInVertically { it / 2 },
-                            exit = fadeOut() + slideOutVertically { it / 2 },
-                            modifier = Modifier
-                                .align(Alignment.CenterHorizontally)
-                                .padding(bottom = 6.dp)
-                        ) {
-                            Surface(
-                                shape = RoundedCornerShape(20.dp),
-                                color = Color(0xFF1E1E1E),
-                                border = BorderStroke(1.dp, Color(0xFF333333)),
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(20.dp))
-                                    .clickable { showMemoryDialog = true }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = "🧠",
-                                        fontSize = 13.sp
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = memoryUpdatedEvent ?: "Memory updated",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = Color(0xFFECECEC),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Dismiss memory notification",
-                                        tint = Color(0xFF8E8E93),
-                                        modifier = Modifier
-                                            .size(13.dp)
-                                            .clickable { viewModel.clearMemoryUpdatedEvent() }
-                                    )
-                                }
-                            }
-                        }
-
-                        // Scroll-to-Bottom Button — anchored just above input bar (always correct position)
-                        AnimatedVisibility(
-                            visible = isScrollToBottomVisible && canScrollForward,
-                            enter = fadeIn(tween(180)) + scaleIn(tween(180), initialScale = 0.85f),
-                            exit = fadeOut(tween(220)) + scaleOut(tween(220), targetScale = 0.85f),
-                            modifier = Modifier
-                                .align(Alignment.CenterHorizontally)
-                                .padding(bottom = 6.dp)
-                        ) {
-                            Surface(
-                                shape = CircleShape,
-                                color = Color(0xFF212121),
-                                shadowElevation = 4.dp,
-                                border = BorderStroke(1.dp, Color(0xFF383838)),
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .clickable {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        scope.launch {
-                                            listState.animateScrollToItem(messages.size)
-                                        }
-                                    }
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        imageVector = Icons.Default.KeyboardArrowDown,
-                                        contentDescription = "Scroll to bottom",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(22.dp)
-                                    )
                                 }
                             }
                         }
@@ -2016,10 +2038,16 @@ fun EmptyChatHero(
     onPromptSelected: (String) -> Unit,
     onExamineSelected: () -> Unit = {}
 ) {
+    val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 20.dp, vertical = 24.dp),
+            .padding(
+                start = 20.dp,
+                end = 20.dp,
+                top = 24.dp,
+                bottom = navBottom + 84.dp
+            ),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         // Centered subtle greeting / logo
@@ -4031,8 +4059,17 @@ fun ChatInputBar(
     )
 
     // ChatGPT mobile floating island behavior:
-    // When idle / keyboard closed: floats comfortably above nav bar with 14.dp side margins.
-    // When active / focused / keyboard open: snappy spring expansion to 10.dp side margins.
+    // When idle / keyboard closed: 80% width centered pill (ChatGPT mobile idle style).
+    // When active / focused / typing / keyboard open: smooth, fast spring expansion to full width (100%).
+    val widthFraction by animateFloatAsState(
+        targetValue = if (isExpanded) 1f else 0.80f,
+        animationSpec = spring(
+            dampingRatio = 0.82f,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "inputWidthFraction"
+    )
+
     val horizontalPadding by animateDpAsState(
         targetValue = if (isExpanded) 10.dp else 14.dp,
         animationSpec = spring(
@@ -4064,7 +4101,7 @@ fun ChatInputBar(
             border = BorderStroke(1.dp, Color(0xFF2C2C2C)),
             shadowElevation = 6.dp,
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(widthFraction)
                 .animateContentSize(
                     animationSpec = spring(
                         dampingRatio = Spring.DampingRatioNoBouncy,
