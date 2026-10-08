@@ -695,7 +695,7 @@ fun ChatScreen(
                 modifier = Modifier
                     .width(320.dp)
                     .fillMaxHeight(),
-                drawerContainerColor = Color(0xFF171717)
+                drawerContainerColor = Color(0xF5101016)
             ) {
                 RecentChatsDrawer(
                     sessions = sessions,
@@ -752,7 +752,15 @@ fun ChatScreen(
         Box(
             modifier = modifier
                 .fillMaxSize()
-                .background(Color.Black)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color(0xFF0D0D12),
+                            Color(0xFF08080C),
+                            Color(0xFF050508)
+                        )
+                    )
+                )
         ) {
             // Main content depending on engine & install state
             when {
@@ -973,9 +981,9 @@ fun ChatScreen(
                         .height(WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 68.dp)
                         .background(
                             Brush.verticalGradient(
-                                0.0f to Color.Black,
-                                0.45f to Color.Black.copy(alpha = 0.85f),
-                                0.75f to Color.Black.copy(alpha = 0.40f),
+                                0.0f to Color(0xEE0A0A0E),
+                                0.55f to Color(0x990A0A0E),
+                                0.85f to Color(0x330A0A0E),
                                 1.0f to Color.Transparent
                             )
                         )
@@ -993,8 +1001,8 @@ fun ChatScreen(
                     // Left: Translucent Circular Hamburger Button ( = )
                     Surface(
                         shape = CircleShape,
-                        color = Color(0x99242428),
-                        border = BorderStroke(0.5.dp, Color(0x33FFFFFF)),
+                        color = Color(0xB3181824),
+                        border = BorderStroke(0.8.dp, Brush.verticalGradient(listOf(Color(0x3DFFFFFF), Color(0x14FFFFFF)))),
                         modifier = Modifier
                             .size(38.dp)
                             .clip(CircleShape)
@@ -1032,8 +1040,8 @@ fun ChatScreen(
                     Box {
                         Surface(
                             shape = RoundedCornerShape(20.dp),
-                            color = Color(0x99242428),
-                            border = BorderStroke(0.5.dp, Color(0x33FFFFFF)),
+                            color = Color(0xB3181824),
+                            border = BorderStroke(0.8.dp, Brush.verticalGradient(listOf(Color(0x3DFFFFFF), Color(0x14FFFFFF)))),
                             modifier = Modifier.height(38.dp)
                         ) {
                             Row(
@@ -1093,8 +1101,8 @@ fun ChatScreen(
                             expanded = showTopMenu,
                             onDismissRequest = { showTopMenu = false },
                             modifier = Modifier
-                                .background(Color(0xFF262626))
-                                .border(0.5.dp, Color(0xFF383838), RoundedCornerShape(12.dp))
+                                .background(Color(0xF014141C))
+                                .border(0.8.dp, Color(0x30FFFFFF), RoundedCornerShape(14.dp))
                         ) {
                             DropdownMenuItem(
                                 text = { Text("Settings", color = Color.White, fontWeight = FontWeight.Medium) },
@@ -1353,9 +1361,9 @@ fun ChatScreen(
                     ) {
                         Surface(
                             shape = CircleShape,
-                            color = Color(0xFF212121),
-                            shadowElevation = 6.dp,
-                            border = BorderStroke(1.dp, Color(0xFF383838)),
+                            color = Color(0xD9181824),
+                            shadowElevation = 8.dp,
+                            border = BorderStroke(1.dp, Brush.verticalGradient(listOf(Color(0x3DFFFFFF), Color(0x14FFFFFF)))),
                             modifier = Modifier
                                 .size(36.dp)
                                 .clip(CircleShape)
@@ -1436,9 +1444,9 @@ fun ChatScreen(
         ) {
             Surface(
                 shape = RoundedCornerShape(22.dp),
-                color = Color(0xFF262626),
-                border = BorderStroke(1.dp, Color(0xFF383838)),
-                shadowElevation = 10.dp,
+                color = Color(0xEB14141E),
+                border = BorderStroke(1.dp, Brush.verticalGradient(listOf(Color(0x3DFFFFFF), Color(0x12FFFFFF)))),
+                shadowElevation = 12.dp,
                 modifier = Modifier
                     .width(260.dp)
                     .clip(RoundedCornerShape(22.dp))
@@ -1573,7 +1581,7 @@ fun RecentChatsDrawer(
             .fillMaxSize()
             .statusBarsPadding()
             .navigationBarsPadding()
-            .background(Color(0xFF171717))
+            .background(Color(0xF5101016))
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         // Top Header
@@ -1612,8 +1620,8 @@ fun RecentChatsDrawer(
 
         Surface(
             shape = RoundedCornerShape(12.dp),
-            color = Color(0xFF212121),
-            border = BorderStroke(1.dp, Color(0xFF2E2E2E)),
+            color = Color(0x661E1E28),
+            border = BorderStroke(0.8.dp, Color(0x28FFFFFF)),
             modifier = Modifier
                 .fillMaxWidth()
                 .height(40.dp)
@@ -1932,9 +1940,9 @@ fun EmptyChatHero(
         modifier = Modifier
             .fillMaxSize()
             .padding(
-                start = 20.dp,
-                end = 20.dp,
-                top = 24.dp,
+                start = 18.dp,
+                end = 18.dp,
+                top = 28.dp,
                 bottom = navBottom + 84.dp
             ),
         verticalArrangement = Arrangement.SpaceBetween
@@ -1949,16 +1957,16 @@ fun EmptyChatHero(
         ) {
             Surface(
                 shape = CircleShape,
-                color = Color(0xFF212121),
-                border = BorderStroke(1.dp, Color(0xFF2E2E2E)),
-                modifier = Modifier.size(60.dp)
+                color = Color(0xB3181824),
+                border = BorderStroke(1.dp, Brush.verticalGradient(listOf(Color(0x40FFFFFF), Color(0x12FFFFFF)))),
+                modifier = Modifier.size(62.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(text = "✦", fontSize = 28.sp, color = Color(0xFF10A37F))
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
             Text(
                 text = "What can I help with?",
@@ -1972,71 +1980,125 @@ fun EmptyChatHero(
             Text(
                 text = "On-device • 100% Private • Multimodal",
                 style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF8E8E93)
+                color = Color(0xFF8E8E98)
             )
         }
 
-        // Minimal ChatGPT-style bottom suggestion pills (matching Screenshot 1 & 2)
+        // Sleek 2x2 Frosted Glass Prompt Cards (matching reference image)
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // Suggestion 1: Examine image or document
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = Color(0xFF212121),
-                border = BorderStroke(1.dp, Color(0xFF2E2E2E)),
-                modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .liquidBounceClick(scaleDown = 0.96f) { onExamineSelected() }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Image,
-                        contentDescription = null,
-                        tint = Color(0xFF8E8E93),
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = "Examine image or document",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White
-                    )
-                }
+                // Card 1: Examine image or document
+                GlassHeroCard(
+                    modifier = Modifier.weight(1f),
+                    icon = Icons.Default.Image,
+                    iconBg = Color(0x2E06B6D4),
+                    iconTint = Color(0xFF22D3EE),
+                    title = "Analyze media",
+                    subtitle = "Photos & docs",
+                    onClick = onExamineSelected
+                )
+
+                // Card 2: Code & technical
+                GlassHeroCard(
+                    modifier = Modifier.weight(1f),
+                    icon = Icons.Default.AutoAwesome,
+                    iconBg = Color(0x2E10A37F),
+                    iconTint = Color(0xFF34D399),
+                    title = "Code & debug",
+                    subtitle = "Kotlin, Python",
+                    onClick = { onPromptSelected("Help me write and optimize a clean algorithm in Kotlin") }
+                )
             }
 
-            // Suggestion 2: Write, explain or code
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = Color(0xFF212121),
-                border = BorderStroke(1.dp, Color(0xFF2E2E2E)),
-                modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .liquidBounceClick(scaleDown = 0.96f) { onPromptSelected("Explain how quantum computing works with a simple analogy") }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Edit,
-                        contentDescription = null,
-                        tint = Color(0xFF8E8E93),
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = "Write, explain or code",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White
-                    )
-                }
+                // Card 3: Write & explain
+                GlassHeroCard(
+                    modifier = Modifier.weight(1f),
+                    icon = Icons.Default.Edit,
+                    iconBg = Color(0x2E8B5CF6),
+                    iconTint = Color(0xFFA78BFA),
+                    title = "Draft & write",
+                    subtitle = "Summaries & essays",
+                    onClick = { onPromptSelected("Summarize key machine learning concepts with a clear analogy") }
+                )
+
+                // Card 4: Web Search
+                GlassHeroCard(
+                    modifier = Modifier.weight(1f),
+                    icon = Icons.Default.Language,
+                    iconBg = Color(0x2EF59E0B),
+                    iconTint = Color(0xFFFBBF24),
+                    title = "Live search",
+                    subtitle = "Web intelligence",
+                    onClick = { onPromptSelected("What are the latest breakthroughs in on-device AI?") }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GlassHeroCard(
+    modifier: Modifier = Modifier,
+    icon: ImageVector,
+    iconBg: Color,
+    iconTint: Color,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = Color(0xB3161622),
+        border = BorderStroke(1.dp, Brush.verticalGradient(listOf(Color(0x30FFFFFF), Color(0x0CFFFFFF)))),
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .liquidBounceClick(scaleDown = 0.96f, onClick = onClick)
+    ) {
+        Column(
+            modifier = Modifier.padding(13.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(iconBg),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = iconTint,
+                    modifier = Modifier.size(17.dp)
+                )
+            }
+            Column {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                    color = Color(0xFF8E8E98),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
     }
@@ -2144,7 +2206,8 @@ fun MessageBubble(
             val currentDisplayBitmap = displayBitmap
             Surface(
                 shape = RoundedCornerShape(20.dp),
-                color = Color(0xFF381024), // ChatGPT dark burgundy/plum bubble (matching media_1791402016025.jpg)
+                color = Color(0xD91F1F2A), // Frosted translucent obsidian glass
+                border = BorderStroke(1.dp, Brush.verticalGradient(listOf(Color(0x35FFFFFF), Color(0x10FFFFFF)))),
                 modifier = Modifier
                     .widthIn(max = 295.dp)
                     .clip(RoundedCornerShape(20.dp))
@@ -2187,8 +2250,8 @@ fun MessageBubble(
                             // Google AI Edge / NotebookLM Source Card
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
-                                color = Color(0xFF2A0D1B),
-                                border = BorderStroke(1.dp, Color(0xFF4A1731)),
+                                color = Color(0x662A2A38),
+                                border = BorderStroke(0.8.dp, Color(0x2EFFFFFF)),
                                 modifier = Modifier.padding(bottom = 6.dp)
                             ) {
                                 Row(
@@ -4179,12 +4242,12 @@ fun ChatInputBar(
         label = "inputBottomPadding"
     )
 
-    // Floating Pill Island Surface (ChatGPT AMOLED pure dark style)
+    // Floating Pill Island Surface (Frosted Translucent Obsidian Glass)
     Surface(
         shape = RoundedCornerShape(cornerRadius),
-        color = Color(0xFF212121),
-        border = BorderStroke(1.dp, Color(0xFF2C2C2C)),
-        shadowElevation = 6.dp,
+        color = Color(0xD914141C),
+        border = BorderStroke(1.dp, Brush.verticalGradient(listOf(Color(0x3DFFFFFF), Color(0x12FFFFFF)))),
+        shadowElevation = 8.dp,
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = horizontalPadding, end = horizontalPadding, top = 2.dp, bottom = bottomPadding)
@@ -4243,8 +4306,8 @@ fun ChatInputBar(
                         val isPdf = doc.fileName.endsWith(".pdf", ignoreCase = true)
                         Surface(
                             shape = RoundedCornerShape(14.dp),
-                            color = Color(0xFF2A2A30),
-                            border = BorderStroke(0.8.dp, Color(0xFF3A3A42)),
+                            color = Color(0x662A2A38),
+                            border = BorderStroke(0.8.dp, Color(0x2EFFFFFF)),
                             modifier = Modifier.padding(start = 6.dp, top = 2.dp, bottom = 6.dp)
                         ) {
                             Row(
@@ -4295,7 +4358,8 @@ fun ChatInputBar(
                 ChatGptSurfaceButton(
                     onClick = onAttach,
                     shape = CircleShape,
-                    color = Color(0xFF2E2E2E),
+                    color = Color(0x2E30303E),
+                    border = BorderStroke(0.8.dp, Color(0x2EFFFFFF)),
                     modifier = Modifier
                         .size(38.dp)
                         .padding(2.dp)
@@ -4321,8 +4385,8 @@ fun ChatInputBar(
                     if (isWebSearchEnabled) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = Color(0xFF10A37F).copy(alpha = 0.2f),
-                            border = BorderStroke(1.dp, Color(0xFF10A37F).copy(alpha = 0.4f)),
+                            color = Color(0x3310A37F),
+                            border = BorderStroke(1.dp, Color(0x6610A37F)),
                             modifier = Modifier
                                 .height(28.dp)
                                 .padding(end = 6.dp)
@@ -4433,7 +4497,8 @@ fun ChatInputBar(
                                 onClick = onSend,
                                 enabled = canSend,
                                 shape = CircleShape,
-                                color = if (canSend) Color.White else Color(0xFF3A3A3C),
+                                color = if (canSend) Color.White else Color(0x3830303C),
+                                border = if (canSend) null else BorderStroke(0.8.dp, Color(0x1AFFFFFF)),
                                 modifier = Modifier
                                     .size(38.dp)
                                     .padding(2.dp)
@@ -4456,7 +4521,8 @@ fun ChatInputBar(
                                 ChatGptSurfaceButton(
                                     onClick = onVoiceInput,
                                     shape = CircleShape,
-                                    color = Color.Transparent,
+                                    color = Color(0x2430303E),
+                                    border = BorderStroke(0.8.dp, Color(0x20FFFFFF)),
                                     modifier = Modifier.size(36.dp)
                                 ) {
                                     Icon(

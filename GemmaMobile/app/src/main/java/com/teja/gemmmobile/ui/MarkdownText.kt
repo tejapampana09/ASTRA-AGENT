@@ -158,7 +158,7 @@ private fun TextBlockView(
     searchResults: List<SearchResult> = emptyList()
 ) {
     val cacheKey = remember(content, textColor, linkColor, codeBgColor, searchResults.size) {
-        "$content|${textColor.value}|${linkColor.value}|${codeBgColor.value}|${searchResults.size}"
+        "v2|$content|${textColor.value}|${linkColor.value}|${codeBgColor.value}|${searchResults.size}"
     }
     val parsedLines = remember(cacheKey) {
         val cached = renderedLineCache.get(cacheKey)
@@ -382,26 +382,27 @@ fun CodeBlockView(
 }
 
 private val GREEK_MAP = listOf(
+    "\\varepsilon" to "ε", "\\vartheta" to "θ", "\\varrho" to "ρ", "\\varphi" to "φ", "\\varsigma" to "ς",
     "\\alpha" to "α", "\\Alpha" to "Α",
     "\\beta" to "β", "\\Beta" to "Β",
     "\\gamma" to "γ", "\\Gamma" to "Γ",
     "\\delta" to "δ", "\\Delta" to "Δ",
-    "\\epsilon" to "ε", "\\varepsilon" to "ε",
+    "\\epsilon" to "ε",
     "\\zeta" to "ζ",
     "\\eta" to "η",
-    "\\theta" to "θ", "\\Theta" to "Θ", "\\vartheta" to "θ",
+    "\\theta" to "θ", "\\Theta" to "Θ",
     "\\iota" to "ι",
     "\\kappa" to "κ",
     "\\lambda" to "λ", "\\Lambda" to "Λ",
     "\\mu" to "μ",
     "\\nu" to "ν",
     "\\xi" to "ξ", "\\Xi" to "Ξ",
-    "\\pi" to "π", "\\Pi" to "Π",
-    "\\rho" to "ρ", "\\varrho" to "ρ",
+    "\\pi" to "π", "\\Pi" to "Π", "\\varpi" to "ϖ",
+    "\\rho" to "ρ",
     "\\sigma" to "σ", "\\Sigma" to "Σ",
     "\\tau" to "τ",
     "\\upsilon" to "υ", "\\Upsilon" to "Υ",
-    "\\phi" to "φ", "\\Phi" to "Φ", "\\varphi" to "φ",
+    "\\phi" to "φ", "\\Phi" to "Φ",
     "\\chi" to "χ",
     "\\psi" to "ψ", "\\Psi" to "Ψ",
     "\\omega" to "ω", "\\Omega" to "Ω"
@@ -411,6 +412,17 @@ private val MATH_SYMBOLS_MAP = listOf(
     "\\cdot" to " · ",
     "\\times" to " × ",
     "\\div" to " ÷ ",
+    "\\odot" to " ⊙ ",
+    "\\otimes" to " ⊗ ",
+    "\\oplus" to " ⊕ ",
+    "\\ominus" to " ⊖ ",
+    "\\oslash" to " ⊘ ",
+    "\\circ" to " ∘ ",
+    "\\bullet" to " • ",
+    "\\star" to " ★ ",
+    "\\ast" to " * ",
+    "\\dagger" to " † ",
+    "\\ddagger" to " ‡ ",
     "\\pm" to "±",
     "\\mp" to "∓",
     "\\neq" to " ≠ ", "\\ne" to " ≠ ",
@@ -420,101 +432,208 @@ private val MATH_SYMBOLS_MAP = listOf(
     "\\sim" to " ∼ ",
     "\\simeq" to " ≃ ",
     "\\equiv" to " ≡ ",
+    "\\cong" to " ≅ ",
     "\\propto" to " ∝ ",
     "\\in" to " ∈ ",
     "\\notin" to " ∉ ",
     "\\subset" to " ⊂ ",
     "\\subseteq" to " ⊆ ",
+    "\\supset" to " ⊃ ",
+    "\\supseteq" to " ⊇ ",
     "\\cup" to " ∪ ",
     "\\cap" to " ∩ ",
     "\\rightarrow" to " → ", "\\to" to " → ",
-    "\\leftarrow" to " ← ",
+    "\\leftarrow" to " ← ", "\\gets" to " ← ",
     "\\Rightarrow" to " ⇒ ", "\\Leftarrow" to " ⇐ ",
-    "\\leftrightarrow" to " ↔ ",
+    "\\leftrightarrow" to " ↔ ", "\\Leftrightarrow" to " ⇔ ",
+    "\\mapsto" to " ↦ ",
     "\\infty" to "∞",
     "\\partial" to "∂",
     "\\nabla" to "∇",
     "\\forall" to "∀",
-    "\\exists" to "∃",
+    "\\exists" to "∃", "\\nexists" to "∄",
     "\\sum" to "∑",
     "\\prod" to "∏",
-    "\\int" to "∫",
+    "\\int" to "∫", "\\oint" to "∮",
     "\\parallel" to " ‖ ",
     "\\|" to " ‖ ",
     "\\sqrt" to "√",
-    "\\dots" to "…", "\\cdots" to "…", "\\ldots" to "…",
-    "\\quad" to " ", "\\qquad" to "  ", "\\," to " ", "\\;" to " "
+    "\\dots" to "…", "\\cdots" to "…", "\\ldots" to "…", "\\vdots" to "⋮", "\\ddots" to "⋱",
+    "\\quad" to " ", "\\qquad" to "  ", "\\," to " ", "\\;" to " ", "\\!" to ""
 )
 
-private val REGEX_MATH_TEXT_WRAPPERS = Regex("""\\(?:text|mathrm|mathbf|boldsymbol|operatorname)\{([^}]+)\}""")
+private val MATH_FUNCTIONS_MAP = listOf(
+    "\\log" to "log",
+    "\\ln" to "ln",
+    "\\exp" to "exp",
+    "\\sin" to "sin",
+    "\\cos" to "cos",
+    "\\tan" to "tan",
+    "\\cot" to "cot",
+    "\\sec" to "sec",
+    "\\csc" to "csc",
+    "\\arcsin" to "arcsin",
+    "\\arccos" to "arccos",
+    "\\arctan" to "arctan",
+    "\\sinh" to "sinh",
+    "\\cosh" to "cosh",
+    "\\tanh" to "tanh",
+    "\\min" to "min",
+    "\\max" to "max",
+    "\\arg" to "arg",
+    "\\det" to "det",
+    "\\dim" to "dim",
+    "\\lim" to "lim",
+    "\\sup" to "sup",
+    "\\inf" to "inf",
+    "\\gcd" to "gcd",
+    "\\deg" to "deg",
+    "\\Pr" to "P",
+    "\\ker" to "ker",
+    "\\hom" to "hom"
+)
+
+private val CAL_MAP = mapOf(
+    'A' to "𝒜", 'B' to "ℬ", 'C' to "𝒞", 'D' to "𝒟", 'E' to "ℰ",
+    'F' to "ℱ", 'G' to "𝒢", 'H' to "ℋ", 'I' to "ℐ", 'J' to "𝒥",
+    'K' to "𝒦", 'L' to "ℒ", 'M' to "ℳ", 'N' to "𝓝", 'O' to "𝒪",
+    'P' to "𝒫", 'Q' to "𝒬", 'R' to "ℛ", 'S' to "𝒮", 'T' to "𝒯",
+    'U' to "𝒰", 'V' to "𝒱", 'W' to "𝒲", 'X' to "𝒳", 'Y' to "𝒴", 'Z' to "𝒵"
+)
+
+private val BB_MAP = mapOf(
+    'R' to "ℝ", 'C' to "ℂ", 'N' to "ℕ", 'Z' to "ℤ", 'Q' to "ℚ",
+    'E' to "𝔼", 'P' to "ℙ", 'V' to "𝕍"
+)
+
+private val SUP_MAP = mapOf(
+    '0' to '⁰', '1' to '¹', '2' to '²', '3' to '³', '4' to '⁴',
+    '5' to '⁵', '6' to '⁶', '7' to '⁷', '8' to '⁸', '9' to '⁹',
+    '+' to '⁺', '-' to '⁻', '=' to '⁼', '(' to '⁽', ')' to '⁾',
+    'n' to 'ⁿ', 'i' to 'ⁱ', 'T' to 'ᵀ', 'x' to 'ˣ'
+)
+
+private val SUB_MAP = mapOf(
+    '0' to '₀', '1' to '₁', '2' to '₂', '3' to '₃', '4' to '₄',
+    '5' to '₅', '6' to '₆', '7' to '₇', '8' to '₈', '9' to '₉',
+    '+' to '₊', '-' to '₋', '=' to '₌', '(' to '₍', ')' to '₎',
+    'a' to 'ₐ', 'e' to 'ₑ', 'h' to 'ₕ', 'i' to 'ᵢ', 'j' to 'ⱼ',
+    'k' to 'ₖ', 'l' to 'ₗ', 'm' to 'ₘ', 'n' to 'ₙ', 'o' to 'ₒ',
+    'p' to 'ₚ', 'r' to 'ᵣ', 's' to 'ₛ', 't' to 'ₜ', 'u' to 'ᵤ',
+    'v' to 'ᵥ', 'x' to 'ₓ'
+)
+
+private val REGEX_MATH_TEXT_WRAPPERS = Regex("""\\(?:text|mathrm|mathbf|boldsymbol|operatorname|mathit|mathsf|mathtt|mathscr|frak)\{([^}]+)\}""")
+private val REGEX_MATH_CAL = Regex("""\\mathcal\{([A-Za-z])\}|\\mathcal\s+([A-Za-z])""")
+private val REGEX_MATH_BB = Regex("""\\mathbb\{([A-Za-z])\}|\\mathbb\s+([A-Za-z])""")
 private val REGEX_MATH_FRAC = Regex("""\\frac\{([^}]+)\}\{([^}]+)\}""")
 private val REGEX_MATH_SQRT = Regex("""\\sqrt\{([^}]+)\}""")
+private val REGEX_MATH_ACCENTS = Regex("""\\(?:vec|hat|bar|tilde)\{([^}]+)\}""")
 private val REGEX_PAREN_BAR = Regex("""\(([^()|]+)\|([^()|]+)\)""")
 
 /**
  * Transforms raw LaTeX math equations and symbols into clean, readable Unicode math representation (ChatGPT style).
- * Supports Greek letters (\mu -> μ, \sigma -> σ), operators (\cdot -> ·, \sim -> ∼), \text{...}, superscripts,
- * subscripts, and removes raw bounding dollar signs ($...$ and $$...$$).
+ * Supports Greek letters (\mu -> μ, \sigma -> σ), functions (\log -> log), circled ops (\odot -> ⊙),
+ * calligraphic (\mathcal{N} -> 𝓝), operators (\cdot -> ·, \sim -> ∼), \text{...}, superscripts,
+ * subscripts, and removes raw bounding delimiters ($...$, $$...$$, \[...\], \(...\)).
  */
 fun formatLatexMath(input: String): String {
-    if (!input.contains('$') && !input.contains('\\')) return input
+    if (!input.contains('$') && !input.contains('\\') && !input.contains('^') && !input.contains('_')) return input
 
     var s = input
 
-    // 1. Text wrappers: \text{KL} -> KL, \mathrm{...} -> ..., etc.
-    s = s.replace(REGEX_MATH_TEXT_WRAPPERS, "$1")
+    // 1. Strip display math environments: \begin{equation}, \end{align*}, etc.
+    s = s.replace(Regex("""\\(?:begin|end)\{[a-zA-Z*]+\}"""), "")
 
-    // 2. Fractions: \frac{a}{b} -> (a / b)
-    s = s.replace(REGEX_MATH_FRAC, "($1 / $2)")
+    // 2. Delimiters: \[ ... \] and \( ... \)
+    s = s.replace("\\[", "")
+        .replace("\\]", "")
+        .replace("\\(", "(")
+        .replace("\\)", ")")
 
-    // 3. Square root: \sqrt{x} -> √(x)
-    s = s.replace(REGEX_MATH_SQRT, "√($1)")
-
-    // 4. Brackets: \left(, \right), etc.
-    s = s.replace("\\left(", "(")
-        .replace("\\right)", ")")
-        .replace("\\left[", "[")
-        .replace("\\right]", "]")
-        .replace("\\left\\{", "{")
-        .replace("\\right\\}", "}")
-        .replace("\\{", "{")
-        .replace("\\}", "}")
-
-    // 5. Greek letters replacement
-    for ((latex, unicode) in GREEK_MAP) {
-        s = s.replace(latex, unicode)
-    }
-
-    // 6. Math symbols replacement
-    for ((latex, unicode) in MATH_SYMBOLS_MAP) {
-        s = s.replace(latex, unicode)
-    }
-
-    // 7. Common sub/superscripts
-    s = s.replace("_{KL}", "_KL")
-        .replace("_{total}", "_total")
-        .replace("^{2}", "²")
-        .replace("^2", "²")
-        .replace("^{3}", "³")
-        .replace("^3", "³")
-        .replace("^{T}", "ᵀ")
-        .replace("^T", "ᵀ")
-        .replace("^{*}", "*")
-        .replace("^{-1}", "⁻¹")
-
-    // 8. Conditionals (z|x) -> (z | x)
-    s = s.replace(REGEX_PAREN_BAR, "($1 | $2)")
-    s = s.replace("||", " ‖ ")
-
-    // 9. Strip surrounding $ and $$
-    s = s.replace(Regex("""\$\$([^$\n]+)\$\$""")) { match ->
+    // 3. Multi-line display math $$ ... $$ and inline $ ... $
+    s = s.replace(Regex("""\$\$([\s\S]*?)\$\$""")) { match ->
         match.groupValues[1].trim()
     }
     s = s.replace(Regex("""\$([^$\n]+)\$""")) { match ->
         match.groupValues[1].trim()
     }
 
-    // 10. Clean duplicate spaces
+    // 4. Calligraphic \mathcal{N} -> 𝓝 and Blackboard \mathbb{R} -> ℝ
+    s = s.replace(REGEX_MATH_CAL) { match ->
+        val ch = (match.groupValues[1].ifEmpty { match.groupValues[2] }).firstOrNull() ?: 'N'
+        CAL_MAP[ch] ?: ch.toString()
+    }
+    s = s.replace(REGEX_MATH_BB) { match ->
+        val ch = (match.groupValues[1].ifEmpty { match.groupValues[2] }).firstOrNull() ?: 'R'
+        BB_MAP[ch] ?: ch.toString()
+    }
+
+    // 5. Text wrappers: \text{KL} -> KL, \mathrm{...} -> ..., etc.
+    s = s.replace(REGEX_MATH_TEXT_WRAPPERS, "$1")
+
+    // 6. Vector / Hat accents: \vec{x} -> x, \hat{x} -> x
+    s = s.replace(REGEX_MATH_ACCENTS, "$1")
+
+    // 7. Fractions: \frac{a}{b} -> (a / b)
+    s = s.replace(REGEX_MATH_FRAC, "($1 / $2)")
+
+    // 8. Square root: \sqrt{x} -> √(x)
+    s = s.replace(REGEX_MATH_SQRT, "√($1)")
+
+    // 9. Standard Math Functions: \log -> log, \ln -> ln, \exp -> exp, etc.
+    for ((latexFn, cleanFn) in MATH_FUNCTIONS_MAP) {
+        val pattern = Regex("""\""" + latexFn + """(?=[^a-zA-Z]|$)""")
+        s = s.replace(pattern, cleanFn)
+    }
+
+    // 10. Greek letters replacement
+    for ((latex, unicode) in GREEK_MAP) {
+        s = s.replace(latex, unicode)
+    }
+
+    // 11. Math symbols replacement (\cdot -> ·, \odot -> ⊙, etc.)
+    for ((latex, unicode) in MATH_SYMBOLS_MAP) {
+        s = s.replace(latex, unicode)
+    }
+
+    // 12. Brackets: \left(, \right), etc.
+    s = s.replace("\\left(", "(")
+        .replace("\\right)", ")")
+        .replace("\\left[", "[")
+        .replace("\\right]", "]")
+        .replace("\\left\\{", "{")
+        .replace("\\right\\}", "}")
+        .replace("\\left|", "|")
+        .replace("\\right|", "|")
+        .replace("\\left.", "")
+        .replace("\\right.", "")
+        .replace("\\{", "{")
+        .replace("\\}", "}")
+
+    // 13. Superscripts: ^{2} -> ², ^2 -> ², ^{T} -> ᵀ, etc.
+    s = s.replace(Regex("""\^\{([0-9+\-=()niTx]+)\}""")) { match ->
+        match.groupValues[1].map { SUP_MAP[it] ?: it }.joinToString("")
+    }
+    s = s.replace(Regex("""\^([0-9niTx])(?![a-zA-Z0-9])""")) { match ->
+        SUP_MAP[match.groupValues[1][0]]?.toString() ?: match.value
+    }
+    s = s.replace("^{*}", "*").replace("^*", "*").replace("^{-1}", "⁻¹")
+
+    // 14. Subscripts: _{0} -> ₀, _{i} -> ᵢ, etc.
+    s = s.replace(Regex("""_\{([0-9+\-=()aehijklmnoprstuvx]+)\}""")) { match ->
+        match.groupValues[1].map { SUB_MAP[it] ?: it }.joinToString("")
+    }
+    s = s.replace(Regex("""_([0-9ijknxt])(?![a-zA-Z0-9])""")) { match ->
+        SUB_MAP[match.groupValues[1][0]]?.toString() ?: match.value
+    }
+    s = s.replace("_{KL}", "_KL").replace("_{total}", "_total")
+
+    // 15. Conditionals (z|x) -> (z | x)
+    s = s.replace(REGEX_PAREN_BAR, "($1 | $2)")
+    s = s.replace("||", " ‖ ")
+
+    // 16. Clean duplicate spaces
     s = s.replace(Regex("""[ \t]{2,}"""), " ")
 
     return s

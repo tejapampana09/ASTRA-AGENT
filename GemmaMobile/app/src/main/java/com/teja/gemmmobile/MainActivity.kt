@@ -17,23 +17,23 @@ import com.teja.gemmmobile.ui.ChatViewModel
 
 import androidx.compose.material3.darkColorScheme
 
-// Pure AMOLED ChatGPT Dark color scheme — matching real ChatGPT Android app
+// Sleek Translucent Obsidian Dark color scheme — liquid frosted glass aesthetic
 private val GemmaColorScheme = darkColorScheme(
-    primary           = Color(0xFF10A37F),   // Emerald green
+    primary           = Color(0xFF10A37F),   // Emerald accent
     onPrimary         = Color(0xFFFFFFFF),
-    primaryContainer  = Color(0xFF1A382B),
+    primaryContainer  = Color(0xFF162D24),
     onPrimaryContainer= Color(0xFFA7F3D0),
-    secondary         = Color(0xFFF43F5E),   // ChatGPT Coral/Pink Voice Accent
+    secondary         = Color(0xFFF43F5E),   // Coral accent
     onSecondary       = Color(0xFFFFFFFF),
-    secondaryContainer= Color(0xFF262626),
+    secondaryContainer= Color(0xFF1E1E28),
     onSecondaryContainer = Color(0xFFFFFFFF),
-    surface           = Color(0xFF171717),   // Deep dark surface
+    surface           = Color(0xFF121218),   // Deep obsidian surface
     onSurface         = Color(0xFFFFFFFF),   // Crisp white text
-    surfaceVariant    = Color(0xFF212121),   // Pill, bubbles, cards
-    onSurfaceVariant  = Color(0xFFB4B4B4),   // Secondary light gray
-    outline           = Color(0xFF333333),   // Thin dark border
-    outlineVariant    = Color(0xFF262626),
-    background        = Color(0xFF000000),   // Pure AMOLED Black
+    surfaceVariant    = Color(0xFF181822),   // Translucent card base
+    onSurfaceVariant  = Color(0xFFB0B0B8),   // Secondary light gray
+    outline           = Color(0xFF2C2C38),   // Thin glass border
+    outlineVariant    = Color(0xFF20202A),
+    background        = Color(0xFF07070A),   // Deep obsidian AMOLED base
     onBackground      = Color(0xFFFFFFFF),
     error             = Color(0xFFEF4444),
     onError           = Color(0xFFFFFFFF),
