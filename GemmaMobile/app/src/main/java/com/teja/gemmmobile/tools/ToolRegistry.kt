@@ -31,7 +31,10 @@ class ToolRegistry {
         Log.d(TAG, "[$TAG] Registered tool: ${tool.name}")
     }
 
-    fun get(name: String): GemmaTool? = tools[name]
+    fun get(name: String): GemmaTool? {
+        val resolvedName = if (name == "memory_store") "manage_memory" else name
+        return tools[resolvedName]
+    }
 
     fun getAll(): List<GemmaTool> = tools.values.toList()
 
@@ -49,7 +52,7 @@ class ToolRegistry {
         sb.appendLine("```")
         sb.appendLine("- `image_search`: Diagrams, photos, architecture visuals (arguments: {\"query\": \"...\"})")
         sb.appendLine("- `web_search`: Live facts, current news, real-time web info (arguments: {\"query\": \"...\"})")
-        sb.appendLine("- `memory_store`: Save user facts/preferences (arguments: {\"key\": \"...\", \"value\": \"...\"})")
+        sb.appendLine("- `manage_memory`: Save user facts/preferences (arguments: {\"action\": \"save\", \"fact\": \"...\"})")
         sb.appendLine("For general conversation, concepts, coding, or explanations, do NOT call any tool; answer directly with clear text.")
         return sb.toString().trim()
     }
@@ -99,10 +102,20 @@ class ToolRegistry {
      * Executes a tool by name with arguments, enforcing validation and catching all errors.
      */
     suspend fun execute(name: String, arguments: Map<String, Any?>): ToolResult {
-        val tool = tools[name] ?: return ToolResult.failure("Unknown tool: '$name'")
+        val resolvedName = if (name == "memory_store") "manage_memory" else name
+        val tool = tools[resolvedName] ?: return ToolResult.failure("Unknown tool: '$name'")
+
+        // Normalize memory_store args if called
+        val normalizedArgs = if (name == "memory_store" && !arguments.containsKey("action")) {
+            val fact = arguments["fact"] as? String
+                ?: listOfNotNull(arguments["key"] as? String, arguments["value"] as? String).joinToString(": ")
+            mapOf("action" to "save", "fact" to fact)
+        } else {
+            arguments
+        }
 
         // Enforce argument validation
-        val validation = validateArguments(tool, arguments)
+        val validation = validateArguments(tool, normalizedArgs)
         if (!validation.isValid) {
             val errorMsg = validation.errorMessage ?: "Invalid arguments"
             Log.w(TAG, "[$TAG] Tool '$name' rejected invalid arguments: $errorMsg")
@@ -110,8 +123,8 @@ class ToolRegistry {
         }
 
         return try {
-            Log.d(TAG, "[$TAG] Executing tool: '$name' with args: $arguments")
-            tool.execute(arguments)
+            Log.d(TAG, "[$TAG] Executing tool: '$resolvedName' with args: $normalizedArgs")
+            tool.execute(normalizedArgs)
         } catch (t: Throwable) {
             Log.e(TAG, "[$TAG] Tool '$name' execution failed", t)
             ToolResult.failure("Error executing $name: ${t.localizedMessage ?: t.message ?: "Unknown error"}")

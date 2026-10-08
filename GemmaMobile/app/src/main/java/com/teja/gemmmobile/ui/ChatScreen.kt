@@ -2157,9 +2157,20 @@ fun MessageBubble(
     val clipboardManager = LocalClipboardManager.current
     val haptic = LocalHapticFeedback.current
 
-    val displayBitmap = remember(message.id, message.imageBitmap, message.imagePath) {
-        message.imageBitmap ?: message.imagePath?.let { path ->
-            try { android.graphics.BitmapFactory.decodeFile(path) } catch (_: Exception) { null }
+    val displayBitmap by androidx.compose.runtime.produceState<Bitmap?>(
+        initialValue = message.imageBitmap,
+        key1 = message.id,
+        key2 = message.imageBitmap,
+        key3 = message.imagePath
+    ) {
+        if (message.imageBitmap != null) {
+            value = message.imageBitmap
+        } else if (!message.imagePath.isNullOrBlank()) {
+            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                com.teja.gemmmobile.storage.StorageManagerHelper.decodeSampledFromFile(message.imagePath!!, 512)
+            }
+        } else {
+            value = null
         }
     }
 
@@ -2189,6 +2200,7 @@ fun MessageBubble(
                 )
             }
 
+            val currentDisplayBitmap = displayBitmap
             Surface(
                 shape = RoundedCornerShape(20.dp),
                 color = Color(0xFF381024), // ChatGPT dark burgundy/plum bubble (matching media_1791402016025.jpg)
@@ -2207,13 +2219,13 @@ fun MessageBubble(
             ) {
                 Column(
                     modifier = Modifier.padding(
-                        if (displayBitmap != null && message.text.isBlank()) 4.dp
+                        if (currentDisplayBitmap != null && message.text.isBlank()) 4.dp
                         else 12.dp
                     )
                 ) {
-                    if (displayBitmap != null) {
+                    if (currentDisplayBitmap != null) {
                         androidx.compose.foundation.Image(
-                            painter = androidx.compose.ui.graphics.painter.BitmapPainter(displayBitmap.asImageBitmap()),
+                            painter = androidx.compose.ui.graphics.painter.BitmapPainter(currentDisplayBitmap.asImageBitmap()),
                             contentDescription = "User uploaded photo",
                             modifier = Modifier
                                 .fillMaxWidth()

@@ -977,16 +977,24 @@ You are provided with real-time web search results and extracted webpage content
                     }
 
                     try {
-                        eng.sendMessage(prompt = nextTurnPrompt).collect { chunk ->
+                        var toolUiUpdate = 0L
+                        eng.sendMessage(
+                            prompt = nextTurnPrompt,
+                            systemInstruction = effectiveSystemPrompt
+                        ).collect { chunk ->
                             if (chunk.thought.isNotEmpty()) thoughtBuilder.append(chunk.thought)
                             val clean = chunk.text.replace("<thought>", "").replace("</thought>", "")
                             if (clean.isNotEmpty()) {
                                 nextTurnBuilder.append(clean)
-                                if (_currentSessionId.value == targetSessionId) {
-                                    _messages.value = _messages.value.map { msg ->
-                                        if (msg.id == assistantMessageId) {
-                                            msg.copy(text = stripAssumedToolText(nextTurnBuilder.toString()), isStreaming = true)
-                                        } else msg
+                                val now = System.currentTimeMillis()
+                                if (now - toolUiUpdate >= UI_THROTTLE_MS) {
+                                    toolUiUpdate = now
+                                    if (_currentSessionId.value == targetSessionId) {
+                                        _messages.value = _messages.value.map { msg ->
+                                            if (msg.id == assistantMessageId) {
+                                                msg.copy(text = stripAssumedToolText(nextTurnBuilder.toString()), isStreaming = true)
+                                            } else msg
+                                        }
                                     }
                                 }
                             }

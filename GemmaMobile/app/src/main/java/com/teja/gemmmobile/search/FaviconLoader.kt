@@ -37,8 +37,9 @@ object FaviconLoader {
         )
 
         for (candidate in candidateUrls) {
+            var conn: HttpURLConnection? = null
             try {
-                val conn = URL(candidate).openConnection() as HttpURLConnection
+                conn = URL(candidate).openConnection() as HttpURLConnection
                 conn.connectTimeout = 3000
                 conn.readTimeout = 3000
                 conn.instanceFollowRedirects = true
@@ -56,6 +57,8 @@ object FaviconLoader {
                 }
             } catch (_: Exception) {
                 // fallback to next candidate
+            } finally {
+                try { conn?.disconnect() } catch (_: Exception) {}
             }
         }
         null

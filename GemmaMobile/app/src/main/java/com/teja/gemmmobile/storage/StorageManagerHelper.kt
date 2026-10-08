@@ -88,6 +88,42 @@ object StorageManagerHelper {
     }
 
     /**
+     * Efficiently decodes and downsamples an image directly from a file path using inSampleSize.
+     * Prevents loading full-resolution multi-megabyte bitmaps into memory during UI rendering.
+     */
+    fun decodeSampledFromFile(path: String, maxDimension: Int = 512): Bitmap? {
+        val file = File(path)
+        if (!file.exists() || file.length() == 0L) return null
+        return try {
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(path, options)
+            val origWidth = options.outWidth
+            val origHeight = options.outHeight
+            if (origWidth <= 0 || origHeight <= 0) return null
+
+            var inSampleSize = 1
+            var maxDim = maxOf(origWidth, origHeight)
+            while (maxDim > maxDimension * 1.5) {
+                inSampleSize *= 2
+                maxDim /= 2
+            }
+
+            options.inJustDecodeBounds = false
+            options.inSampleSize = inSampleSize
+            options.inPreferredConfig = Bitmap.Config.ARGB_8888
+            val sampledBitmap = BitmapFactory.decodeFile(path, options) ?: return null
+            val finalBitmap = scaleBitmapDown(sampledBitmap, maxDimension)
+            if (finalBitmap != sampledBitmap) {
+                try { sampledBitmap.recycle() } catch (_: Throwable) {}
+            }
+            finalBitmap
+        } catch (e: Exception) {
+            Log.e(TAG, "[$TAG] Error decoding sampled bitmap from file: $path", e)
+            null
+        }
+    }
+
+    /**
      * Synchronous version of compressAndSaveImage for direct non-suspend calls.
      */
     fun compressAndSaveImageSync(
