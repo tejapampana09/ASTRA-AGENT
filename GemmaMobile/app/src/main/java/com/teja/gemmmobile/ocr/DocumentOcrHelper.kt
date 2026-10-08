@@ -27,7 +27,9 @@ data class ExtractedDocument(
     val imageUri: android.net.Uri? = null,
     val imageBytes: ByteArray? = null,
     val pageCount: Int = 1,
-    val pages: List<DocumentPage> = emptyList()
+    val pages: List<DocumentPage> = emptyList(),
+    /** Pre-built word chunks for token-safe RAG retrieval (covers ALL pages). */
+    val chunks: List<DocumentChunk> = emptyList()
 )
 
 object DocumentOcrHelper {
@@ -123,13 +125,15 @@ object DocumentOcrHelper {
             }
             val text = sb.toString().trim()
             val words = if (text.isBlank()) 0 else text.split(Regex("""\s+""")).size
+            val chunks = DocumentChunker.chunk(digitalPages)
             return@withContext ExtractedDocument(
                 fileName = fileName,
                 text = text,
                 wordCount = words,
                 previewBitmap = firstPageBitmap,
                 pageCount = digitalPages.size,
-                pages = digitalPages
+                pages = digitalPages,
+                chunks = chunks
             )
         }
 
@@ -176,13 +180,15 @@ object DocumentOcrHelper {
 
         val text = sb.toString().trim()
         val words = if (text.isBlank()) 0 else text.split(Regex("""\s+""")).size
+        val chunks = DocumentChunker.chunk(pagesList)
         ExtractedDocument(
             fileName = fileName,
             text = text,
             wordCount = words,
             previewBitmap = firstPageBitmap,
             pageCount = if (pagesList.isNotEmpty()) pagesList.size else 1,
-            pages = pagesList
+            pages = pagesList,
+            chunks = chunks
         )
     }
 
