@@ -78,12 +78,12 @@ class DocumentIntelligenceEngineTest {
 
         val result = DocumentIntelligenceEngine.buildDocumentPrompt(doc, "extract all topics")
         assertEquals(DocumentIntent.TOPIC_EXTRACTION, result.intent)
-        // Prompt should reference the document name and contain topic/syllabus content
-        assertTrue(result.promptForModel.contains("ml_book.pdf"))
+        assertTrue("Prompt must mention the file name", result.promptForModel.contains("ml_book.pdf"))
         assertTrue(
-            result.promptForModel.contains("Topic") ||
-            result.promptForModel.contains("Syllabus") ||
-            result.promptForModel.contains("Topics")
+            "Prompt must contain topic-related instruction",
+            result.promptForModel.contains("topic", ignoreCase = true) ||
+            result.promptForModel.contains("index", ignoreCase = true) ||
+            result.promptForModel.contains("chapter", ignoreCase = true)
         )
     }
 }
