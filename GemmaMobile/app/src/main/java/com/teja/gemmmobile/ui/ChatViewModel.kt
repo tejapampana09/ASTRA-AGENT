@@ -113,7 +113,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
-    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val generationExceptionHandler = kotlinx.coroutines.CoroutineExceptionHandler { _, throwable ->
+        Log.e(TAG, "[$TAG] Uncaught exception in applicationScope coroutine: ${throwable.localizedMessage}", throwable)
+        _errorMessage.value = throwable.localizedMessage ?: "An unexpected error occurred"
+    }
+    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + generationExceptionHandler)
     private var activeGenerationJob: Job? = null
     val activeGeneratingSessionId = MutableStateFlow<String?>(null)
 
@@ -383,17 +387,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // 1. Explicit search command from user
         if (p.startsWith("search ") || p.startsWith("web search ") || p.startsWith("browse ") ||
             p.contains("search web") || p.contains("search the web") || p.contains("search for ") ||
-            p.contains("google ")) {
+            p.contains("google ") || p.contains("look up ") || p.contains("find out ")) {
             return true
         }
 
-        // 2. Real-time / live events that an LLM cannot know without search
+        // 2. Real-time / factual questions needing web evidence
         val realTimeKeywords = listOf(
-            "latest news", "today news", "breaking news",
-            "current price", "stock price", "crypto price", "live score", "match score",
-            "today weather", "current weather", "weather forecast",
-            "live update", "live updates", "election result",
-            "login portal", "admission cutoff", "hall ticket download"
+            "latest", "today", "breaking news", "current price", "stock price", "crypto price",
+            "live score", "match score", "weather", "forecast", "live update", "election",
+            "release date", "who is ", "who was ", "when is ", "where is ", "how much is ",
+            "cutoff", "results", "winner", "prime minister", "president", "ceo of",
+            "gurinchi", "varthalu", "eeroju", "ippudu", "photos of", "images of", "diagram of"
         )
         return realTimeKeywords.any { keyword -> p.contains(keyword) }
     }
@@ -407,6 +411,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             "show me", "chupinchu", "chudu", "bomma", "bommalu"
         )
         return visualKeywords.any { keyword -> p.contains(keyword) }
+    }
+
+    fun stripToolCallJson(text: String): String {
+        // Strip markdown code fences containing JSON tool calls
+        val fenceRegex = Regex("""```(?:json)?\s*\{\s*["'](?:name|tool|function|type|tool_call)["'][\s\S]*?\}\s*```""", RegexOption.IGNORE_CASE)
+        var cleaned = fenceRegex.replace(text, "").trim()
+        // Strip raw standalone JSON tool call objects
+        val rawJsonRegex = Regex("""\{\s*["'](?:name|tool|function|type|tool_call)["'][\s\S]*?\}""", RegexOption.IGNORE_CASE)
+        cleaned = rawJsonRegex.replace(cleaned, "").trim()
+        return cleaned
+    }
+
+    fun stripAssumedToolText(text: String): String {
+        var cleaned = stripToolCallJson(text)
+        // Strip "(Assuming the search tool has run and returned relevant information...)"
+        cleaned = cleaned.replace(Regex("""\([Aa]ssuming the (?:search )?tool has run[^\)]*\):?"""), "")
+        cleaned = cleaned.replace(Regex("""Please wait while I search[^\n]*"""), "")
+        cleaned = cleaned.replace(Regex("""Since I cannot directly display images here, I will use the search tool[^\n]*"""), "")
+        cleaned = cleaned.replace(Regex("""I will search the web for[^\n]*"""), "")
+        return cleaned.trim()
     }
 
     fun onInputTextChanged(text: String) {
@@ -495,8 +519,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             else -> rawInput
         }
 
-        // Web search: enable if manual toggle is on OR if prompt asks for web search / current info like ChatGPT
-        val useWebSearch = (_isWebSearchEnabled.value || shouldAutoSearch(rawInput)) && !isImage
+        val isVisualRequest = shouldQueryImages(rawInput) && !isImage
+        val useWebSearch = (_isWebSearchEnabled.value || shouldAutoSearch(rawInput) || isVisualRequest) && !isImage
 
         _attachedDocument.value = null
         val userMessageId = UUID.randomUUID().toString()
@@ -582,44 +606,69 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 var searchImages: List<SearchImage> = emptyList()
                 var searchContext = ""
 
-                if (useWebSearch) {
-                    // Update searching state for this target session
-                    updateSessionMessages(targetSessionId) { msgs ->
-                        msgs.map { msg ->
-                            if (msg.id == assistantMessageId) msg.copy(isSearchingWeb = true) else msg
-                        }
-                    }
+                val isVisual = shouldQueryImages(prompt) && imageBytes == null
 
-                    try {
-                        val cleanQuery = extractSearchQuery(prompt)
-                        val enrichedResults = kotlinx.coroutines.withTimeoutOrNull(10000L) {
-                            searchManager.searchAndRead(cleanQuery, maxResults = 5)
-                        }
-                        if (!enrichedResults.isNullOrEmpty()) {
-                            searchResults = enrichedResults.map { it.toSearchResult() }
-                            searchContext = searchManager.formatGemmaWebContext(enrichedResults)
-                            // Image search is strictly distinct from web search: only query images when user requests visual media
-                            if (shouldQueryImages(prompt)) {
-                                try {
-                                    searchImages = kotlinx.coroutines.withTimeoutOrNull(6000L) {
-                                        searchManager.searchImages(cleanQuery, enrichedResults, maxImages = 6)
-                                    } ?: emptyList()
-                                } catch (e: Exception) {
-                                    Log.w(TAG, "[$TAG] Image search failed", e)
-                                }
-                            }
-                        }
-                    } catch (t: Throwable) {
-                        Log.w(TAG, "[$TAG] Web search failed", t)
-                    } finally {
+                if (useWebSearch || isVisual) {
+                    val cleanQuery = extractSearchQuery(prompt)
+
+                    if (isVisual) {
+                        // 1. Direct Visual Media Execution
                         updateSessionMessages(targetSessionId) { msgs ->
                             msgs.map { msg ->
                                 if (msg.id == assistantMessageId) msg.copy(
-                                    searchResults = searchResults,
-                                    searchImages = searchImages,
-                                    isSearchingWeb = false
+                                    isSearchingWeb = true,
+                                    isExecutingTool = true,
+                                    toolExecutionStatus = "Searching images..."
                                 ) else msg
                             }
+                        }
+                        try {
+                            searchImages = kotlinx.coroutines.withTimeoutOrNull(8000L) {
+                                searchManager.searchImages(cleanQuery, maxImages = 6)
+                            } ?: emptyList()
+                        } catch (e: Exception) {
+                            Log.w(TAG, "[$TAG] Visual search error", e)
+                        }
+
+                        // Also fetch concise factual page snippets so model can explain the diagram/topic
+                        try {
+                            val enrichedResults = kotlinx.coroutines.withTimeoutOrNull(5000L) {
+                                searchManager.searchAndRead(cleanQuery, maxResults = 3)
+                            }
+                            if (!enrichedResults.isNullOrEmpty()) {
+                                searchResults = enrichedResults.map { it.toSearchResult() }
+                                searchContext = searchManager.formatGemmaWebContext(enrichedResults)
+                            }
+                        } catch (_: Exception) {}
+                    } else {
+                        // 2. Text Web Search Execution
+                        updateSessionMessages(targetSessionId) { msgs ->
+                            msgs.map { msg ->
+                                if (msg.id == assistantMessageId) msg.copy(isSearchingWeb = true) else msg
+                            }
+                        }
+                        try {
+                            val enrichedResults = kotlinx.coroutines.withTimeoutOrNull(10000L) {
+                                searchManager.searchAndRead(cleanQuery, maxResults = 5)
+                            }
+                            if (!enrichedResults.isNullOrEmpty()) {
+                                searchResults = enrichedResults.map { it.toSearchResult() }
+                                searchContext = searchManager.formatGemmaWebContext(enrichedResults)
+                            }
+                        } catch (t: Throwable) {
+                            Log.w(TAG, "[$TAG] Web search failed", t)
+                        }
+                    }
+
+                    updateSessionMessages(targetSessionId) { msgs ->
+                        msgs.map { msg ->
+                            if (msg.id == assistantMessageId) msg.copy(
+                                searchResults = searchResults,
+                                searchImages = searchImages,
+                                isSearchingWeb = false,
+                                isExecutingTool = false,
+                                toolExecutionStatus = null
+                            ) else msg
                         }
                     }
                 }
@@ -747,8 +796,8 @@ You are provided with real-time web search results and extracted webpage content
                 val calledToolsHistory = mutableListOf<com.teja.gemmmobile.tools.ToolCallRequest>()
                 var currentSearchImages = emptyList<SearchImage>()
 
-                while (imageBytes == null && !useWebSearch && currentToolStep < MAX_TOOL_STEPS) {
-                    val detectedToolCall = toolRegistry.parseToolCall(currentGenerationText) ?: break
+                while (imageBytes == null && currentToolStep < MAX_TOOL_STEPS) {
+                    var detectedToolCall = toolRegistry.parseToolCall(currentGenerationText) ?: break
 
                     // Duplicate tool-call and infinite loop protection
                     if (toolRegistry.isDuplicateOrLoop(calledToolsHistory, detectedToolCall)) {
@@ -757,15 +806,25 @@ You are provided with real-time web search results and extracted webpage content
                     }
                     calledToolsHistory.add(detectedToolCall)
 
+                    // Re-route to image_search if the query asks for images, photos, or diagrams
+                    val toolArgs = detectedToolCall.arguments
+                    val toolQuery = (toolArgs["query"] as? String) ?: prompt
+                    if (detectedToolCall.name == "web_search" && (shouldQueryImages(toolQuery) || shouldQueryImages(prompt))) {
+                        Log.i(TAG, "[$TAG] Re-routing visual tool call to 'image_search'")
+                        detectedToolCall = com.teja.gemmmobile.tools.ToolCallRequest("image_search", toolArgs)
+                    }
+
                     currentToolStep++
                     Log.d(TAG, "[$TAG] Step $currentToolStep: Tool call detected: ${detectedToolCall.name} with ${detectedToolCall.arguments}")
 
+                    val preToolText = stripAssumedToolText(currentGenerationText)
                     updateSessionMessages(targetSessionId) { msgs ->
                         msgs.map { msg ->
                             if (msg.id == assistantMessageId) {
                                 msg.copy(
+                                    text = preToolText,
                                     isExecutingTool = true,
-                                    toolExecutionStatus = "Using ${detectedToolCall.name}...",
+                                    toolExecutionStatus = if (detectedToolCall.name == "image_search") "Searching images..." else "Using ${detectedToolCall.name}...",
                                     isStreaming = false
                                 )
                             } else msg
@@ -789,12 +848,12 @@ You are provided with real-time web search results and extracted webpage content
 
                     // Feed tool result back to the model as evidence (NOT in system prompt to prevent prompt injection)
                     val nextTurnPrompt = contextManager.buildPrompt(
-                        systemPrompt = "You are a helpful, accurate AI assistant. Use the tool results below as factual evidence to answer the user's request. If more information is needed, call another tool; otherwise provide a final, comprehensive conversational answer.",
+                        systemPrompt = "You are a helpful, accurate AI assistant. Use the tool results below as factual evidence. Provide a direct, natural explanation. NEVER output JSON or robotic assumption phrases.",
                         toolsDocumentation = if (currentToolStep < MAX_TOOL_STEPS) toolRegistry.getToolsDocumentation() else "",
                         memoryContext = memoryContext,
                         conversationHistory = targetMsgs.filter { it.id != assistantMessageId },
                         currentPrompt = prompt,
-                        toolResultsContext = accumulatedToolResults.toString()
+                        toolResultsContext = accumulatedToolResults.toString().take(1000)
                     )
 
                     val nextTurnBuilder = StringBuilder()
@@ -821,7 +880,7 @@ You are provided with real-time web search results and extracted webpage content
                                 if (_currentSessionId.value == targetSessionId) {
                                     _messages.value = _messages.value.map { msg ->
                                         if (msg.id == assistantMessageId) {
-                                            msg.copy(text = nextTurnBuilder.toString(), isStreaming = true)
+                                            msg.copy(text = stripAssumedToolText(nextTurnBuilder.toString()), isStreaming = true)
                                         } else msg
                                     }
                                 }
@@ -844,9 +903,12 @@ You are provided with real-time web search results and extracted webpage content
 
                 // Finalize assistant message and update session history once
                 val resolvedText = when {
-                    finalText.isNotBlank() -> finalText
-                    rawFinalText.isNotBlank() -> rawFinalText
+                    finalText.isNotBlank() -> stripAssumedToolText(finalText)
+                    rawFinalText.isNotBlank() -> stripAssumedToolText(rawFinalText)
                     finalThought.isNotBlank() -> finalThought
+                    currentSearchImages.isNotEmpty() || searchImages.isNotEmpty() -> {
+                        "Here are the images and visual diagrams for **$prompt**."
+                    }
                     searchResults.isNotEmpty() -> {
                         // Fallback synthesis directly from search results if model silently stopped or choked on prompt
                         buildString {
@@ -887,6 +949,30 @@ You are provided with real-time web search results and extracted webpage content
                     chatStorage.saveSession(completedSession)
                 }
 
+            } catch (cancellation: kotlinx.coroutines.CancellationException) {
+                Log.d(TAG, "[$TAG] Response generation cancelled")
+                throw cancellation
+            } catch (t: Throwable) {
+                Log.e(TAG, "[$TAG] Error during generation", t)
+                val errorText = when {
+                    t.message?.contains("Context budget") == true -> "Context limit reached. Please start a new chat."
+                    t.message?.contains("Out of memory") == true -> "Device memory is low. Please close background apps and try again."
+                    else -> "Unable to complete response: ${t.localizedMessage ?: "Unknown error"}"
+                }
+                updateSessionMessages(targetSessionId) { msgs ->
+                    msgs.map { msg ->
+                        if (msg.id == assistantMessageId) {
+                            msg.copy(
+                                text = errorText,
+                                isStreaming = false,
+                                isThinking = false,
+                                isSearchingWeb = false,
+                                isExecutingTool = false,
+                                toolExecutionStatus = null
+                            )
+                        } else msg
+                    }
+                }
             } finally {
                 if (activeGeneratingSessionId.value == targetSessionId) {
                     activeGeneratingSessionId.value = null

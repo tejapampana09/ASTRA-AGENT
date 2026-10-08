@@ -49,13 +49,20 @@ class ToolRegistry {
         sb.appendLine("{\"name\": \"<tool_name>\", \"arguments\": {<parameters>}}")
         sb.appendLine("```")
         sb.appendLine()
-        sb.appendLine("### Decision Guidelines:")
-        sb.appendLine("- Call `web_search` when the user asks for news, real-time facts, articles, website info, or text evidence.")
-        sb.appendLine("- Call `image_search` when the user specifically asks to see, find, or show images, diagrams (e.g. architecture diagrams, pinouts), photos, or charts.")
-        sb.appendLine("- If no tool is needed (e.g. general reasoning, coding, chit-chat), DO NOT call any tool; answer directly and conversationally.")
+        sb.appendLine("### STRICT RULES FOR TOOL SELECTION:")
+        sb.appendLine("1. **IMAGES / PHOTOS / DIAGRAMS → CALL `image_search`**:")
+        sb.appendLine("   - If the user asks for images, photos, architecture diagrams, pictures, or visuals (e.g. 'VAE architecture images', 'photos of James Webb', 'pinout diagram'), YOU MUST CALL `image_search`.")
+        sb.appendLine("   - Example: `{\"name\": \"image_search\", \"arguments\": {\"query\": \"VAE architecture diagram\"}}`")
+        sb.appendLine("   - DO NOT call `web_search` when the user asks for images or diagrams!")
+        sb.appendLine("2. **LIVE FACTS / NEWS / ARTICLES → CALL `web_search`**:")
+        sb.appendLine("   - Call `web_search` ONLY when the user asks for text facts, recent news, website content, or articles.")
+        sb.appendLine("   - Example: `{\"name\": \"web_search\", \"arguments\": {\"query\": \"latest cricket score today\"}}`")
+        sb.appendLine("3. **GENERAL CONVERSATION / CODING / REASONING**:")
+        sb.appendLine("   - If no live external data is needed, DO NOT call any tool; answer directly and conversationally.")
         sb.appendLine()
         sb.appendLine("### Tool Schemas:")
-        tools.values.forEach { tool ->
+        val orderedTools = tools.values.sortedByDescending { it.name == "image_search" }
+        orderedTools.forEach { tool ->
             sb.appendLine("- **`${tool.name}`**: ${tool.description}")
             sb.appendLine("  Schema: `${tool.parametersJsonSchema.replace("\n", " ").replace(Regex("\\s+"), " ")}`")
         }

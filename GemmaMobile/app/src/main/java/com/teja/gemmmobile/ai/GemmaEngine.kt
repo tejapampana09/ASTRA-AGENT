@@ -248,10 +248,10 @@ data class EngineChunk(
         val effectiveThinking = enableThinkingOverride ?: currentConfig.enableThinking
         val effectiveThinkingBudget = if (effectiveThinking) minOf(currentConfig.thinkingBudget, 160) else 0
 
-        val totalModelMaxContext = 2048
+        val totalModelMaxContext = if (activeBackend == BackendType.CPU_FALLBACK) 1536 else 2048
         val safetyMargin = 48
 
-        // Calculate actual safe headroom remaining in the 2048 KV cache
+        // Calculate actual safe headroom remaining in the KV cache
         var currentThinking = effectiveThinking
         var currentThinkBudget = effectiveThinkingBudget
 
@@ -264,8 +264,8 @@ data class EngineChunk(
         }
 
         if (availableForOutput < 32) {
-            val errorMsg = "Context budget exceeded ($promptTokens tokens). Maximum context is 2048 tokens. Please start a new chat or shorten the message."
-            Log.e(TAG, "[$TAG] $errorMsg")
+            val errorMsg = "Context budget reached ($promptTokens tokens). Maximum context is $totalModelMaxContext tokens. Please start a new chat or shorten the message."
+            Log.w(TAG, "[$TAG] $errorMsg")
             throw IllegalStateException(errorMsg)
         }
 
