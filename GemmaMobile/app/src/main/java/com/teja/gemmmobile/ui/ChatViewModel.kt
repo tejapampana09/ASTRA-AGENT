@@ -174,6 +174,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 _currentSessionId.value = latest.id
                 _messages.value = latest.messages
             }
+            withContext(Dispatchers.IO) {
+                com.teja.gemmmobile.storage.StorageManagerHelper.cleanOrphanImages(getApplication(), loaded)
+                refreshStorageUsage()
+            }
         }
     }
 
@@ -486,7 +490,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun attachDocument(document: ExtractedDocument) {
         _attachedDocument.value = document
-        _recentFiles.value = (listOf(document) + _recentFiles.value.filter { it.fileName != document.fileName }).take(10)
+        // Strip heavy raw image bytes from recentFiles cache to avoid heap memory bloat
+        val cachedDoc = if (document.imageBytes != null && document.imageBytes.size > 200_000) {
+            document.copy(imageBytes = null)
+        } else document
+        _recentFiles.value = (listOf(cachedDoc) + _recentFiles.value.filter { it.fileName != document.fileName }).take(10)
     }
 
     fun clearAttachedDocument() {
@@ -586,16 +594,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         _attachedDocument.value = null
         val userMessageId = UUID.randomUUID().toString()
-        val savedImagePath = if (isImage && doc.imageBytes != null) {
-            try {
-                val dir = java.io.File(getApplication<Application>().filesDir, "chat_images").apply { mkdirs() }
-                val imgFile = java.io.File(dir, "${userMessageId}.jpg")
-                imgFile.writeBytes(doc.imageBytes)
-                imgFile.absolutePath
-            } catch (e: Exception) {
-                Log.w(TAG, "[$TAG] Failed to save image locally", e)
-                null
-            }
+        val savedImagePath = if (isImage && (doc.imageBytes != null || doc.previewBitmap != null)) {
+            com.teja.gemmmobile.storage.StorageManagerHelper.compressAndSaveImageSync(
+                context = getApplication(),
+                previewBitmap = doc.previewBitmap,
+                rawBytes = doc.imageBytes,
+                messageId = userMessageId
+            )
         } else null
 
         val userMessage = ChatMessage(
@@ -1136,6 +1141,13 @@ You are provided with real-time web search results and extracted webpage content
         if (activeGeneratingSessionId.value == sessionId) {
             stopGeneration()
         }
+        val sessionToDelete = _sessions.value.find { it.id == sessionId }
+        if (sessionToDelete != null) {
+            viewModelScope.launch(Dispatchers.IO) {
+                com.teja.gemmmobile.storage.StorageManagerHelper.deleteSessionImages(sessionToDelete.messages)
+                refreshStorageUsage()
+            }
+        }
         viewModelScope.launch {
             val updated = chatStorage.deleteSession(sessionId)
             _sessions.value = updated
@@ -1168,7 +1180,34 @@ You are provided with real-time web search results and extracted webpage content
         _currentSessionId.value = newId
         viewModelScope.launch {
             chatStorage.clearAllSessions()
+            withContext(Dispatchers.IO) {
+                com.teja.gemmmobile.storage.StorageManagerHelper.deleteAllImages(getApplication())
+                refreshStorageUsage()
+            }
             engine?.clearConversation()
+        }
+    }
+
+    private val _storageUsageText = MutableStateFlow<String>("0 KB")
+    val storageUsageText: StateFlow<String> = _storageUsageText.asStateFlow()
+
+    fun refreshStorageUsage() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val imgSize = com.teja.gemmmobile.storage.StorageManagerHelper.getChatImagesSizeBytes(getApplication())
+            val cacheSize = com.teja.gemmmobile.storage.StorageManagerHelper.getCacheSizeBytes(getApplication())
+            val total = imgSize + cacheSize
+            _storageUsageText.value = com.teja.gemmmobile.storage.StorageManagerHelper.formatBytes(total)
+        }
+    }
+
+    fun clearCacheAndTempFiles(onComplete: (String) -> Unit = {}) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val freed = com.teja.gemmmobile.storage.StorageManagerHelper.clearCache(getApplication(), _sessions.value)
+            val freedStr = com.teja.gemmmobile.storage.StorageManagerHelper.formatBytes(freed)
+            refreshStorageUsage()
+            withContext(Dispatchers.Main) {
+                onComplete(freedStr)
+            }
         }
     }
 

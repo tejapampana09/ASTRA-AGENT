@@ -95,6 +95,8 @@ fun SettingsScreen(
     memories: List<MemoryItem> = emptyList(),
     onDeleteMemory: (String) -> Unit = {},
     onClearAllMemories: () -> Unit = {},
+    storageUsageText: String = "0 KB",
+    onClearCache: (((String) -> Unit)) -> Unit = {},
     onToggleWebSearch: () -> Unit,
     onApplyConfig: (GemmaConfig) -> Unit,
     onResetDefaults: () -> Unit,
@@ -754,7 +756,64 @@ fun SettingsScreen(
                     }
                 }
 
-                // SECTION 7: Hardware & Engine Telemetry
+                // SECTION 7: Storage & Cache Management
+                item {
+                    SettingsSectionHeader(
+                        icon = Icons.Default.Delete,
+                        title = "Storage & Cache Management"
+                    )
+                }
+
+                item {
+                    SettingsCard {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "On-Device Storage",
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp,
+                                color = Color.White
+                            )
+                            SettingsBadge(text = "Auto-Compressed")
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        TelemetryRow(label = "Gemma 4 Weights", value = "2.58 GB (Local Offline)")
+                        TelemetryRow(label = "Attachments & Cache", value = storageUsageText)
+                        TelemetryRow(label = "Auto-Pruning", value = "Active (Orphans & Old Cache)")
+
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onClearCache { freedStr ->
+                                        Toast.makeText(context, "🧹 Cache cleared! Freed $freedStr", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, Color(0xFF383838)),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = Color(0xFF10A37F)
+                                ),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = "Clear Cache & Free Space",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // SECTION 8: Hardware & Engine Telemetry
                 item {
                     SettingsCard {
                         Text(

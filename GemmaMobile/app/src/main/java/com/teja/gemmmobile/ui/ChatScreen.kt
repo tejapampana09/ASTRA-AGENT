@@ -233,6 +233,7 @@ fun ChatScreen(
     val currentlySpeakingId by viewModel.currentlySpeakingId.collectAsState()
     val attachedDocument by viewModel.attachedDocument.collectAsState()
     val recentFiles by viewModel.recentFiles.collectAsState()
+    val storageUsageText by viewModel.storageUsageText.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -305,28 +306,18 @@ fun ChatScreen(
         }
     }
 
-    // Camera Capture Launcher — pure native multimodal (no OCR)
+    // Camera Capture Launcher — native multimodal + OCR extraction
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicturePreview()
     ) { bitmap: Bitmap? ->
         bitmap?.let {
             scope.launch(Dispatchers.IO) {
                 try {
-                    val stream = java.io.ByteArrayOutputStream()
-                    it.compress(Bitmap.CompressFormat.JPEG, 90, stream)
-                    val bytes = stream.toByteArray()
                     val name = "Photo_${System.currentTimeMillis() % 10000}.jpg"
-                    val doc = ExtractedDocument(
-                        fileName = name,
-                        text = "",
-                        wordCount = 0,
-                        previewBitmap = it,
-                        isImage = true,
-                        imageBytes = bytes
-                    )
+                    val doc = DocumentOcrHelper.processImageBitmap(it, name)
                     viewModel.attachDocument(doc)
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(context, "📷 Photo attached", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "📷 Photo attached (${doc.wordCount} words detected)", Toast.LENGTH_SHORT).show()
                     }
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) {
@@ -337,30 +328,17 @@ fun ChatScreen(
         }
     }
 
-    // Image Picker Launcher — pure native multimodal (no OCR)
+    // Image Picker Launcher — native multimodal + OCR extraction
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
             scope.launch(Dispatchers.IO) {
                 try {
-                    val bytes = context.contentResolver.openInputStream(it)?.use { s -> s.readBytes() }
-                    val previewBmp = if (bytes != null) {
-                        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                    } else null
-                    val name = DocumentOcrHelper.getFileName(context, it) ?: "Image.jpg"
-                    val doc = ExtractedDocument(
-                        fileName = name,
-                        text = "",
-                        wordCount = 0,
-                        previewBitmap = previewBmp,
-                        isImage = true,
-                        imageUri = it,
-                        imageBytes = bytes
-                    )
+                    val doc = DocumentOcrHelper.processImageUri(context, it)
                     viewModel.attachDocument(doc)
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(context, "🖼️ Image attached", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "🖼️ Image attached (${doc.wordCount} words detected)", Toast.LENGTH_SHORT).show()
                     }
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) {
@@ -505,12 +483,19 @@ fun ChatScreen(
     }
 
     if (showSettingsPage) {
+        LaunchedEffect(Unit) {
+            viewModel.refreshStorageUsage()
+        }
         SettingsScreen(
             currentConfig = config,
             isWebSearchEnabled = isWebSearchEnabled,
             memories = memories,
             onDeleteMemory = { viewModel.removeMemory(it) },
             onClearAllMemories = { viewModel.clearMemories() },
+            storageUsageText = storageUsageText,
+            onClearCache = { onComplete ->
+                viewModel.clearCacheAndTempFiles(onComplete)
+            },
             onToggleWebSearch = { viewModel.toggleWebSearch() },
             onApplyConfig = { newConfig ->
                 viewModel.updateConfig(newConfig)

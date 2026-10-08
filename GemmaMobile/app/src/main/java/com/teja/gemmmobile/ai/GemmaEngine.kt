@@ -155,11 +155,11 @@ class GemmaEngine(
             if (preferCpu) {
                 // Initialize directly on CPU: Smooth, responsive, zero GPU lockups, zero phone freezing!
                 try {
-                    Log.d(TAG, "[$TAG] Initializing directly on CPU with 4 threads and 2048 token budget...")
+                    Log.d(TAG, "[$TAG] Initializing directly on CPU with 4 threads and 4096 token budget...")
                     val config = EngineConfig(
                         modelPath = modelPath,
                         backend = Backend.CPU(threadCount = 4),
-                        maxNumTokens = 2048,
+                        maxNumTokens = 4096,
                         cacheDir = effectiveCacheDir
                     )
                     testEngine = Engine(config)
@@ -184,7 +184,7 @@ class GemmaEngine(
                     val config = EngineConfig(
                         modelPath = modelPath,
                         backend = Backend.GPU(),
-                        maxNumTokens = 2048,
+                        maxNumTokens = 4096,
                         cacheDir = effectiveCacheDir
                     )
                     testEngine = Engine(config)
@@ -200,14 +200,14 @@ class GemmaEngine(
                     System.gc()
                     kotlinx.coroutines.delay(300)
 
-                    Log.i(TAG, "[$TAG] Falling back to CPU with 4 threads and 2048 token budget...")
+                    Log.i(TAG, "[$TAG] Falling back to CPU with 4 threads and 4096 token budget...")
                     _engineState.value = EngineState.Loading("Falling back to CPU...")
 
                     try {
                         val config = EngineConfig(
                             modelPath = modelPath,
                             backend = Backend.CPU(threadCount = 4),
-                            maxNumTokens = 2048,
+                            maxNumTokens = 4096,
                             cacheDir = effectiveCacheDir
                         )
                         testEngine = Engine(config)
@@ -274,56 +274,59 @@ data class EngineChunk(
         check(eng != null && eng.isInitialized()) { "Model is not initialized. Please install model first." }
 
         val effectiveSysPrompt = systemInstruction ?: currentConfig.systemPrompt
-        val promptTokens = com.teja.gemmmobile.context.ContextManager.estimateTokens(prompt) +
+        val basePromptTokens = com.teja.gemmmobile.context.ContextManager.estimateTokens(prompt) +
             com.teja.gemmmobile.context.ContextManager.estimateTokens(effectiveSysPrompt)
         val effectiveThinking = enableThinkingOverride ?: currentConfig.enableThinking
         val effectiveThinkingBudget = if (effectiveThinking) minOf(currentConfig.thinkingBudget, 160) else 0
 
-        val totalModelMaxContext = 2048
+        val totalModelMaxContext = 4096
         val safetyMargin = 32
-
-        // Calculate actual safe headroom remaining in the KV cache
-        var currentThinking = effectiveThinking
-        var currentThinkBudget = effectiveThinkingBudget
-
-        var availableForOutput = totalModelMaxContext - promptTokens - currentThinkBudget - safetyMargin
-        if (availableForOutput < 64 && currentThinking) {
-            // Recover token budget by disabling thinking if headroom is too tight
-            currentThinking = false
-            currentThinkBudget = 0
-            availableForOutput = totalModelMaxContext - promptTokens - safetyMargin
-        }
-
-        if (availableForOutput < 32) {
-            val errorMsg = "Context budget reached ($promptTokens tokens). Maximum context is $totalModelMaxContext tokens. Please start a new chat or shorten the message."
-            Log.w(TAG, "[$TAG] $errorMsg")
-            throw IllegalStateException(errorMsg)
-        }
-
-        val dynamicMaxOutput = minOf(currentConfig.maxTokens, maxOf(128, availableForOutput))
-        Log.d(TAG, "[$TAG] Starting generation with promptTokens=$promptTokens, maxOutput=$dynamicMaxOutput, thinking=$currentThinking, thinkBudget=$currentThinkBudget, hasImage=${imageBytes != null}")
-
-        val thinkingConfig = ThinkingConfig(
-            enableThinking = currentThinking,
-            thinkingTokenBudget = currentThinkBudget
-        )
 
         try {
             var attempt = 0
             var succeeded = false
-            var currentImageBytes = imageBytes
+            var currentImageBytes = imageBytes?.let { com.teja.gemmmobile.storage.StorageManagerHelper.compressForVision(it) }
+
             while (attempt < 2 && !succeeded) {
                 attempt++
+
+                val imageTokens = if (currentImageBytes != null) 576 else 0
+                val totalPromptTokens = basePromptTokens + imageTokens
+
+                var currentThinking = effectiveThinking
+                var currentThinkBudget = effectiveThinkingBudget
+
+                var availableForOutput = totalModelMaxContext - totalPromptTokens - currentThinkBudget - safetyMargin
+                if (availableForOutput < 64 && currentThinking) {
+                    currentThinking = false
+                    currentThinkBudget = 0
+                    availableForOutput = totalModelMaxContext - totalPromptTokens - safetyMargin
+                }
+
+                if (availableForOutput < 32) {
+                    val errorMsg = "Context budget reached ($totalPromptTokens tokens). Maximum context is $totalModelMaxContext tokens. Please start a new chat or shorten the message."
+                    Log.w(TAG, "[$TAG] $errorMsg")
+                    throw IllegalStateException(errorMsg)
+                }
+
+                val dynamicMaxOutput = minOf(currentConfig.maxTokens, maxOf(128, availableForOutput))
+                Log.d(TAG, "[$TAG] Starting attempt $attempt with promptTokens=$totalPromptTokens, maxOutput=$dynamicMaxOutput, thinking=$currentThinking, thinkBudget=$currentThinkBudget, hasImage=${currentImageBytes != null}")
+
+                val thinkingConfig = ThinkingConfig(
+                    enableThinking = currentThinking,
+                    thinkingTokenBudget = currentThinkBudget
+                )
+
                 try {
                     val targetConv = mutex.withLock {
                         // Always create a fresh, clean conversation session per turn so LiteRT-LM's
-                        // native KV cache never accumulates old turns and exceeds the 2048 token limit.
+                        // native KV cache never accumulates old turns and exceeds the 4096 token limit.
                         // Context and history are managed strictly within budget by ContextManager.
                         try { conversation?.close() } catch (_: Throwable) {}
                         val cur = eng.createConversation(
                             buildConversationConfig(
                                 currentConfig,
-                                effectiveThinking,
+                                currentThinking,
                                 dynamicMaxOutput,
                                 systemInstructionText = effectiveSysPrompt
                             )

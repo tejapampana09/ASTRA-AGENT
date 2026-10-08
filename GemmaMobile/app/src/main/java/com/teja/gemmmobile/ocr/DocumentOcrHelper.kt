@@ -38,9 +38,12 @@ object DocumentOcrHelper {
 
     suspend fun processImageUri(context: Context, uri: Uri): ExtractedDocument = withContext(Dispatchers.IO) {
         val fileName = getFileName(context, uri) ?: "Image.jpg"
-        val bytes = try {
+        val rawBytes = try {
             context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
         } catch (_: Exception) { null }
+
+        // Automatically compress & scale for lightweight memory and disk footprint
+        val bytes = rawBytes?.let { com.teja.gemmmobile.storage.StorageManagerHelper.compressForVision(it) } ?: rawBytes
         val bitmap = if (bytes != null) {
             try { android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size) } catch (_: Exception) { null }
         } else null
@@ -61,11 +64,24 @@ object DocumentOcrHelper {
     }
 
     suspend fun processImageBitmap(bitmap: Bitmap, name: String = "Photo"): ExtractedDocument = withContext(Dispatchers.IO) {
-        val image = InputImage.fromBitmap(bitmap, 0)
+        val scaled = com.teja.gemmmobile.storage.StorageManagerHelper.scaleBitmapDown(bitmap, 1024)
+        val image = InputImage.fromBitmap(scaled, 0)
         val visionText = recognizer.process(image).await()
         val text = visionText.text.trim()
         val words = if (text.isBlank()) 0 else text.split(Regex("""\s+""")).size
-        ExtractedDocument(name, text, words, previewBitmap = bitmap)
+
+        val stream = java.io.ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, 80, stream)
+        val bytes = stream.toByteArray()
+
+        ExtractedDocument(
+            fileName = name,
+            text = text,
+            wordCount = words,
+            previewBitmap = scaled,
+            isImage = true,
+            imageBytes = bytes
+        )
     }
 
     suspend fun processPdfUri(context: Context, uri: Uri, maxPages: Int = 30): ExtractedDocument = withContext(Dispatchers.IO) {
@@ -92,12 +108,17 @@ object DocumentOcrHelper {
                             page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
 
                             if (i == 0) {
-                                firstPageBitmap = bitmap
+                                firstPageBitmap = com.teja.gemmmobile.storage.StorageManagerHelper.scaleBitmapDown(bitmap, 512)
                             }
 
                             val inputImage = InputImage.fromBitmap(bitmap, 0)
                             val visionText = recognizer.process(inputImage).await()
                             val pageContent = visionText.text.trim()
+
+                            // Immediately recycle intermediate bitmap to conserve device RAM
+                            if (i > 0) {
+                                try { bitmap.recycle() } catch (_: Throwable) {}
+                            }
 
                             if (pageContent.isNotBlank()) {
                                 if (renderer.pageCount > 1) {
