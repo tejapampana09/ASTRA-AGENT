@@ -4111,25 +4111,38 @@ fun ChatInputBar(
 ) {
     val focusManager = LocalFocusManager.current
     val isImeVisible = WindowInsets.isImeVisible
+    var isFocused by remember { mutableStateOf(false) }
 
-    // Whenever keyboard is closed/dismissed, clear focus so cursor and text field reset completely
+    // Whenever keyboard is closed/dismissed and input is empty, clear focus
     LaunchedEffect(isImeVisible) {
-        if (!isImeVisible) {
+        if (!isImeVisible && inputText.isEmpty()) {
             focusManager.clearFocus()
+            isFocused = false
         }
     }
 
-    // Expand ONLY when keyboard is open (isImeVisible). When closed, returns to normal 80% floating bar.
-    val isExpanded = isImeVisible
+    // Dynamic Expansion: Expands instantly when keyboard opens, field is focused, or text is typed
+    val isExpanded = isImeVisible || isFocused || inputText.isNotEmpty()
+    val isMultiLine = remember(inputText) { inputText.contains('\n') || inputText.length > 45 }
+
+    // ChatGPT smooth morph: Circular pill (28.dp) when single-line, rounded card (20.dp) when multi-line
+    val cornerRadius by animateDpAsState(
+        targetValue = if (isMultiLine) 20.dp else 28.dp,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "inputCornerRadius"
+    )
 
     // ChatGPT mobile floating island behavior:
     // When idle / keyboard closed: floats comfortably above nav bar with 14.dp side margins.
-    // When keyboard open: docks directly above keyboard with 10.dp side margins.
+    // When active / focused / keyboard open: snappy spring expansion to 10.dp side margins.
     val horizontalPadding by animateDpAsState(
         targetValue = if (isExpanded) 10.dp else 14.dp,
         animationSpec = spring(
             dampingRatio = 0.82f,
-            stiffness = Spring.StiffnessMediumLow
+            stiffness = Spring.StiffnessMedium
         ),
         label = "inputHorizontalPadding"
     )
@@ -4138,7 +4151,7 @@ fun ChatInputBar(
         targetValue = if (isExpanded) 2.dp else 4.dp,
         animationSpec = spring(
             dampingRatio = 0.82f,
-            stiffness = Spring.StiffnessMediumLow
+            stiffness = Spring.StiffnessMedium
         ),
         label = "inputBottomPadding"
     )
@@ -4151,14 +4164,17 @@ fun ChatInputBar(
         contentAlignment = Alignment.Center
     ) {
         Surface(
-            shape = RoundedCornerShape(32.dp),
+            shape = RoundedCornerShape(cornerRadius),
             color = Color(0xFF212121),
             border = BorderStroke(1.dp, Color(0xFF2C2C2C)),
             shadowElevation = 6.dp,
             modifier = Modifier
                 .fillMaxWidth()
                 .animateContentSize(
-                    animationSpec = tween(durationMillis = 150)
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessMedium
+                    )
                 )
         ) {
             Row(
@@ -4241,6 +4257,7 @@ fun ChatInputBar(
                         maxLines = 6,
                         modifier = Modifier
                             .weight(1f)
+                            .onFocusChanged { isFocused = it.isFocused }
                             .padding(horizontal = 4.dp, vertical = 4.dp),
                         decorationBox = { innerTextField ->
                             Box(
@@ -4250,9 +4267,9 @@ fun ChatInputBar(
                                 if (inputText.isEmpty()) {
                                     Text(
                                         text = when {
-                                            isWebSearchEnabled -> "Search with Gemma..."
-                                            hasAttachment -> "Ask about this..."
-                                            else -> "Ask Gemma..."
+                                             isWebSearchEnabled -> "Search with Gemma..."
+                                             hasAttachment -> "Ask about this..."
+                                             else -> "Ask Gemma..."
                                         },
                                         style = MaterialTheme.typography.bodyMedium.copy(
                                             fontSize = 15.5.sp,
@@ -4276,8 +4293,8 @@ fun ChatInputBar(
                         else -> ActionButtonState.MIC
                     },
                     transitionSpec = {
-                        (scaleIn(tween(140)) + fadeIn(tween(140)))
-                            .togetherWith(scaleOut(tween(110)) + fadeOut(tween(110)))
+                        (scaleIn(spring(stiffness = Spring.StiffnessMedium)) + fadeIn(tween(90)))
+                            .togetherWith(scaleOut(spring(stiffness = Spring.StiffnessMedium)) + fadeOut(tween(90)))
                     },
                     label = "chatActionTransition"
                 ) { state ->
