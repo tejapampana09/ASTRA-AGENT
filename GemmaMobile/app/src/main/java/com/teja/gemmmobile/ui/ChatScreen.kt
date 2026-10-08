@@ -845,40 +845,7 @@ fun ChatScreen(
                 }
             }
 
-            // Floating Scroll-to-Bottom Button (ChatGPT style: auto-hides after 2s inactivity)
-            androidx.compose.animation.AnimatedVisibility(
-                visible = isScrollToBottomVisible && canScrollForward,
-                enter = fadeIn(tween(180)) + scaleIn(tween(180), initialScale = 0.85f),
-                exit = fadeOut(tween(220)) + scaleOut(tween(220), targetScale = 0.85f),
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 86.dp)
-            ) {
-                Surface(
-                    shape = CircleShape,
-                    color = Color(0xFF212121),
-                    shadowElevation = 4.dp,
-                    border = BorderStroke(1.dp, Color(0xFF383838)),
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .clickable {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            scope.launch {
-                                listState.animateScrollToItem(messages.size)
-                            }
-                        }
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.KeyboardArrowDown,
-                            contentDescription = "Scroll to bottom",
-                            tint = Color.White,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                }
-            }
+
 
             // Top Vignette & Floating Controls Header (Edge-to-Edge ChatGPT style)
             Box(
@@ -1408,9 +1375,45 @@ fun ChatScreen(
                             }
                         }
 
+                        // Scroll-to-Bottom Button — anchored just above input bar (always correct position)
+                        AnimatedVisibility(
+                            visible = isScrollToBottomVisible && canScrollForward,
+                            enter = fadeIn(tween(180)) + scaleIn(tween(180), initialScale = 0.85f),
+                            exit = fadeOut(tween(220)) + scaleOut(tween(220), targetScale = 0.85f),
+                            modifier = Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .padding(bottom = 6.dp)
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = Color(0xFF212121),
+                                shadowElevation = 4.dp,
+                                border = BorderStroke(1.dp, Color(0xFF383838)),
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .clickable {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        scope.launch {
+                                            listState.animateScrollToItem(messages.size)
+                                        }
+                                    }
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.KeyboardArrowDown,
+                                        contentDescription = "Scroll to bottom",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
+                        }
+
                         // Floating ChatGPT style Input Bar
                         ChatInputBar(
                             inputText = inputText,
+
                             onTextChanged = { viewModel.onInputTextChanged(it) },
                             onSend = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
