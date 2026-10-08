@@ -41,6 +41,9 @@ class DocumentIntelligenceEngineTest {
         assertEquals(DocumentIntent.FULL_SUMMARY, DocumentIntelligenceEngine.detectIntent("summarize this document"))
         assertEquals(DocumentIntent.FULL_SUMMARY, DocumentIntelligenceEngine.detectIntent("explain full pdf"))
 
+        assertEquals(DocumentIntent.KEY_TAKEAWAYS, DocumentIntelligenceEngine.detectIntent("key takeaways"))
+        assertEquals(DocumentIntent.KEY_TAKEAWAYS, DocumentIntelligenceEngine.detectIntent("core insights and takeaways"))
+
         assertEquals(DocumentIntent.SPECIFIC_QA, DocumentIntelligenceEngine.detectIntent("what is reconstruction loss?"))
         assertEquals(DocumentIntent.SPECIFIC_QA, DocumentIntelligenceEngine.detectIntent("formula on page 14"))
     }

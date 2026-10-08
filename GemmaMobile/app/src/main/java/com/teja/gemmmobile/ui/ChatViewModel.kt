@@ -60,7 +60,9 @@ data class ChatMessage(
     @Transient val imageBitmap: Bitmap? = null,
     val imagePath: String? = null,
     val isExecutingTool: Boolean = false,
-    val toolExecutionStatus: String? = null
+    val toolExecutionStatus: String? = null,
+    val citedPages: List<Int> = emptyList(),
+    val sourceFileName: String? = null
 )
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
@@ -560,6 +562,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val imageBytesToSend = if (doc != null && doc.isImage) doc.imageBytes else null
 
         val isImage = doc != null && doc.isImage
+        val promptResult = if (doc != null && !isImage) {
+            com.teja.gemmmobile.ocr.DocumentIntelligenceEngine.buildDocumentPrompt(doc, rawInput)
+        } else null
+
         val promptForGemma = when {
             isImage -> {
                 if (rawInput.isBlank()) {
@@ -568,10 +574,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     rawInput.trim()
                 }
             }
-            doc != null -> {
-                val promptResult = com.teja.gemmmobile.ocr.DocumentIntelligenceEngine.buildDocumentPrompt(doc, rawInput)
-                promptResult.promptForModel
-            }
+            promptResult != null -> promptResult.promptForModel
             else -> rawInput
         }
 
@@ -617,7 +620,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             isStreaming = true,
             isThinking = _config.value.enableThinking && !useWebSearch,
             isSearchingWeb = useWebSearch,
-            isImageAnalysis = isImage
+            isImageAnalysis = isImage,
+            citedPages = promptResult?.citedPages ?: emptyList(),
+            sourceFileName = if (isDocument) doc?.fileName else null
         )
 
         val currSessionId = _currentSessionId.value

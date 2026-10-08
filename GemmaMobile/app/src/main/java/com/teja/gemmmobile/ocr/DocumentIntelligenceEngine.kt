@@ -11,6 +11,7 @@ data class DocumentPromptResult(
 enum class DocumentIntent {
     TOPIC_EXTRACTION,
     FULL_SUMMARY,
+    KEY_TAKEAWAYS,
     SPECIFIC_QA
 }
 
@@ -62,10 +63,18 @@ object DocumentIntelligenceEngine {
             return DocumentIntent.TOPIC_EXTRACTION
         }
 
+        val takeawaysKeywords = listOf(
+            "takeaway", "takeaways", "key takeaways", "key findings", "highlights",
+            "action items", "conclusions", "core insights", "key takeaway"
+        )
+        if (takeawaysKeywords.any { q.contains(it) }) {
+            return DocumentIntent.KEY_TAKEAWAYS
+        }
+
         val summaryKeywords = listOf(
             "summarize", "summary", "overview", "explain full", "explain all",
             "what is this", "what is this pdf", "about", "explain document",
-            "explain this pdf", "main points", "takeaways", "tl;dr", "tldr"
+            "explain this pdf", "main points", "tl;dr", "tldr"
         )
         if (q.isBlank() || summaryKeywords.any { q.contains(it) }) {
             return DocumentIntent.FULL_SUMMARY
@@ -202,6 +211,43 @@ object DocumentIntelligenceEngine {
                     appendLine("2. **Key Concepts & Findings**: 3-5 structured bullet points highlighting the main ideas.")
                     appendLine("3. **Key Takeaway**: A crisp concluding takeaway.")
                     appendLine("4. Conclude by suggesting 2 specific sections the user can explore next.")
+                }.trim()
+
+                DocumentPromptResult(
+                    promptForModel = prompt,
+                    citedPages = (pages.take(2) + lastPages).map { it.pageNumber }.distinct(),
+                    intent = intent
+                )
+            }
+
+            DocumentIntent.KEY_TAKEAWAYS -> {
+                val introText = pages.take(2).joinToString("\n\n") { p ->
+                    "[Page ${p.pageNumber}]: " + p.text.take(450)
+                }
+                val lastPages = if (pages.size > 2) pages.takeLast(2) else emptyList()
+                val conclusionText = lastPages.joinToString("\n\n") { p ->
+                    "[Page ${p.pageNumber}]: " + p.text.take(400)
+                }
+                val prompt = buildString {
+                    appendLine("Document: \"${doc.fileName}\" (${doc.pageCount} Pages)")
+                    appendLine("Task: Extract the most crucial Key Takeaways, Core Findings, and Actionable Insights.")
+                    appendLine("CRITICAL RULE: Directly state the key takeaways from the document content. Do NOT discuss software, OCR, or document parsing.")
+                    appendLine()
+                    if (introText.isNotBlank()) {
+                        appendLine("### Document Context:")
+                        appendLine(introText)
+                        appendLine()
+                    }
+                    if (conclusionText.isNotBlank()) {
+                        appendLine("### Key Highlights / Conclusions:")
+                        appendLine(conclusionText)
+                        appendLine()
+                    }
+                    appendLine("### Instructions:")
+                    appendLine("Provide 5 to 7 sharp, high-impact bullet points capturing the core insights and findings:")
+                    appendLine("1. Bold the core insight for each point (e.g., • **Finding**: Explanation).")
+                    appendLine("2. Include page citations [Page X] where available.")
+                    appendLine("3. Focus on concrete data, numbers, conclusions, and decisions.")
                 }.trim()
 
                 DocumentPromptResult(

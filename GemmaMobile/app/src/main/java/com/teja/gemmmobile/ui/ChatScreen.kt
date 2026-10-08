@@ -123,6 +123,8 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.filled.ThumbDown
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.border
@@ -1207,40 +1209,67 @@ fun ChatScreen(
                                         }
                                     }
                                 } else {
+                                    val isPdf = doc.fileName.endsWith(".pdf", ignoreCase = true)
                                     Surface(
-                                        shape = RoundedCornerShape(14.dp),
-                                        color = Color(0xFF212121),
-                                        border = BorderStroke(1.dp, Color(0xFF2E2E2E))
+                                        shape = RoundedCornerShape(16.dp),
+                                        color = Color(0xFF1C1C20),
+                                        border = BorderStroke(1.dp, Color(0xFF2C2C34))
                                     ) {
                                         Row(
-                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                                             verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                                         ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Description,
-                                                contentDescription = "File",
-                                                tint = Color.White,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Text(
-                                                text = if (doc.pageCount > 1) "${doc.fileName} (${doc.pageCount}p)" else doc.fileName,
-                                                style = MaterialTheme.typography.labelMedium,
-                                                fontWeight = FontWeight.Medium,
-                                                color = Color.White,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                                modifier = Modifier.widthIn(max = 220.dp)
-                                            )
-                                            Icon(
-                                                imageVector = Icons.Default.Close,
-                                                contentDescription = "Remove",
-                                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                            Box(
                                                 modifier = Modifier
-                                                    .size(16.dp)
+                                                    .size(34.dp)
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .background(if (isPdf) Color(0xFF381515) else Color(0xFF132824)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = if (isPdf) Icons.Default.PictureAsPdf else Icons.Default.Description,
+                                                    contentDescription = "File",
+                                                    tint = if (isPdf) Color(0xFFFF857D) else Color(0xFF66D9B8),
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                            Column(modifier = Modifier.widthIn(max = 210.dp)) {
+                                                Text(
+                                                    text = doc.fileName,
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = Color.White,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                val details = if (doc.pageCount > 1) {
+                                                    "${doc.pageCount} pages • ${doc.wordCount} words"
+                                                } else {
+                                                    "${doc.wordCount} words"
+                                                }
+                                                Text(
+                                                    text = details,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = Color(0xFFAAAAAA),
+                                                    fontSize = 11.sp
+                                                )
+                                            }
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(24.dp)
                                                     .clip(CircleShape)
-                                                    .clickable { viewModel.clearAttachedDocument() }
-                                            )
+                                                    .background(Color(0xFF2A2A30))
+                                                    .clickable { viewModel.clearAttachedDocument() },
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Close,
+                                                    contentDescription = "Remove",
+                                                    tint = Color(0xFFCCCCCC),
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -1250,31 +1279,34 @@ fun ChatScreen(
                                 androidx.compose.foundation.lazy.LazyRow(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(start = 16.dp, end = 16.dp, bottom = 4.dp),
+                                        .padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 4.dp),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     val docChips = listOf(
-                                        "📑 Summarize document",
-                                        "📚 Extract all topics",
-                                        "🎯 Key takeaways",
-                                        "❓ What is this about?"
+                                        Pair("📑 Summarize document", "Summarize this document"),
+                                        Pair("📚 Extract all topics", "Extract all topics and sections"),
+                                        Pair("🎯 Key takeaways", "Key takeaways and findings"),
+                                        Pair("❓ Ask a question", "")
                                     )
-                                    items(docChips) { chip ->
+                                    items(docChips) { (chipLabel, actionPrompt) ->
                                         Surface(
                                             shape = RoundedCornerShape(12.dp),
-                                            color = Color(0xFF1E1E1E),
-                                            border = BorderStroke(1.dp, Color(0xFF333333)),
+                                            color = Color(0xFF1E1E24),
+                                            border = BorderStroke(1.dp, Color(0xFF33333E)),
                                             modifier = Modifier.clickable {
-                                                val cleanQuery = chip.substring(2).trim()
-                                                viewModel.onInputTextChanged(cleanQuery)
-                                                viewModel.sendMessage()
+                                                if (actionPrompt.isNotBlank()) {
+                                                    viewModel.onInputTextChanged(actionPrompt)
+                                                    viewModel.sendMessage()
+                                                } else {
+                                                    keyboardController?.show()
+                                                }
                                             }
                                         ) {
                                             Text(
-                                                text = chip,
+                                                text = chipLabel,
                                                 style = MaterialTheme.typography.labelSmall,
-                                                color = Color(0xFFD1D1D1),
-                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                                color = Color(0xFFD6D6E0),
+                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
                                             )
                                         }
                                     }
@@ -2187,13 +2219,56 @@ fun MessageBubble(
                         }
                     }
                     if (message.text.isNotBlank()) {
-                        Text(
-                            text = message.text,
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                color = Color.White,
-                                lineHeight = 22.sp
+                        if (message.text.startsWith("📄 **[")) {
+                            val parts = message.text.split("\n\n", limit = 2)
+                            val header = parts.getOrNull(0) ?: ""
+                            val userPrompt = parts.getOrNull(1) ?: ""
+
+                            // Google AI Edge / NotebookLM Source Card
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFF2A0D1B),
+                                border = BorderStroke(1.dp, Color(0xFF4A1731)),
+                                modifier = Modifier.padding(bottom = 6.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Description,
+                                        contentDescription = "Source",
+                                        tint = Color(0xFFFFB4AB),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = header.removePrefix("📄 ").replace("**", ""),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color(0xFFE6E0E9),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            if (userPrompt.isNotBlank()) {
+                                Text(
+                                    text = userPrompt,
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        color = Color.White,
+                                        lineHeight = 22.sp
+                                    )
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = message.text,
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    color = Color.White,
+                                    lineHeight = 22.sp
+                                )
                             )
-                        )
+                        }
                     }
                 }
             }
@@ -2321,6 +2396,36 @@ fun MessageBubble(
                     val profileCards = remember(message.searchResults) { extractProfileCards(message.searchResults) }
                     if (profileCards.isNotEmpty()) {
                         ProfileCardsRow(cards = profileCards)
+                    }
+                }
+
+                // Document Citations Badge (Google AI Edge Gallery / NotebookLM style)
+                if (!message.isStreaming && message.citedPages.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFF16161A),
+                        border = BorderStroke(1.dp, Color(0xFF28282E))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MenuBook,
+                                contentDescription = "Sources",
+                                tint = Color(0xFF8AB4F8),
+                                modifier = Modifier.size(13.dp)
+                            )
+                            val docName = message.sourceFileName?.let { "$it • " } ?: ""
+                            val pagesText = message.citedPages.joinToString(", ") { "Page $it" }
+                            Text(
+                                text = "Sources: $docName$pagesText",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFFC4C7C5)
+                            )
+                        }
                     }
                 }
 
