@@ -17,9 +17,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.size
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.Icon
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.material3.HorizontalDivider
@@ -93,7 +104,7 @@ fun MarkdownText(
     val textColor = overrideTextColor ?: if (isUser) {
         MaterialTheme.colorScheme.onPrimaryContainer
     } else {
-        MaterialTheme.colorScheme.onSurface
+        Color(0xFFECECEC)
     }
 
     val linkColor = if (isUser) {
@@ -105,7 +116,7 @@ fun MarkdownText(
     val codeBgColor = if (isUser) {
         MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
     } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+        Color(0xFF262628)
     }
 
     val blocks = remember(text) { parseMarkdownBlocks(text) }
@@ -145,8 +156,160 @@ fun MarkdownText(
 private sealed class RenderedLine {
     object Blank : RenderedLine()
     data class Header(val annotatedText: AnnotatedString, val level: Int) : RenderedLine()
-    data class Bullet(val prefix: String, val annotatedText: AnnotatedString) : RenderedLine()
+    data class Bullet(
+        val prefix: String,
+        val annotatedText: AnnotatedString,
+        val isSectionHeader: Boolean = false,
+        val indentLevel: Int = 0
+    ) : RenderedLine()
     data class Paragraph(val annotatedText: AnnotatedString) : RenderedLine()
+}
+
+private fun parseMarkdownLines(
+    content: String,
+    textColor: Color,
+    linkColor: Color,
+    codeBgColor: Color,
+    searchResults: List<SearchResult> = emptyList()
+): List<RenderedLine> {
+    val sanitized = sanitizeMarkdown(content, searchResults)
+    val rawLines = sanitized.lines()
+    val result = mutableListOf<RenderedLine>()
+
+    for ((index, line) in rawLines.withIndex()) {
+        val trimmed = line.trim()
+        if (trimmed.isEmpty()) {
+            if (index > 0 && index < rawLines.size - 1) {
+                result.add(RenderedLine.Blank)
+            }
+            continue
+        }
+
+        val indentLevel = (line.takeWhile { it.isWhitespace() }.length / 2).coerceIn(0, 3)
+
+        when {
+            trimmed.startsWith("### ") -> {
+                result.add(
+                    RenderedLine.Header(
+                        annotatedText = buildInlineMarkdown(trimmed.removePrefix("### ").trim(), textColor, linkColor, codeBgColor),
+                        level = 3
+                    )
+                )
+            }
+            trimmed.startsWith("## ") -> {
+                result.add(
+                    RenderedLine.Header(
+                        annotatedText = buildInlineMarkdown(trimmed.removePrefix("## ").trim(), textColor, linkColor, codeBgColor),
+                        level = 2
+                    )
+                )
+            }
+            trimmed.startsWith("# ") -> {
+                result.add(
+                    RenderedLine.Header(
+                        annotatedText = buildInlineMarkdown(trimmed.removePrefix("# ").trim(), textColor, linkColor, codeBgColor),
+                        level = 1
+                    )
+                )
+            }
+            trimmed.startsWith("* ") || trimmed.startsWith("- ") || trimmed.startsWith("• ") -> {
+                val c = when {
+                    trimmed.startsWith("* ") -> trimmed.removePrefix("* ")
+                    trimmed.startsWith("- ") -> trimmed.removePrefix("- ")
+                    else -> trimmed.removePrefix("• ")
+                }.trim()
+                result.add(
+                    RenderedLine.Bullet(
+                        prefix = "•",
+                        annotatedText = buildInlineMarkdown(c, textColor, linkColor, codeBgColor),
+                        isSectionHeader = false,
+                        indentLevel = indentLevel
+                    )
+                )
+            }
+            trimmed.matches(REGEX_NUMBERED_LIST) -> {
+                val prefix = trimmed.substringBefore(". ") + "."
+                val c = trimmed.substringAfter(". ").trim()
+                val isSectionHeader = (c.length >= 3 && c.all { it.isUpperCase() || it.isWhitespace() || it == '&' || it == '-' || it == '_' || it == '/' }) ||
+                        (c.startsWith("**") && c.endsWith("**"))
+                result.add(
+                    RenderedLine.Bullet(
+                        prefix = prefix,
+                        annotatedText = buildInlineMarkdown(c, textColor, linkColor, codeBgColor),
+                        isSectionHeader = isSectionHeader,
+                        indentLevel = indentLevel
+                    )
+                )
+            }
+            else -> {
+                result.add(
+                    RenderedLine.Paragraph(
+                        annotatedText = buildInlineMarkdown(trimmed, textColor, linkColor, codeBgColor)
+                    )
+                )
+            }
+        }
+    }
+    return result
+}
+
+@Composable
+private fun RenderMarkdownLine(line: RenderedLine) {
+    when (line) {
+        is RenderedLine.Blank -> {
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+        is RenderedLine.Header -> {
+            val style = when (line.level) {
+                1 -> MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, color = Color.White)
+                2 -> MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = Color.White)
+                else -> MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = Color.White)
+            }
+            val padTop = if (line.level == 1) 10.dp else if (line.level == 2) 6.dp else 4.dp
+            ClickableMarkdownLine(
+                annotatedText = line.annotatedText,
+                style = style,
+                modifier = Modifier.padding(top = padTop, bottom = 2.dp)
+            )
+        }
+        is RenderedLine.Bullet -> {
+            val isHeading = line.isSectionHeader
+            val topPad = if (isHeading) 6.dp else 2.dp
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = (line.indentLevel * 14 + 2).dp, top = topPad, bottom = 2.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                Text(
+                    text = line.prefix,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (isHeading) FontWeight.Bold else FontWeight.SemiBold,
+                    color = if (isHeading) Color.White else Color(0xFFC7C7CC),
+                    modifier = Modifier.padding(end = 8.dp)
+                )
+                ClickableMarkdownLine(
+                    annotatedText = line.annotatedText,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        color = if (isHeading) Color.White else Color(0xFFECECEC),
+                        lineHeight = 22.sp,
+                        fontWeight = if (isHeading) FontWeight.SemiBold else FontWeight.Normal
+                    ),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+        is RenderedLine.Paragraph -> {
+            ClickableMarkdownLine(
+                annotatedText = line.annotatedText,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    color = Color(0xFFECECEC),
+                    lineHeight = 22.sp
+                ),
+                modifier = Modifier.padding(vertical = 1.dp)
+            )
+        }
+    }
 }
 
 @Composable
@@ -158,142 +321,112 @@ private fun TextBlockView(
     searchResults: List<SearchResult> = emptyList()
 ) {
     val cacheKey = remember(content, textColor, linkColor, codeBgColor, searchResults.size) {
-        "v2|$content|${textColor.value}|${linkColor.value}|${codeBgColor.value}|${searchResults.size}"
+        "v3|$content|${textColor.value}|${linkColor.value}|${codeBgColor.value}|${searchResults.size}"
     }
     val parsedLines = remember(cacheKey) {
         val cached = renderedLineCache.get(cacheKey)
         if (cached != null) {
             cached
         } else {
-            val sanitized = sanitizeMarkdown(content, searchResults)
-            val rawLines = sanitized.lines()
-            val result = mutableListOf<RenderedLine>()
-
-            for ((index, line) in rawLines.withIndex()) {
-                val trimmed = line.trim()
-                if (trimmed.isEmpty()) {
-                    if (index > 0 && index < rawLines.size - 1) {
-                        result.add(RenderedLine.Blank)
-                    }
-                    continue
-                }
-
-                when {
-                    trimmed.startsWith("### ") -> {
-                        result.add(
-                            RenderedLine.Header(
-                                annotatedText = buildInlineMarkdown(trimmed.removePrefix("### ").trim(), textColor, linkColor, codeBgColor),
-                                level = 3
-                            )
-                        )
-                    }
-                    trimmed.startsWith("## ") -> {
-                        result.add(
-                            RenderedLine.Header(
-                                annotatedText = buildInlineMarkdown(trimmed.removePrefix("## ").trim(), textColor, linkColor, codeBgColor),
-                                level = 2
-                            )
-                        )
-                    }
-                    trimmed.startsWith("# ") -> {
-                        result.add(
-                            RenderedLine.Header(
-                                annotatedText = buildInlineMarkdown(trimmed.removePrefix("# ").trim(), textColor, linkColor, codeBgColor),
-                                level = 1
-                            )
-                        )
-                    }
-                    trimmed.startsWith("* ") || trimmed.startsWith("- ") || trimmed.startsWith("• ") -> {
-                        val c = when {
-                            trimmed.startsWith("* ") -> trimmed.removePrefix("* ")
-                            trimmed.startsWith("- ") -> trimmed.removePrefix("- ")
-                            else -> trimmed.removePrefix("• ")
-                        }.trim()
-                        result.add(
-                            RenderedLine.Bullet(
-                                prefix = "•",
-                                annotatedText = buildInlineMarkdown(c, textColor, linkColor, codeBgColor)
-                            )
-                        )
-                    }
-                    trimmed.matches(REGEX_NUMBERED_LIST) -> {
-                        val prefix = trimmed.substringBefore(". ") + "."
-                        val c = trimmed.substringAfter(". ").trim()
-                        result.add(
-                            RenderedLine.Bullet(
-                                prefix = prefix,
-                                annotatedText = buildInlineMarkdown(c, textColor, linkColor, codeBgColor)
-                            )
-                        )
-                    }
-                    else -> {
-                        result.add(
-                            RenderedLine.Paragraph(
-                                annotatedText = buildInlineMarkdown(trimmed, textColor, linkColor, codeBgColor)
-                            )
-                        )
-                    }
-                }
-            }
-            renderedLineCache.put(cacheKey, result)
-            result
+            val lines = parseMarkdownLines(content, textColor, linkColor, codeBgColor, searchResults)
+            renderedLineCache.put(cacheKey, lines)
+            lines
         }
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         for (line in parsedLines) {
-            when (line) {
-                is RenderedLine.Blank -> {
-                    Spacer(modifier = Modifier.height(10.dp))
-                }
-                is RenderedLine.Header -> {
-                    val style = when (line.level) {
-                        1 -> MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, color = textColor)
-                        2 -> MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = textColor)
-                        else -> MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = textColor)
-                    }
-                    val padTop = if (line.level == 1) 12.dp else if (line.level == 2) 8.dp else 6.dp
-                    ClickableMarkdownLine(
-                        annotatedText = line.annotatedText,
-                        style = style,
-                        modifier = Modifier.padding(top = padTop, bottom = 4.dp)
-                    )
-                }
-                is RenderedLine.Bullet -> {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 2.dp, top = 2.dp, bottom = 2.dp),
-                        verticalAlignment = Alignment.Top
-                    ) {
-                        Text(
-                            text = line.prefix,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = textColor,
-                            modifier = Modifier.padding(end = 8.dp)
-                        )
-                        ClickableMarkdownLine(
-                            annotatedText = line.annotatedText,
-                            style = MaterialTheme.typography.bodyMedium.copy(color = textColor, lineHeight = 24.sp),
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-                is RenderedLine.Paragraph -> {
-                    ClickableMarkdownLine(
-                        annotatedText = line.annotatedText,
-                        style = MaterialTheme.typography.bodyMedium.copy(color = textColor, lineHeight = 24.sp),
-                        modifier = Modifier.padding(vertical = 2.dp)
-                    )
-                }
-            }
+            RenderMarkdownLine(line)
         }
     }
 }
 
 /**
- * ChatGPT-style Code Block with header, language badge, copy button and syntax highlighting.
+ * Minimalist ChatGPT-style copy button that provides immediate visual feedback
+ * with an emerald checkmark transition and haptic feedback.
+ */
+@Composable
+fun CopyIconButton(
+    textToCopy: String,
+    modifier: Modifier = Modifier,
+    toastMessage: String = "Copied to clipboard"
+) {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    val haptic = LocalHapticFeedback.current
+    var isCopied by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isCopied) {
+        if (isCopied) {
+            delay(1500)
+            isCopied = false
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .size(32.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                clipboard.setText(AnnotatedString(textToCopy))
+                isCopied = true
+                Toast.makeText(context, toastMessage, Toast.LENGTH_SHORT).show()
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        AnimatedContent(
+            targetState = isCopied,
+            transitionSpec = {
+                fadeIn(animationSpec = tween(150)) togetherWith fadeOut(animationSpec = tween(150))
+            },
+            label = "CopyIconAnimation"
+        ) { copied ->
+            if (copied) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = "Copied",
+                    tint = Color(0xFF10A37F), // ChatGPT emerald green checkmark
+                    modifier = Modifier.size(18.dp)
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Default.ContentCopy,
+                    contentDescription = "Copy",
+                    tint = Color(0xFFC7C7CC), // Apple/ChatGPT clean light gray
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+fun isMarkdownOrTextBlock(language: String, code: String): Boolean {
+    val clean = language.trim().lowercase()
+    if (clean in setOf("markdown", "md", "text", "txt", "plaintext", "prompt", "system", "output", "raw", "instruction")) {
+        return true
+    }
+    if (clean.isEmpty() || clean == "code") {
+        val trimmed = code.trim()
+        val looksLikeMarkdown = trimmed.startsWith("#") ||
+                trimmed.startsWith("•") ||
+                trimmed.startsWith("* ") ||
+                trimmed.startsWith("- ") ||
+                trimmed.contains("\n1. ") ||
+                trimmed.contains("\n• ") ||
+                trimmed.contains("\n- ") ||
+                trimmed.contains("\n* ") ||
+                trimmed.contains("**") ||
+                (trimmed.contains(". ") && !trimmed.contains(";") && !trimmed.contains("{") && !trimmed.contains("def ") && !trimmed.contains("fun ") && !trimmed.contains("class "))
+        return looksLikeMarkdown
+    }
+    return false
+}
+
+/**
+ * ChatGPT-style Code / Markdown Block.
+ * - For markdown/text: seamless dark container (0xFF212121), copy button on top-right, clean typography.
+ * - For programming code: seamless dark container (0xFF212121), language badge on left, copy button on right, syntax highlighting.
  */
 @Composable
 fun CodeBlockView(
@@ -301,80 +434,147 @@ fun CodeBlockView(
     code: String,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
-    val haptic = LocalHapticFeedback.current
-    val scrollState = rememberScrollState()
+    val isMarkdownOrText = remember(language, code) { isMarkdownOrTextBlock(language, code) }
 
-    val displayLang = if (language.isNotBlank()) language.lowercase() else "code"
+    if (isMarkdownOrText) {
+        MarkdownCardView(
+            code = code,
+            modifier = modifier
+        )
+    } else {
+        ProgrammingCodeBlockView(
+            language = language,
+            code = code,
+            modifier = modifier
+        )
+    }
+}
+
+@Composable
+private fun MarkdownCardView(
+    code: String,
+    modifier: Modifier = Modifier
+) {
+    val textColor = Color(0xFFECECEC)
+    val linkColor = Color(0xFF58A6FF)
+    val codeBgColor = Color(0xFF2B2B2F)
+
+    val parsedLines = remember(code) {
+        parseMarkdownLines(code, textColor, linkColor, codeBgColor)
+    }
 
     Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = Color(0xFF1E1E24), // Sleek VS Code / Dracula dark surface
-        border = BorderStroke(1.dp, Color(0xFF33353E)),
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFF212121), // Official ChatGPT dark surface
+        border = BorderStroke(1.dp, Color(0xFF2E2E30)),
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 6.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(16.dp))
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp)
+        ) {
+            if (parsedLines.isEmpty()) {
+                CopyIconButton(
+                    textToCopy = code,
+                    modifier = Modifier.align(Alignment.TopEnd)
+                )
+            } else {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    // Line 0 sits in a Row with the CopyIconButton at top-right
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(end = 10.dp)
+                        ) {
+                            RenderMarkdownLine(parsedLines[0])
+                        }
+                        CopyIconButton(textToCopy = code)
+                    }
+
+                    // Remaining lines take full width of the card
+                    if (parsedLines.size > 1) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            for (i in 1 until parsedLines.size) {
+                                RenderMarkdownLine(parsedLines[i])
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProgrammingCodeBlockView(
+    language: String,
+    code: String,
+    modifier: Modifier = Modifier
+) {
+    val scrollState = rememberScrollState()
+    val displayLang = if (language.isNotBlank()) language.lowercase() else "code"
+
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFF212121), // ChatGPT dark surface
+        border = BorderStroke(1.dp, Color(0xFF2E2E30)),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+            .clip(RoundedCornerShape(16.dp))
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // Header Bar (ChatGPT style: lowercase lang on left, copy button with icon on right)
+            // Header Bar: language name on left, copy icon on right (same background, no contrasting header!)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(0xFF282A36))
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     text = displayLang,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = Color(0xFFA0A6B8)
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontFamily = FontFamily.Default,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 12.sp,
+                        color = Color(0xFF8E8E93)
+                    )
                 )
 
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = Color.Transparent,
-                    modifier = Modifier.clickable {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        clipboard.setText(AnnotatedString(code))
-                        Toast.makeText(context, "Code copied", Toast.LENGTH_SHORT).show()
-                    }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ContentCopy,
-                            contentDescription = "Copy code",
-                            tint = Color(0xFFD1D5DB),
-                            modifier = Modifier.size(13.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Copy code",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFFD1D5DB)
-                        )
-                    }
-                }
+                CopyIconButton(textToCopy = code)
             }
+
+            // Subtle divider line
+            HorizontalDivider(color = Color(0xFF2E2E32), thickness = 0.8.dp)
 
             // Code Content
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(scrollState)
-                    .padding(horizontal = 14.dp, vertical = 12.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
             ) {
                 Text(
                     text = highlightCodeSyntax(code, language),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 13.sp,
-                    lineHeight = 18.sp
+                    lineHeight = 19.sp,
+                    color = Color(0xFFD4D4D4)
                 )
             }
         }
@@ -1300,6 +1500,7 @@ fun buildInlineMarkdown(
                         SpanStyle(
                             fontFamily = FontFamily.Monospace,
                             background = codeBgColor,
+                            color = Color(0xFFE2E2E6),
                             fontSize = 13.sp
                         )
                     ) {
@@ -1313,9 +1514,10 @@ fun buildInlineMarkdown(
             // 4. Bold **...**
             if (i + 1 < length && text[i] == '*' && text[i + 1] == '*') {
                 val nextStar = text.indexOf("**", i + 2)
+                val boldColor = if (defaultColor == Color(0xFFECECEC) || defaultColor == Color(0xFFE0E0E0)) Color.White else defaultColor
                 if (nextStar != -1) {
                     val boldContent = text.substring(i + 2, nextStar)
-                    withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = boldColor)) {
                         append(boldContent)
                     }
                     i = nextStar + 2
@@ -1323,7 +1525,7 @@ fun buildInlineMarkdown(
                 } else {
                     val boldContent = text.substring(i + 2)
                     if (boldContent.isNotEmpty()) {
-                        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                        withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = boldColor)) {
                             append(boldContent)
                         }
                     }
