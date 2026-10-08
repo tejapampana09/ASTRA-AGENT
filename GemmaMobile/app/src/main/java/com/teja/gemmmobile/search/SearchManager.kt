@@ -214,26 +214,34 @@ open class SearchManager(
         val semaphore = Semaphore(SearchConfig.MAX_CONCURRENT_FETCHES)
 
         val enrichedList = coroutineScope {
-            val deferredEnriched = rankedResults.take(SearchConfig.MAX_PAGES_TO_FETCH).map { res ->
+            val deferredEnriched = rankedResults.mapIndexed { idx, res ->
                 async {
                     var fetchedContent = ""
                     var fetchSuccess = false
                     var fetchedImage: String? = null
 
-                    try {
-                        semaphore.withPermit {
-                            val fetched = withTimeoutOrNull(SearchConfig.PER_PAGE_TIMEOUT_MS) {
-                                webPageFetcher.fetchPage(res.url)
-                            }
+                    val domain = extractDomain(res.url)
+                    val isAuthWalledDomain = domain.contains("linkedin") || domain.contains("facebook") ||
+                        domain.contains("instagram") || domain.contains("twitter") || domain.contains("x.com") ||
+                        domain.contains("youtube") || domain.contains("reddit") || domain.contains("tiktok")
 
-                            if (fetched != null && fetched.success && fetched.content.isNotBlank()) {
-                                fetchedContent = fetched.content
-                                fetchSuccess = true
-                                fetchedImage = fetched.imageUrl
+                    // Skip scraping for known auth-walled social domains to prevent timeouts and bot-blockers
+                    if (idx < SearchConfig.MAX_PAGES_TO_FETCH && !isAuthWalledDomain && webPageFetcher.isSafeUrl(res.url)) {
+                        try {
+                            semaphore.withPermit {
+                                val fetched = withTimeoutOrNull(SearchConfig.PER_PAGE_TIMEOUT_MS) {
+                                    webPageFetcher.fetchPage(res.url)
+                                }
+
+                                if (fetched != null && fetched.success && fetched.content.isNotBlank() && !isAuthOrLoginText(fetched.content)) {
+                                    fetchedContent = fetched.content
+                                    fetchSuccess = true
+                                    fetchedImage = fetched.imageUrl
+                                }
                             }
+                        } catch (t: Throwable) {
+                            Log.w(TAG, "[$TAG] Error fetching ${res.url}: ${t.localizedMessage}")
                         }
-                    } catch (t: Throwable) {
-                        Log.w(TAG, "[$TAG] Error fetching ${res.url}: ${t.localizedMessage}")
                     }
 
                     EnrichedSearchResult(
@@ -472,7 +480,7 @@ open class SearchManager(
 
     /**
      * Formats enriched search results into a clean, injection-safe context block for Gemma's prompt.
-     * Strictly delimits external webpage text with <WEB_SOURCE_UNTRUSTED_DATA> to neutralize prompt injection.
+     * Strictly delimits external webpage text with <WEB_SEARCH_RESULTS> to neutralize prompt injection.
      */
     fun formatGemmaWebContext(
         results: List<EnrichedSearchResult>,
@@ -486,21 +494,19 @@ open class SearchManager(
 
         var currentChars = sb.length
 
-        for ((idx, res) in results.take(3).withIndex()) {
+        for ((idx, res) in results.take(SearchConfig.DEFAULT_MAX_SEARCH_RESULTS).withIndex()) {
             val itemSb = StringBuilder()
-            val cleanTitle = res.title.take(70).replace(Regex("""[\x00-\x1F\x7F]"""), " ").trim()
+            val cleanTitle = res.title.take(90).replace(Regex("""[\x00-\x1F\x7F]"""), " ").trim()
             val cleanUrl = res.url.replace(Regex("""[\x00-\x1F\x7F]"""), "").trim()
-            val cleanSnippet = res.snippet.take(130).replace(Regex("""[\x00-\x1F\x7F]"""), " ").trim()
+            val cleanSnippet = res.snippet.take(280).replace(Regex("""[\x00-\x1F\x7F]"""), " ").trim()
 
             itemSb.appendLine("[${idx + 1}] Title: $cleanTitle")
             itemSb.appendLine("Source URL: $cleanUrl")
-            itemSb.appendLine("Search Snippet: $cleanSnippet")
+            itemSb.appendLine("Snippet: $cleanSnippet")
 
-            if (res.fetchSucceeded && res.pageContent.isNotBlank()) {
-                val boundedPageContent = res.pageContent.take(140).replace(Regex("""[\x00-\x1F\x7F]"""), " ").trim()
+            if (res.fetchSucceeded && res.pageContent.isNotBlank() && !isAuthOrLoginText(res.pageContent)) {
+                val boundedPageContent = res.pageContent.take(200).replace(Regex("""[\x00-\x1F\x7F]"""), " ").trim()
                 itemSb.appendLine("Webpage Text: $boundedPageContent")
-            } else {
-                itemSb.appendLine("Webpage Text: [Not fetched; relying on search snippet above]")
             }
             itemSb.appendLine()
 
@@ -514,5 +520,12 @@ open class SearchManager(
 
         sb.appendLine("</WEB_SOURCE_UNTRUSTED_DATA>")
         return sb.toString().trim()
+    }
+
+    private fun isAuthOrLoginText(text: String): Boolean {
+        val lower = text.lowercase()
+        return lower.contains("sign in to") || lower.contains("login to") ||
+               lower.contains("join linkedin") || lower.contains("enable javascript") ||
+               lower.contains("verify you are human") || lower.contains("cloudflare")
     }
 }

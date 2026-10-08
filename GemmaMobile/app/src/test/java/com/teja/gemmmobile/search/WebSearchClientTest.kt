@@ -21,6 +21,8 @@ class WebSearchClientTest {
         assertEquals("Blackwell GPU", client.sanitizeQuery("Google for Blackwell GPU"))
         assertEquals("Gemma 4", client.sanitizeQuery("Gemma 4 gurinchi cheppu"))
         assertEquals("Quantum physics", client.sanitizeQuery("Quantum physics in telugu"))
+        assertEquals("tulasi teja pampana", client.sanitizeQuery("search who is tulasi teja pampana"))
+        assertEquals("spacex starship", client.sanitizeQuery("can you please search the web for spacex starship?"))
     }
 
     @Test

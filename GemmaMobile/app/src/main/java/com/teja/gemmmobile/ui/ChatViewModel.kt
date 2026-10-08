@@ -30,6 +30,7 @@ import com.teja.gemmmobile.memory.AutonomousBrainMemoryHelper
 import com.teja.gemmmobile.memory.MemoryBrainAction
 import com.teja.gemmmobile.search.SearchResult
 import com.teja.gemmmobile.search.SearchImage
+import com.teja.gemmmobile.search.SearchConfig
 import com.teja.gemmmobile.search.WebSearchClient
 import com.teja.gemmmobile.audio.TtsManager
 import com.teja.gemmmobile.ocr.ExtractedDocument
@@ -746,7 +747,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         }
                         try {
                             val enrichedResults = kotlinx.coroutines.withTimeoutOrNull(10000L) {
-                                searchManager.searchAndRead(cleanQuery, maxResults = 5)
+                                searchManager.searchAndRead(cleanQuery, maxResults = SearchConfig.DEFAULT_MAX_SEARCH_RESULTS)
                             }
                             if (!enrichedResults.isNullOrEmpty()) {
                                 searchResults = enrichedResults.map { it.toSearchResult() }
@@ -777,7 +778,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val effectiveSystemPrompt = when {
                     imageBytes != null -> "You are a helpful assistant. Directly and accurately describe what is in the image in plain language."
                     searchContext.isNotBlank() -> {
-                        "$baseSystemPrompt\n\nWhen live web results are provided, use them as your primary source of truth. Give a direct answer and cite the source URLs."
+                        "$baseSystemPrompt\n\nLive web search results are provided above. Use the facts, titles, and snippets directly to answer the user's inquiry thoroughly and accurately in the language of their prompt. Cite relevant sources."
                     }
                     else -> baseSystemPrompt
                 }
