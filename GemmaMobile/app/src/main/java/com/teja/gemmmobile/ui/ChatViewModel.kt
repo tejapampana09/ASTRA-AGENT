@@ -418,6 +418,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         return visualKeywords.any { keyword -> p.contains(keyword) }
     }
 
+    fun isContinueRequest(prompt: String): Boolean {
+        val p = prompt.lowercase().trim()
+        return p == "continue" ||
+               p == "continue generating" ||
+               p == "continue from where you left off" ||
+               p.startsWith("continue from where") ||
+               p.startsWith("continue generating") ||
+               p == "continue response" ||
+               p == "go on" ||
+               p == "keep going" ||
+               p == "continue please" ||
+               p == "inka cheppu" ||
+               p == "continue cheyyi"
+    }
+
     fun stripToolCallJson(text: String): String {
         // Strip markdown code fences containing JSON tool calls
         val fenceRegex = Regex("""```(?:json)?\s*\{\s*["'](?:name|tool|function|type|tool_call)["'][\s\S]*?\}\s*```""", RegexOption.IGNORE_CASE)
@@ -715,11 +730,23 @@ You are provided with real-time web search results and extracted webpage content
                 val effectivePrompt = if (imageBytes != null) {
                     prompt
                 } else {
-                    val promptToUse = if (isVisual) {
-                        val visualSubject = searchManager.cleanVisualQuery(prompt).replace(Regex("""\s+diagram""", RegexOption.IGNORE_CASE), "").trim()
-                        "Please provide a comprehensive explanation of the architecture, key components, and workflow of $visualSubject in detail. Structure your answer with clear headings and bullet points."
-                    } else {
-                        prompt
+                    val isContinue = isContinueRequest(prompt)
+                    val promptToUse = when {
+                        isVisual -> {
+                            val visualSubject = searchManager.cleanVisualQuery(prompt).replace(Regex("""\s+diagram""", RegexOption.IGNORE_CASE), "").trim()
+                            "Please provide a comprehensive explanation of the architecture, key components, and workflow of $visualSubject in detail. Structure your answer with clear headings and bullet points."
+                        }
+                        isContinue -> {
+                            val lastAssistant = targetMsgs.lastOrNull { it.role == MessageRole.ASSISTANT && it.id != assistantMessageId && it.text.isNotBlank() }
+                            val lastText = lastAssistant?.text?.trim() ?: ""
+                            val tailSnippet = if (lastText.length > 120) lastText.takeLast(120) else lastText
+                            if (tailSnippet.isNotBlank()) {
+                                "Please seamlessly continue the previous explanation directly from where you left off: \"...$tailSnippet\". Do NOT repeat any introduction or points already covered. Continue immediately with the next point and finish with a complete conclusion."
+                            } else {
+                                "Please continue the previous explanation thoroughly and conclude."
+                            }
+                        }
+                        else -> prompt
                     }
                     val historyTurns = targetMsgs.filter { it.id != assistantMessageId }.dropLast(1)
                     contextManager.buildPrompt(

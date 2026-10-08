@@ -36,36 +36,21 @@ class ToolRegistry {
     fun getAll(): List<GemmaTool> = tools.values.toList()
 
     /**
-     * Generates comprehensive system prompt documentation for all registered tools
-     * clearly contrasting web_search vs image_search and direct conversation.
+     * Generates concise tool documentation for the model to minimize KV cache footprint.
      */
     fun getToolsDocumentation(): String {
         if (tools.isEmpty()) return ""
 
         val sb = StringBuilder()
-        sb.appendLine("## Available Tools & Functions")
-        sb.appendLine("When you need live facts, visual diagrams, or to read documents, output ONLY a JSON object:")
+        sb.appendLine("## Available Tools")
+        sb.appendLine("Call tools only when external data or images are needed by outputting JSON:")
         sb.appendLine("```json")
-        sb.appendLine("{\"name\": \"<tool_name>\", \"arguments\": {<parameters>}}")
+        sb.appendLine("{\"name\": \"<tool_name>\", \"arguments\": {\"query\": \"<keywords>\"}}")
         sb.appendLine("```")
-        sb.appendLine()
-        sb.appendLine("### STRICT RULES FOR TOOL SELECTION:")
-        sb.appendLine("1. **IMAGES / PHOTOS / DIAGRAMS → CALL `image_search`**:")
-        sb.appendLine("   - If the user asks for images, photos, architecture diagrams, pictures, or visuals (e.g. 'VAE architecture images', 'photos of James Webb', 'pinout diagram'), YOU MUST CALL `image_search`.")
-        sb.appendLine("   - Example: `{\"name\": \"image_search\", \"arguments\": {\"query\": \"VAE architecture diagram\"}}`")
-        sb.appendLine("   - DO NOT call `web_search` when the user asks for images or diagrams!")
-        sb.appendLine("2. **LIVE FACTS / NEWS / ARTICLES → CALL `web_search`**:")
-        sb.appendLine("   - Call `web_search` ONLY when the user asks for text facts, recent news, website content, or articles.")
-        sb.appendLine("   - Example: `{\"name\": \"web_search\", \"arguments\": {\"query\": \"latest cricket score today\"}}`")
-        sb.appendLine("3. **GENERAL CONVERSATION / CODING / REASONING**:")
-        sb.appendLine("   - If no live external data is needed, DO NOT call any tool; answer directly and conversationally.")
-        sb.appendLine()
-        sb.appendLine("### Tool Schemas:")
-        val orderedTools = tools.values.sortedByDescending { it.name == "image_search" }
-        orderedTools.forEach { tool ->
-            sb.appendLine("- **`${tool.name}`**: ${tool.description}")
-            sb.appendLine("  Schema: `${tool.parametersJsonSchema.replace("\n", " ").replace(Regex("\\s+"), " ")}`")
-        }
+        sb.appendLine("- `image_search`: Diagrams, photos, architecture visuals (arguments: {\"query\": \"...\"})")
+        sb.appendLine("- `web_search`: Live facts, current news, real-time web info (arguments: {\"query\": \"...\"})")
+        sb.appendLine("- `memory_store`: Save user facts/preferences (arguments: {\"key\": \"...\", \"value\": \"...\"})")
+        sb.appendLine("For general conversation, concepts, coding, or explanations, do NOT call any tool; answer directly with clear text.")
         return sb.toString().trim()
     }
 

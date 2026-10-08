@@ -155,11 +155,11 @@ class GemmaEngine(
             if (preferCpu) {
                 // Initialize directly on CPU: Smooth, responsive, zero GPU lockups, zero phone freezing!
                 try {
-                    Log.d(TAG, "[$TAG] Initializing directly on CPU with 4 threads and 1536 token budget...")
+                    Log.d(TAG, "[$TAG] Initializing directly on CPU with 4 threads and 2048 token budget...")
                     val config = EngineConfig(
                         modelPath = modelPath,
                         backend = Backend.CPU(threadCount = 4),
-                        maxNumTokens = 1536,
+                        maxNumTokens = 2048,
                         cacheDir = effectiveCacheDir
                     )
                     testEngine = Engine(config)
@@ -200,14 +200,14 @@ class GemmaEngine(
                     System.gc()
                     kotlinx.coroutines.delay(300)
 
-                    Log.i(TAG, "[$TAG] Falling back to CPU with 4 threads and 1536 token budget...")
+                    Log.i(TAG, "[$TAG] Falling back to CPU with 4 threads and 2048 token budget...")
                     _engineState.value = EngineState.Loading("Falling back to CPU...")
 
                     try {
                         val config = EngineConfig(
                             modelPath = modelPath,
                             backend = Backend.CPU(threadCount = 4),
-                            maxNumTokens = 1536,
+                            maxNumTokens = 2048,
                             cacheDir = effectiveCacheDir
                         )
                         testEngine = Engine(config)
@@ -279,8 +279,8 @@ data class EngineChunk(
         val effectiveThinking = enableThinkingOverride ?: currentConfig.enableThinking
         val effectiveThinkingBudget = if (effectiveThinking) minOf(currentConfig.thinkingBudget, 160) else 0
 
-        val totalModelMaxContext = if (activeBackend == BackendType.GPU) 2048 else 1536
-        val safetyMargin = 48
+        val totalModelMaxContext = 2048
+        val safetyMargin = 32
 
         // Calculate actual safe headroom remaining in the KV cache
         var currentThinking = effectiveThinking
@@ -300,7 +300,7 @@ data class EngineChunk(
             throw IllegalStateException(errorMsg)
         }
 
-        val dynamicMaxOutput = minOf(currentConfig.maxTokens, maxOf(48, availableForOutput))
+        val dynamicMaxOutput = minOf(currentConfig.maxTokens, maxOf(128, availableForOutput))
         Log.d(TAG, "[$TAG] Starting generation with promptTokens=$promptTokens, maxOutput=$dynamicMaxOutput, thinking=$currentThinking, thinkBudget=$currentThinkBudget, hasImage=${imageBytes != null}")
 
         val thinkingConfig = ThinkingConfig(
