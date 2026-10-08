@@ -65,10 +65,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val modelManager = ModelManager(application.applicationContext)
     private val chatStorage = ChatStorage(application.applicationContext)
     private val searchManager = com.teja.gemmmobile.search.SearchManager()
-    private val webSearchClient = WebSearchClient()
     val memoryManager = MemoryManager(application.applicationContext)
     val toolRegistry = com.teja.gemmmobile.tools.ToolRegistry().apply {
         register(com.teja.gemmmobile.tools.WebSearchTool(searchManager))
+        register(com.teja.gemmmobile.tools.ImageSearchTool(searchManager))
         register(com.teja.gemmmobile.tools.MemoryTool(memoryManager))
         register(com.teja.gemmmobile.tools.OcrTool(application.applicationContext))
     }
@@ -315,7 +315,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
-            val result = GemmaRepository.reinitializeEngine(modelFile, _config.value)
+            val cacheDir = getApplication<Application>().cacheDir.absolutePath
+            val result = GemmaRepository.reinitializeEngine(modelFile, _config.value, cacheDir)
             if (result.isFailure) {
                 val err = result.exceptionOrNull()?.localizedMessage ?: "Model loading failure"
                 _errorMessage.value = err
@@ -373,7 +374,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun extractSearchQuery(raw: String): String {
-        return webSearchClient.sanitizeQuery(raw)
+        return searchManager.sanitizeQuery(raw)
     }
 
     private fun shouldAutoSearch(prompt: String): Boolean {
@@ -725,13 +726,23 @@ You are provided with real-time web search results and extracted webpage content
                 val finalThought = thoughtBuilder.toString()
 
                 // Bounded autonomous on-device tool calling loop (up to MAX_TOOL_STEPS)
-                val MAX_TOOL_STEPS = 3
+                val MAX_TOOL_STEPS = com.teja.gemmmobile.search.SearchConfig.MAX_TOOL_STEPS
                 var currentToolStep = 0
                 var currentGenerationText = responseBuilder.toString()
                 val accumulatedToolResults = StringBuilder()
+                val calledToolsHistory = mutableListOf<com.teja.gemmmobile.tools.ToolCallRequest>()
+                var currentSearchImages = emptyList<SearchImage>()
 
                 while (imageBytes == null && !useWebSearch && currentToolStep < MAX_TOOL_STEPS) {
                     val detectedToolCall = toolRegistry.parseToolCall(currentGenerationText) ?: break
+
+                    // Duplicate tool-call and infinite loop protection
+                    if (toolRegistry.isDuplicateOrLoop(calledToolsHistory, detectedToolCall)) {
+                        Log.w(TAG, "[$TAG] Loop/duplicate detected for tool '${detectedToolCall.name}'. Breaking tool loop.")
+                        break
+                    }
+                    calledToolsHistory.add(detectedToolCall)
+
                     currentToolStep++
                     Log.d(TAG, "[$TAG] Step $currentToolStep: Tool call detected: ${detectedToolCall.name} with ${detectedToolCall.arguments}")
 
@@ -755,11 +766,16 @@ You are provided with real-time web search results and extracted webpage content
                         if (newSearchResults.isNotEmpty()) {
                             searchResults = newSearchResults
                         }
+                    } else if (detectedToolCall.name == "image_search" && toolResult.data is List<*>) {
+                        val newImages = toolResult.data.filterIsInstance<SearchImage>()
+                        if (newImages.isNotEmpty()) {
+                            currentSearchImages = newImages
+                        }
                     }
 
-                    // Feed tool result back to the model for next turn/synthesis
+                    // Feed tool result back to the model as evidence (NOT in system prompt to prevent prompt injection)
                     val nextTurnPrompt = contextManager.buildPrompt(
-                        systemPrompt = "You are a helpful, accurate AI assistant. Use the tool results below to answer the user's request. If more information is needed, call another tool; otherwise provide a final, comprehensive conversational answer.\n\n$accumulatedToolResults",
+                        systemPrompt = "You are a helpful, accurate AI assistant. Use the tool results below as factual evidence to answer the user's request. If more information is needed, call another tool; otherwise provide a final, comprehensive conversational answer.",
                         toolsDocumentation = if (currentToolStep < MAX_TOOL_STEPS) toolRegistry.getToolsDocumentation() else "",
                         memoryContext = memoryContext,
                         conversationHistory = targetMsgs.filter { it.id != assistantMessageId },
@@ -773,6 +789,7 @@ You are provided with real-time web search results and extracted webpage content
                             if (msg.id == assistantMessageId) {
                                 msg.copy(
                                     searchResults = searchResults,
+                                    searchImages = if (currentSearchImages.isNotEmpty()) currentSearchImages else msg.searchImages,
                                     isExecutingTool = false,
                                     toolExecutionStatus = null,
                                     isStreaming = true
@@ -838,9 +855,13 @@ You are provided with real-time web search results and extracted webpage content
                             msg.copy(
                                 text = resolvedText,
                                 thoughtText = if (resolvedText == finalThought) "" else finalThought,
+                                searchResults = searchResults,
+                                searchImages = if (currentSearchImages.isNotEmpty()) currentSearchImages else msg.searchImages,
                                 isStreaming = false,
                                 isThinking = false,
-                                isSearchingWeb = false
+                                isSearchingWeb = false,
+                                isExecutingTool = false,
+                                toolExecutionStatus = null
                             )
                         } else msg
                     }

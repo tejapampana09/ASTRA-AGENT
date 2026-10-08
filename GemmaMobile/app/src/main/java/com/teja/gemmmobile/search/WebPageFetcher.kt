@@ -9,7 +9,7 @@ import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.URI
 import java.net.URL
-import java.util.regex.Pattern
+import java.net.UnknownHostException
 
 private const val TAG = "WebPageFetcher"
 
@@ -21,28 +21,24 @@ data class FetchedPage(
     val content: String,
     val success: Boolean,
     val errorMessage: String? = null,
-    val imageUrl: String? = null
+    val imageUrl: String? = null,
+    val isBlockedOrCaptcha: Boolean = false
 )
 
 /**
  * Lightweight, zero-cost on-device HTTP/HTTPS webpage fetcher and plain text extractor.
  * Adheres strictly to security, privacy, and memory guidelines for on-device Android:
- * - Rejects private/local IP targets (SSRF protection).
- * - Enforces connect/read timeouts (3.5s / 4.5s).
- * - Enforces max download size (768 KB).
- * - Strips scripts, styles, navigation, footer, and boilerplate HTML.
+ * - Rejects private/local IP targets (SSRF protection with DNS pre-resolution).
+ * - Enforces connect/read timeouts from SearchConfig.
+ * - Enforces max download size (768 KB) with streaming cap.
+ * - Validates every redirect target individually (preventing redirect-based SSRF bypass).
+ * - Strips scripts, styles, navigation, footer, cookie banners, and boilerplate HTML.
  * - Decodes HTML entities and normalizes whitespace.
  * - Sentence-boundary length limiting.
  */
 open class WebPageFetcher {
 
     companion object {
-        const val CONNECT_TIMEOUT_MS = 3500
-        const val READ_TIMEOUT_MS = 4500
-        const val MAX_DOWNLOAD_BYTES = 768 * 1024 // 768 KB
-        const val MAX_CONTENT_CHARS = 5000
-        const val MAX_REDIRECTS = 4
-
         private const val USER_AGENT =
             "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
 
@@ -60,6 +56,12 @@ open class WebPageFetcher {
         private val OG_IMAGE_ALT_REGEX = Regex(
             """<meta[^>]+content\s*=\s*["']([^"']+)["'][^>]+(?:property|name)\s*=\s*["'](?:og:image|twitter:image)["']""",
             RegexOption.IGNORE_CASE
+        )
+
+        // Cookie banners, GDPR consent dialogs, and tracking overlays
+        private val COOKIE_BANNER_REGEX = Regex(
+            """<(?:div|section|aside|dialog)[^>]+(?:id|class)=["'][^"']*(?:cookie|consent|gdpr|banner|privacy-bar)[^"']*["'][^>]*>.*?</(?:div|section|aside|dialog)>""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
         )
 
         // Strip non-content blocks (scripts, styles, svg, noscript, nav, header, footer, aside, forms)
@@ -105,10 +107,68 @@ open class WebPageFetcher {
 
         private val NUMERIC_DECIMAL_ENTITY_REGEX = Regex("""&#([0-9]{1,7});""")
         private val NUMERIC_HEX_ENTITY_REGEX = Regex("""&#x([0-9a-fA-F]{1,6});""")
+
+        // Indicators of bot-blockers, CAPTCHAs, or authentication walls
+        private val CAPTCHA_INDICATORS = listOf(
+            "verify you are human",
+            "attention required! | cloudflare",
+            "please enable javascript and cookies to continue",
+            "cf-browser-verification",
+            "security check to continue",
+            "login required to view this page"
+        )
     }
 
     /**
-     * Verifies that the URL is public, uses http/https, and does not target localhost or private RFC1918 subnets.
+     * Checks if the given IP address is private, loopback, link-local, multicast, or reserved.
+     */
+    fun isSafeIp(address: InetAddress): Boolean {
+        if (address.isLoopbackAddress ||
+            address.isSiteLocalAddress ||
+            address.isLinkLocalAddress ||
+            address.isMulticastAddress ||
+            address.isAnyLocalAddress
+        ) {
+            return false
+        }
+
+        val rawBytes = address.address
+        if (rawBytes.size == 4) { // IPv4
+            val b0 = rawBytes[0].toInt() and 0xFF
+            val b1 = rawBytes[1].toInt() and 0xFF
+            // 0.0.0.0/8
+            if (b0 == 0) return false
+            // 10.0.0.0/8
+            if (b0 == 10) return false
+            // 127.0.0.0/8
+            if (b0 == 127) return false
+            // 169.254.0.0/16
+            if (b0 == 169 && b1 == 254) return false
+            // 172.16.0.0/12 (172.16 - 172.31)
+            if (b0 == 172 && b1 in 16..31) return false
+            // 192.168.0.0/16
+            if (b0 == 192 && b1 == 168) return false
+            // 224.0.0.0/4 (Multicast 224-239)
+            if (b0 in 224..239) return false
+            // 240.0.0.0/4 (Reserved 240-255)
+            if (b0 in 240..255) return false
+        } else if (rawBytes.size == 16) { // IPv6
+            val b0 = rawBytes[0].toInt() and 0xFF
+            val b1 = rawBytes[1].toInt() and 0xFF
+            // ::1 / loopback or :: unspecified
+            if (rawBytes.all { it.toInt() == 0 }) return false
+            if (rawBytes.take(15).all { it.toInt() == 0 } && rawBytes[15].toInt() == 1) return false
+            // Unique local addresses fc00::/7 (fc or fd)
+            if (b0 == 0xFC || b0 == 0xFD) return false
+            // Link-local addresses fe80::/10
+            if (b0 == 0xFE && (b1 and 0xC0) == 0x80) return false
+        }
+
+        return true
+    }
+
+    /**
+     * Checks if the given URL string has a valid public scheme and hostname format.
      */
     fun isSafeUrl(urlString: String): Boolean {
         if (urlString.isBlank()) return false
@@ -126,30 +186,42 @@ open class WebPageFetcher {
                 return false
             }
 
-            // Check literal IPv4 patterns for private / link-local addresses
+            // Check literal IPv4 patterns
             val ipv4Parts = cleanHost.split(".")
             if (ipv4Parts.size == 4 && ipv4Parts.all { it.toIntOrNull() in 0..255 }) {
                 val octets = ipv4Parts.map { it.toInt() }
-                // 10.0.0.0/8
-                if (octets[0] == 10) return false
-                // 127.0.0.0/8
-                if (octets[0] == 127) return false
-                // 169.254.0.0/16
-                if (octets[0] == 169 && octets[1] == 254) return false
-                // 172.16.0.0/12 (172.16 to 172.31)
-                if (octets[0] == 172 && octets[1] in 16..31) return false
-                // 192.168.0.0/16
-                if (octets[0] == 192 && octets[1] == 168) return false
-                // 0.0.0.0/8
                 if (octets[0] == 0) return false
+                if (octets[0] == 10) return false
+                if (octets[0] == 127) return false
+                if (octets[0] == 169 && octets[1] == 254) return false
+                if (octets[0] == 172 && octets[1] in 16..31) return false
+                if (octets[0] == 192 && octets[1] == 168) return false
+                if (octets[0] in 224..255) return false
             }
 
-            // Reject IPv6 local addresses
+            // Reject explicit IPv6 local representations
             if (cleanHost.startsWith("fe80:") || cleanHost.startsWith("fc00:") || cleanHost.startsWith("fd00:")) {
                 return false
             }
 
             true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Performs DNS resolution check to prevent DNS-rebinding or domains resolving to private/loopback IPs.
+     */
+    fun isResolvedHostSafe(host: String): Boolean {
+        return try {
+            val addresses = InetAddress.getAllByName(host)
+            if (addresses.isEmpty()) return false
+            addresses.all { isSafeIp(it) }
+        } catch (_: UnknownHostException) {
+            false
+        } catch (_: SecurityException) {
+            false
         } catch (_: Exception) {
             false
         }
@@ -196,22 +268,31 @@ open class WebPageFetcher {
     /**
      * Converts raw HTML markup into readable, normalized plain text bounded at sentence boundary.
      */
-    fun extractReadableText(html: String, maxChars: Int = MAX_CONTENT_CHARS): String {
+    fun extractReadableText(html: String, maxChars: Int = SearchConfig.MAX_PAGE_CONTENT_CHARS): String {
         if (html.isBlank()) return ""
 
-        // 1. Remove unwanted script, style, navigation, footer, etc.
-        var text = UNWANTED_TAGS_REGEX.replace(html, "")
+        // Check for bot wall or CAPTCHA before extraction
+        val lowerHtml = html.lowercase()
+        if (CAPTCHA_INDICATORS.any { lowerHtml.contains(it) }) {
+            return "" // Signal to rely on search snippet instead of scraping bot wall
+        }
 
-        // 2. Replace structural tags with newline separators
+        // 1. Remove cookie banners & consent overlays
+        var text = COOKIE_BANNER_REGEX.replace(html, "")
+
+        // 2. Remove unwanted script, style, navigation, footer, etc.
+        text = UNWANTED_TAGS_REGEX.replace(text, "")
+
+        // 3. Replace structural tags with newline separators
         text = STRUCTURAL_TAGS_REGEX.replace(text, "\n")
 
-        // 3. Strip remaining HTML tags
+        // 4. Strip remaining HTML tags
         text = STRIP_ALL_TAGS_REGEX.replace(text, " ")
 
-        // 4. Decode HTML entities
+        // 5. Decode HTML entities
         text = decodeHtmlEntities(text)
 
-        // 5. Normalize whitespace: trim lines and remove excessive blank lines
+        // 6. Normalize whitespace: trim lines and remove excessive blank lines
         val lines = text.split("\n")
             .map { it.replace(Regex("""[ \t\r\f]+"""), " ").trim() }
             .filter { it.isNotBlank() }
@@ -222,7 +303,7 @@ open class WebPageFetcher {
             return normalized
         }
 
-        // 6. Sentence boundary trimming near maxChars limit
+        // 7. Sentence boundary trimming near maxChars limit
         val cutPoint = findSentenceBoundary(normalized, maxChars)
         return normalized.substring(0, cutPoint).trim() + "…"
     }
@@ -272,6 +353,7 @@ open class WebPageFetcher {
 
     /**
      * Safely downloads public HTML and extracts readable plain text.
+     * Manually validates every redirect hop against SSRF and private networks.
      */
     open suspend fun fetchPage(urlString: String): FetchedPage = withContext(Dispatchers.IO) {
         if (!isSafeUrl(urlString)) {
@@ -279,7 +361,7 @@ open class WebPageFetcher {
                 url = urlString,
                 content = "",
                 success = false,
-                errorMessage = "Blocked: Invalid or unsafe target URL."
+                errorMessage = "Blocked: Target URL failed safety verification."
             )
         }
 
@@ -288,25 +370,49 @@ open class WebPageFetcher {
         var connection: HttpURLConnection? = null
 
         try {
-            while (redirectCount < MAX_REDIRECTS) {
+            while (redirectCount <= SearchConfig.MAX_REDIRECTS) {
                 val url = URL(currentUrl)
+                val host = url.host ?: return@withContext FetchedPage(urlString, "", false, "Invalid host in target URL")
+
+                // Pre-flight DNS check on host to prevent DNS-rebinding SSRF
+                if (!isResolvedHostSafe(host)) {
+                    return@withContext FetchedPage(
+                        url = urlString,
+                        content = "",
+                        success = false,
+                        errorMessage = "Blocked: Destination host resolves to an unroutable or private IP."
+                    )
+                }
+
                 connection = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "GET"
-                    connectTimeout = CONNECT_TIMEOUT_MS
-                    readTimeout = READ_TIMEOUT_MS
-                    instanceFollowRedirects = false // Manual inspection to validate destination
+                    connectTimeout = SearchConfig.CONNECT_TIMEOUT_MS
+                    readTimeout = SearchConfig.READ_TIMEOUT_MS
+                    instanceFollowRedirects = false // Manual inspection to validate each redirect
                     setRequestProperty("User-Agent", USER_AGENT)
                     setRequestProperty("Accept", "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8")
-                    setRequestProperty("Accept-Language", "en-US,en;q=0.9,te;q=0.8")
+                    setRequestProperty("Accept-Language", "en-US,en;q=0.9")
                     setRequestProperty("Accept-Encoding", "identity") // Avoid GZIP decompression overhead
                     useCaches = true
                 }
 
                 val responseCode = connection.responseCode
+
+                // Handle Redirects Manually
                 if (responseCode in 301..308) {
+                    redirectCount++
+                    if (redirectCount > SearchConfig.MAX_REDIRECTS) {
+                        return@withContext FetchedPage(
+                            urlString,
+                            "",
+                            false,
+                            "Blocked: Exceeded maximum redirect limit (${SearchConfig.MAX_REDIRECTS})."
+                        )
+                    }
+
                     val location = connection.getHeaderField("Location")
                     if (location.isNullOrBlank()) {
-                        return@withContext FetchedPage(urlString, "", false, "HTTP redirect without Location header")
+                        return@withContext FetchedPage(urlString, "", false, "HTTP redirect without Location header.")
                     }
 
                     val resolvedUrl = try {
@@ -315,12 +421,17 @@ open class WebPageFetcher {
                         return@withContext FetchedPage(urlString, "", false, "Malformed redirect URL: $location")
                     }
 
+                    // Strictly validate the redirect destination
                     if (!isSafeUrl(resolvedUrl)) {
-                        return@withContext FetchedPage(urlString, "", false, "Redirect target is unsafe: $resolvedUrl")
+                        return@withContext FetchedPage(
+                            urlString,
+                            "",
+                            false,
+                            "Blocked: Redirect target failed safety check: $resolvedUrl"
+                        )
                     }
 
                     currentUrl = resolvedUrl
-                    redirectCount++
                     connection.disconnect()
                     continue
                 }
@@ -341,7 +452,7 @@ open class WebPageFetcher {
                     )
                 }
 
-                // Read up to MAX_DOWNLOAD_BYTES
+                // Read up to MAX_PAGE_DOWNLOAD_BYTES with hard streaming limit
                 val inputStream = connection.inputStream
                 val buffer = CharArray(4096)
                 val stringBuilder = StringBuilder()
@@ -352,8 +463,8 @@ open class WebPageFetcher {
                 while (reader.read(buffer).also { charsRead = it } != -1) {
                     stringBuilder.append(buffer, 0, charsRead)
                     totalBytesRead += charsRead * 2 // UTF-16 approximation
-                    if (totalBytesRead >= MAX_DOWNLOAD_BYTES) {
-                        Log.d(TAG, "[$TAG] Reached max download cap ($MAX_DOWNLOAD_BYTES bytes) for $urlString")
+                    if (totalBytesRead >= SearchConfig.MAX_PAGE_DOWNLOAD_BYTES) {
+                        Log.d(TAG, "[$TAG] Reached max download cap (${SearchConfig.MAX_PAGE_DOWNLOAD_BYTES} bytes) for $urlString")
                         break
                     }
                 }
@@ -364,7 +475,13 @@ open class WebPageFetcher {
                 val primaryImage = extractPrimaryImage(rawHtml, currentUrl)
 
                 if (readableText.isBlank()) {
-                    return@withContext FetchedPage(urlString, "", false, "Page contains no readable text content.")
+                    return@withContext FetchedPage(
+                        urlString,
+                        "",
+                        false,
+                        "Page contains no readable text or is protected by bot wall.",
+                        isBlockedOrCaptcha = true
+                    )
                 }
 
                 return@withContext FetchedPage(
@@ -375,7 +492,7 @@ open class WebPageFetcher {
                 )
             }
 
-            return@withContext FetchedPage(urlString, "", false, "Exceeded maximum redirect limit ($MAX_REDIRECTS)")
+            return@withContext FetchedPage(urlString, "", false, "Exceeded maximum redirect limit (${SearchConfig.MAX_REDIRECTS})")
         } catch (t: Throwable) {
             Log.w(TAG, "[$TAG] Failed to fetch $urlString: ${t.localizedMessage}")
             return@withContext FetchedPage(

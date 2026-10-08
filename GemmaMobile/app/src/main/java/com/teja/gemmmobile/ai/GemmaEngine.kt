@@ -55,7 +55,8 @@ sealed interface EngineState {
  */
 class GemmaEngine(
     private val modelPath: String,
-    private var currentConfig: GemmaConfig = GemmaConfig.DEFAULT
+    private var currentConfig: GemmaConfig = GemmaConfig.DEFAULT,
+    private val cacheDirPath: String? = null
 ) : AutoCloseable {
 
     private val _engineState = MutableStateFlow<EngineState>(EngineState.Uninitialized)
@@ -133,19 +134,20 @@ class GemmaEngine(
             _engineState.value = EngineState.Loading("Initializing model on GPU...")
             Log.i(TAG, "[$TAG] Trying GPU backend from $modelPath (${file.length()} bytes)...")
 
+            val effectiveCacheDir = cacheDirPath ?: File(File(modelPath).parentFile ?: File("."), "litert_cache").apply { mkdirs() }.absolutePath
             var loadedEngine: Engine? = null
             var backendChosen = BackendType.GPU
             var lastGpuError: String? = null
-            // Cap thread count to at most 4 to prevent heavy multi-core CPU thermal throttling & overheating
-            val threadCount = minOf(4, Runtime.getRuntime().availableProcessors().coerceAtLeast(2))
 
-            // Attempt 1: Try GPU (pure text backend, fast and efficient)
+            // Attempt 1: Try GPU with cacheDir and maxNumTokens (2048)
             var testEngine: Engine? = null
             try {
-                Log.d(TAG, "[$TAG] Attempting GPU initialization...")
+                Log.d(TAG, "[$TAG] Attempting GPU initialization with cacheDir: $effectiveCacheDir...")
                 val config = EngineConfig(
                     modelPath = modelPath,
-                    backend = Backend.GPU()
+                    backend = Backend.GPU(),
+                    maxNumTokens = 2048,
+                    cacheDir = effectiveCacheDir
                 )
                 testEngine = Engine(config)
                 testEngine.initialize()
@@ -161,20 +163,25 @@ class GemmaEngine(
                 testEngine = null
                 System.gc()
 
-                Log.i(TAG, "[$TAG] Falling back to CPU with $threadCount threads")
+                // Allow Linux kernel and GPU driver 300ms to reclaim native unmapped memory
+                kotlinx.coroutines.delay(300)
+
+                Log.i(TAG, "[$TAG] Falling back to CPU with 2 threads and 1536 token budget to avoid LMK...")
                 _engineState.value = EngineState.Loading("Falling back to CPU...")
 
-                // Attempt 2: CPU fallback (clean, robust text engine with 4 threads)
+                // Attempt 2: CPU fallback with conservative thread count (2) and token budget (1536) to prevent process termination
                 try {
                     val config = EngineConfig(
                         modelPath = modelPath,
-                        backend = Backend.CPU(threadCount = threadCount)
+                        backend = Backend.CPU(threadCount = 2),
+                        maxNumTokens = 1536,
+                        cacheDir = effectiveCacheDir
                     )
                     testEngine = Engine(config)
                     testEngine.initialize()
                     loadedEngine = testEngine
                     backendChosen = BackendType.CPU_FALLBACK
-                    Log.i(TAG, "[$TAG] Model loaded successfully on CPU fallback ($threadCount threads)")
+                    Log.i(TAG, "[$TAG] Model loaded successfully on CPU fallback")
                 } catch (fatal: Throwable) {
                     try {
                         testEngine?.close()
@@ -241,13 +248,33 @@ data class EngineChunk(
         val effectiveThinking = enableThinkingOverride ?: currentConfig.enableThinking
         val effectiveThinkingBudget = if (effectiveThinking) minOf(currentConfig.thinkingBudget, 160) else 0
 
-        // Dynamically compute the maximum possible output token budget that fits safely within the 2048 KV cache.
-        val dynamicMaxOutput = maxOf(300, minOf(currentConfig.maxTokens, 2048 - promptTokens - effectiveThinkingBudget - 64))
-        Log.d(TAG, "[$TAG] Starting generation with promptTokens=$promptTokens, maxOutput=$dynamicMaxOutput, thinking=$effectiveThinking, thinkBudget=$effectiveThinkingBudget, hasImage=${imageBytes != null}")
+        val totalModelMaxContext = 2048
+        val safetyMargin = 48
+
+        // Calculate actual safe headroom remaining in the 2048 KV cache
+        var currentThinking = effectiveThinking
+        var currentThinkBudget = effectiveThinkingBudget
+
+        var availableForOutput = totalModelMaxContext - promptTokens - currentThinkBudget - safetyMargin
+        if (availableForOutput < 64 && currentThinking) {
+            // Recover token budget by disabling thinking if headroom is too tight
+            currentThinking = false
+            currentThinkBudget = 0
+            availableForOutput = totalModelMaxContext - promptTokens - safetyMargin
+        }
+
+        if (availableForOutput < 32) {
+            val errorMsg = "Context budget exceeded ($promptTokens tokens). Maximum context is 2048 tokens. Please start a new chat or shorten the message."
+            Log.e(TAG, "[$TAG] $errorMsg")
+            throw IllegalStateException(errorMsg)
+        }
+
+        val dynamicMaxOutput = minOf(currentConfig.maxTokens, maxOf(48, availableForOutput))
+        Log.d(TAG, "[$TAG] Starting generation with promptTokens=$promptTokens, maxOutput=$dynamicMaxOutput, thinking=$currentThinking, thinkBudget=$currentThinkBudget, hasImage=${imageBytes != null}")
 
         val thinkingConfig = ThinkingConfig(
-            enableThinking = effectiveThinking,
-            thinkingTokenBudget = effectiveThinkingBudget
+            enableThinking = currentThinking,
+            thinkingTokenBudget = currentThinkBudget
         )
 
         try {

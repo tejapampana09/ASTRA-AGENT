@@ -1,5 +1,6 @@
 package com.teja.gemmmobile.tools
 
+import com.teja.gemmmobile.search.SearchConfig
 import com.teja.gemmmobile.search.SearchManager
 import com.teja.gemmmobile.search.SearchResult
 import kotlinx.coroutines.withTimeoutOrNull
@@ -7,6 +8,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 /**
  * On-device live web search tool using SearchManager.
  * Enriches search results with verified readable content from top public webpages.
+ * Enforces strict untrusted data boundaries to mitigate prompt injection.
  */
 class WebSearchTool(
     private val searchManager: SearchManager = SearchManager()
@@ -15,7 +17,8 @@ class WebSearchTool(
     override val name: String = "web_search"
 
     override val description: String =
-        "Search the live internet for recent events, facts, news, people, websites, URLs, and real-time information, extracting readable webpage content."
+        "Search the live internet for recent events, facts, news, websites, articles, and real-time information. " +
+        "Call this when the user asks about current facts, recent events, websites, or questions needing live web evidence."
 
     override val parametersJsonSchema: String = """
     {
@@ -31,37 +34,24 @@ class WebSearchTool(
     """.trimIndent()
 
     override suspend fun execute(arguments: Map<String, Any?>): ToolResult {
-        val query = arguments["query"] as? String ?: return ToolResult.failure("Missing required 'query' parameter")
-        val cleanQuery = query.trim()
-        if (cleanQuery.isBlank()) return ToolResult.failure("Search query cannot be empty")
+        val query = (arguments["query"] as? String)?.trim()
+        if (query.isNullOrBlank()) {
+            return ToolResult.failure("Invalid arguments: 'query' is required and cannot be blank.")
+        }
+
+        if (query.length > SearchConfig.MAX_TOOL_ARG_STRING_CHARS) {
+            return ToolResult.failure("Invalid arguments: 'query' exceeds maximum length limit of ${SearchConfig.MAX_TOOL_ARG_STRING_CHARS} characters.")
+        }
 
         val results = withTimeoutOrNull(10000L) {
-            searchManager.searchAndRead(cleanQuery, maxResults = 5)
+            searchManager.searchAndRead(query, maxResults = SearchConfig.DEFAULT_MAX_SEARCH_RESULTS)
         } ?: emptyList()
 
         if (results.isEmpty()) {
-            return ToolResult.success("No relevant web search results found for: \"$cleanQuery\"", data = emptyList<SearchResult>())
+            return ToolResult.success("No relevant web search results found for: \"$query\".", data = emptyList<SearchResult>())
         }
 
-        val formatted = buildString {
-            appendLine("WEB SEARCH RESULTS")
-            appendLine()
-            results.forEachIndexed { index, res ->
-                val cleanTitle = res.title.substringBefore("-").substringBefore("|").trim()
-                appendLine("[${index + 1}]")
-                appendLine("Title: $cleanTitle")
-                appendLine("URL: ${res.url}")
-                appendLine("Search snippet: ${res.snippet.trim()}")
-                if (res.fetchSucceeded && res.pageContent.isNotBlank()) {
-                    appendLine("Page content:")
-                    appendLine(res.pageContent.take(1500).trim())
-                } else {
-                    appendLine("Page content: Unavailable (rely on search snippet above)")
-                }
-                appendLine()
-            }
-        }.trim()
-
+        val formatted = searchManager.formatGemmaWebContext(results)
         return ToolResult.success(formatted, data = results.map { it.toSearchResult() })
     }
 }

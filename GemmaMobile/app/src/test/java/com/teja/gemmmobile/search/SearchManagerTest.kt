@@ -50,8 +50,7 @@ class SearchManagerTest {
     }
 
     @Test
-    fun testSearchAndRead_mixedSuccessAndFailureDegradesGracefully() = runBlocking {
-        // Create custom stubbed WebSearchClient
+    fun testSearchAndReadWithStatus_successAndProvenace() = runBlocking {
         val mockClient = object : WebSearchClient() {
             override suspend fun search(query: String, maxResults: Int): List<SearchResult> {
                 return listOf(
@@ -61,7 +60,6 @@ class SearchManagerTest {
             }
         }
 
-        // Create custom stubbed WebPageFetcher
         val mockFetcher = object : WebPageFetcher() {
             override suspend fun fetchPage(urlString: String): FetchedPage {
                 return if (urlString.contains("success")) {
@@ -73,36 +71,54 @@ class SearchManagerTest {
         }
 
         val manager = SearchManager(webSearchClient = mockClient, webPageFetcher = mockFetcher)
-        val results = manager.searchAndRead("test query", maxResults = 5)
+        val response = manager.searchAndReadWithStatus("test query", maxResults = 5)
 
+        assertEquals(SearchStatus.SUCCESS, response.status)
+        val results = response.results
         assertEquals(2, results.size)
 
         val successItem = results.first { it.title == "Success Page" }
         assertTrue(successItem.fetchSucceeded)
+        assertEquals(ContentSourceType.FETCHED_WEBPAGE, successItem.sourceType)
         assertEquals("Deep and informative page text about success.", successItem.pageContent)
-        assertEquals("Snippet for success", successItem.snippet)
 
         val failedItem = results.first { it.title == "Failing Page" }
         assertFalse(failedItem.fetchSucceeded)
-        assertEquals("", failedItem.pageContent)
-        // Original snippet is retained!
+        assertEquals(ContentSourceType.SEARCH_SNIPPET, failedItem.sourceType)
         assertEquals("Snippet for failure", failedItem.snippet)
     }
 
     @Test
-    fun testSearchAndRead_emptySearchResults() = runBlocking {
+    fun testSearchAndReadWithStatus_emptySearchResults() = runBlocking {
         val mockClient = object : WebSearchClient() {
             override suspend fun search(query: String, maxResults: Int): List<SearchResult> = emptyList()
         }
 
         val manager = SearchManager(webSearchClient = mockClient)
-        val results = manager.searchAndRead("nonexistent query", maxResults = 5)
+        val response = manager.searchAndReadWithStatus("nonexistent query", maxResults = 5)
 
-        assertTrue(results.isEmpty())
+        assertEquals(SearchStatus.NO_RESULTS, response.status)
+        assertTrue(response.results.isEmpty())
     }
 
     @Test
-    fun testFormatGemmaWebContext_includesCitationsAndPageContent() {
+    fun testSearchAndReadWithStatus_providerError() = runBlocking {
+        val mockClient = object : WebSearchClient() {
+            override suspend fun search(query: String, maxResults: Int): List<SearchResult> {
+                throw RuntimeException("DuckDuckGo connection refused")
+            }
+        }
+
+        val manager = SearchManager(webSearchClient = mockClient)
+        val response = manager.searchAndReadWithStatus("error query", maxResults = 5)
+
+        assertEquals(SearchStatus.PROVIDER_ERROR, response.status)
+        assertTrue(response.results.isEmpty())
+        assertTrue(response.errorMessage?.contains("DuckDuckGo connection refused") == true)
+    }
+
+    @Test
+    fun testFormatGemmaWebContext_includesUntrustedDelimitersAndCitations() {
         val results = listOf(
             EnrichedSearchResult(
                 title = "Gemma 4 Release",
@@ -122,13 +138,13 @@ class SearchManagerTest {
 
         val context = searchManager.formatGemmaWebContext(results)
 
-        assertTrue(context.contains("## REAL-TIME WEB SEARCH EVIDENCE"))
+        assertTrue(context.contains("## LIVE WEB RESULTS (UNTRUSTED EXTERNAL DATA)"))
+        assertTrue(context.contains("<WEB_SOURCE_UNTRUSTED_DATA>"))
+        assertTrue(context.contains("</WEB_SOURCE_UNTRUSTED_DATA>"))
         assertTrue(context.contains("[1] Title: Gemma 4 Release"))
         assertTrue(context.contains("https://blog.google/gemma-4"))
-        assertTrue(context.contains("Extracted Webpage Content:"))
+        assertTrue(context.contains("Webpage Text:"))
         assertTrue(context.contains("state of the art on-device multimodal"))
-
         assertTrue(context.contains("[2] Title: Tech Analysis"))
-        assertTrue(context.contains("Page content: Unavailable"))
     }
 }

@@ -13,7 +13,7 @@ data class ToolCallRequest(
  */
 interface GemmaTool {
     /**
-     * Unique identifier of the tool (e.g. "web_search", "search_contacts", "send_whatsapp", "make_call", "save_memory").
+     * Unique identifier of the tool (e.g. "web_search", "image_search", "save_memory", "extract_document").
      */
     val name: String
 

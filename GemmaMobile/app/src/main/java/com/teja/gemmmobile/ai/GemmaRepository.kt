@@ -67,18 +67,23 @@ object GemmaRepository {
                 return@withContext null
             }
 
-            return@withContext initEngineInternal(modelFile, config)
+            val cacheDir = context.cacheDir.absolutePath
+            return@withContext initEngineInternal(modelFile, config, cacheDir)
         }
     }
 
-    suspend fun reinitializeEngine(modelFile: File, config: GemmaConfig): Result<BackendType> = withContext(Dispatchers.IO) {
+    suspend fun reinitializeEngine(
+        modelFile: File,
+        config: GemmaConfig,
+        cacheDir: String? = null
+    ): Result<BackendType> = withContext(Dispatchers.IO) {
         mutex.withLock {
             _lastError.value = null
             activeEngine?.close()
             activeEngine = null
             engineStateJob?.cancel()
 
-            val engine = initEngineInternal(modelFile, config)
+            val engine = initEngineInternal(modelFile, config, cacheDir)
             if (engine != null) {
                 val backend = (engine.engineState.value as? EngineState.Ready)?.backend ?: BackendType.GPU
                 _engineState.value = EngineState.Ready(backend)
@@ -92,10 +97,15 @@ object GemmaRepository {
         }
     }
 
-    private suspend fun initEngineInternal(modelFile: File, config: GemmaConfig): GemmaEngine? {
+    private suspend fun initEngineInternal(
+        modelFile: File,
+        config: GemmaConfig,
+        cacheDir: String? = null
+    ): GemmaEngine? {
         _engineState.value = EngineState.Loading("Initializing Gemma...")
         try {
-            val newEngine = GemmaEngine(modelFile.absolutePath, config)
+            val resolvedCacheDir = cacheDir ?: File(modelFile.parentFile ?: File("."), "litert_cache").apply { mkdirs() }.absolutePath
+            val newEngine = GemmaEngine(modelFile.absolutePath, config, resolvedCacheDir)
             engineStateJob?.cancel()
             engineStateJob = repositoryScope.launch {
                 newEngine.engineState.collect { state ->

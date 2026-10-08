@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.net.InetAddress
 
 class WebPageFetcherTest {
 
@@ -45,6 +46,39 @@ class WebPageFetcherTest {
     }
 
     @Test
+    fun testExtractReadableText_stripsCookieBannersAndConsentOverlays() {
+        val html = """
+            <div id="cookie-consent-banner" class="cookie-notice">
+                <p>We use cookies to improve your experience. Accept all cookies.</p>
+                <button>Accept</button>
+            </div>
+            <article>
+                <p>Essential factual content that must remain.</p>
+            </article>
+        """.trimIndent()
+
+        val extracted = fetcher.extractReadableText(html)
+        assertTrue(extracted.contains("Essential factual content that must remain."))
+        assertFalse(extracted.contains("We use cookies to improve your experience"))
+        assertFalse(extracted.contains("Accept all cookies"))
+    }
+
+    @Test
+    fun testExtractReadableText_detectsCaptchaAndBotWalls() {
+        val captchaHtml = """
+            <html>
+            <body>
+                <h1>Attention Required! | Cloudflare</h1>
+                <p>Please enable JavaScript and cookies to continue. Verify you are human to proceed.</p>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val extracted = fetcher.extractReadableText(captchaHtml)
+        assertTrue(extracted.isEmpty())
+    }
+
+    @Test
     fun testExtractReadableText_convertsStructuralTagsToLineBreaks() {
         val html = """
             <div>First section header</div>
@@ -63,8 +97,15 @@ class WebPageFetcherTest {
         assertTrue(extracted.contains("Item Alpha"))
         assertTrue(extracted.contains("Item Beta"))
         assertTrue(extracted.contains("Final concluding sentence."))
-        // Check that structural blocks are separated
         assertTrue(extracted.contains("\n"))
+    }
+
+    @Test
+    fun testExtractReadableText_handlesMalformedHtml() {
+        val malformed = "<p>Unclosed paragraph <div>Nested unclosed <span>Text here</b></i></p>"
+        val extracted = fetcher.extractReadableText(malformed)
+        assertTrue(extracted.contains("Unclosed paragraph"))
+        assertTrue(extracted.contains("Text here"))
     }
 
     @Test
@@ -92,9 +133,8 @@ class WebPageFetcherTest {
         val maxCap = 250
         val extracted = fetcher.extractReadableText(longHtml, maxChars = maxCap)
 
-        assertTrue(extracted.length <= maxCap + 3) // +3 for possible ellipsis
+        assertTrue(extracted.length <= maxCap + 3)
         assertTrue(extracted.endsWith("…"))
-        // Verify sentence boundary cut: ends cleanly after a period
         val withoutEllipsis = extracted.removeSuffix("…").trim()
         assertTrue(withoutEllipsis.endsWith("."))
     }
@@ -116,10 +156,28 @@ class WebPageFetcherTest {
         assertFalse(fetcher.isSafeUrl("http://10.0.0.1/internal"))
         assertFalse(fetcher.isSafeUrl("http://192.168.1.1/router"))
         assertFalse(fetcher.isSafeUrl("http://172.16.0.1/private"))
+        assertFalse(fetcher.isSafeUrl("http://172.31.255.255/private"))
         assertFalse(fetcher.isSafeUrl("http://169.254.169.254/latest/meta-data"))
         assertFalse(fetcher.isSafeUrl("file:///data/user/0/com.teja.gemmmobile/databases/chat.db"))
         assertFalse(fetcher.isSafeUrl("ftp://ftp.funet.fi/pub/"))
         assertFalse(fetcher.isSafeUrl("javascript:alert('xss')"))
         assertFalse(fetcher.isSafeUrl(""))
+    }
+
+    @Test
+    fun testIsSafeIp_rejectsPrivateAndLoopbackIps() {
+        assertFalse(fetcher.isSafeIp(InetAddress.getByName("127.0.0.1")))
+        assertFalse(fetcher.isSafeIp(InetAddress.getByName("10.0.0.1")))
+        assertFalse(fetcher.isSafeIp(InetAddress.getByName("172.16.0.1")))
+        assertFalse(fetcher.isSafeIp(InetAddress.getByName("172.31.1.1")))
+        assertFalse(fetcher.isSafeIp(InetAddress.getByName("192.168.1.1")))
+        assertFalse(fetcher.isSafeIp(InetAddress.getByName("169.254.169.254")))
+        assertFalse(fetcher.isSafeIp(InetAddress.getByName("0.0.0.0")))
+        assertFalse(fetcher.isSafeIp(InetAddress.getByName("::1")))
+
+        // Valid public IP addresses
+        assertTrue(fetcher.isSafeIp(InetAddress.getByName("8.8.8.8")))
+        assertTrue(fetcher.isSafeIp(InetAddress.getByName("1.1.1.1")))
+        assertTrue(fetcher.isSafeIp(InetAddress.getByName("142.250.190.46")))
     }
 }
