@@ -259,10 +259,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateConfig(newConfig: GemmaConfig) {
+        val oldBackend = _config.value.preferredBackend
         _config.value = newConfig
         modelManager.saveConfig(newConfig)
-        viewModelScope.launch {
-            GemmaRepository.updateConfig(newConfig)
+        if (oldBackend != newConfig.preferredBackend) {
+            initializeEngine()
+        } else {
+            viewModelScope.launch {
+                GemmaRepository.updateConfig(newConfig)
+            }
         }
     }
 
@@ -361,7 +366,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         // Force reset engine state back to Ready immediately so the badge changes
         GemmaRepository.resetToReady()
-        val backend = (_engineState.value as? EngineState.Generating)?.backend ?: BackendType.GPU
+        val backend = (_engineState.value as? EngineState.Generating)?.backend ?: BackendType.CPU
         _engineState.value = EngineState.Ready(backend)
 
         updateSessionMessages(genSessionId) { msgs ->

@@ -106,6 +106,7 @@ fun SettingsScreen(
     var enableThinking by remember(currentConfig) { mutableStateOf(currentConfig.enableThinking) }
     var thinkingBudget by remember(currentConfig) { mutableIntStateOf(currentConfig.thinkingBudget) }
     var systemPrompt by remember(currentConfig) { mutableStateOf(currentConfig.systemPrompt) }
+    var preferredBackend by remember(currentConfig) { mutableStateOf(currentConfig.preferredBackend) }
 
 
 
@@ -171,6 +172,7 @@ fun SettingsScreen(
                         enableThinking = GemmaConfig.DEFAULT.enableThinking
                         thinkingBudget = GemmaConfig.DEFAULT.thinkingBudget
                         systemPrompt = GemmaConfig.DEFAULT.systemPrompt
+                        preferredBackend = GemmaConfig.DEFAULT.preferredBackend
                         onResetDefaults()
                         Toast.makeText(context, "Reset to default parameters", Toast.LENGTH_SHORT).show()
                     }
@@ -191,6 +193,107 @@ fun SettingsScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
+
+                // SECTION 0: Hardware Acceleration & Compute Engine
+                item {
+                    SettingsSectionHeader(
+                        icon = Icons.Default.Psychology,
+                        title = "Hardware Acceleration & Compute Engine"
+                    )
+                }
+
+                item {
+                    SettingsCard {
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Compute Backend",
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 14.sp,
+                                    color = Color.White
+                                )
+                                SettingsBadge(text = if (preferredBackend == com.teja.gemmmobile.ai.PreferredBackend.CPU) "CPU (Smooth)" else "GPU (Fast)")
+                            }
+                            Text(
+                                text = "CPU runs smoothly without phone lockup. GPU offers faster tokens on high-end chipsets but may freeze the system UI on mid-range phones.",
+                                fontSize = 11.sp,
+                                color = Color(0xFF8E8E93),
+                                modifier = Modifier.padding(top = 2.dp, bottom = 10.dp)
+                            )
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (preferredBackend == com.teja.gemmmobile.ai.PreferredBackend.CPU) Color(0xFF10A37F).copy(alpha = 0.2f) else Color(0xFF212121),
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (preferredBackend == com.teja.gemmmobile.ai.PreferredBackend.CPU) Color(0xFF10A37F) else Color(0xFF2E2E2E)
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable {
+                                            preferredBackend = com.teja.gemmmobile.ai.PreferredBackend.CPU
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        }
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Text(
+                                            text = "CPU (Recommended)",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (preferredBackend == com.teja.gemmmobile.ai.PreferredBackend.CPU) Color(0xFF10A37F) else Color.White
+                                        )
+                                        Text(
+                                            text = "Smooth & stable, zero phone freeze",
+                                            fontSize = 10.sp,
+                                            color = Color(0xFF8E8E93),
+                                            modifier = Modifier.padding(top = 2.dp)
+                                        )
+                                    }
+                                }
+
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (preferredBackend == com.teja.gemmmobile.ai.PreferredBackend.GPU) Color(0xFF10A37F).copy(alpha = 0.2f) else Color(0xFF212121),
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (preferredBackend == com.teja.gemmmobile.ai.PreferredBackend.GPU) Color(0xFF10A37F) else Color(0xFF2E2E2E)
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable {
+                                            preferredBackend = com.teja.gemmmobile.ai.PreferredBackend.GPU
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        }
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Text(
+                                            text = "GPU (High Speed)",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (preferredBackend == com.teja.gemmmobile.ai.PreferredBackend.GPU) Color(0xFF10A37F) else Color.White
+                                        )
+                                        Text(
+                                            text = "Fast tokens on flagship devices",
+                                            fontSize = 10.sp,
+                                            color = Color(0xFF8E8E93),
+                                            modifier = Modifier.padding(top = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // SECTION 1: Model Generation & Sampling
                 item {
@@ -568,7 +671,8 @@ fun SettingsScreen(
                             topK = topK,
                             enableThinking = enableThinking,
                             thinkingBudget = thinkingBudget,
-                            systemPrompt = systemPrompt.trim()
+                            systemPrompt = systemPrompt.trim(),
+                            preferredBackend = preferredBackend
                         )
                         onApplyConfig(updated)
                         Toast.makeText(context, "✅ Configuration saved & applied", Toast.LENGTH_SHORT).show()

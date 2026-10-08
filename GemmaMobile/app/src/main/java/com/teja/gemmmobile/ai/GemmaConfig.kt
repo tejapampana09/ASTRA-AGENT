@@ -1,6 +1,14 @@
 package com.teja.gemmmobile.ai
 
 /**
+ * Hardware compute acceleration preference for Gemma 4 local inference.
+ */
+enum class PreferredBackend(val displayName: String) {
+    CPU("CPU (Recommended - Smooth & Stable)"),
+    GPU("GPU (High Speed - May cause system stutter)")
+}
+
+/**
  * User-configurable parameters for Gemma 4 E2B inference via LiteRT-LM.
  */
 data class GemmaConfig(
@@ -10,7 +18,8 @@ data class GemmaConfig(
     val topK: Int = 40,
     val enableThinking: Boolean = false,
     val thinkingBudget: Int = 0,
-    val systemPrompt: String = DEFAULT_SYSTEM_PROMPT
+    val systemPrompt: String = DEFAULT_SYSTEM_PROMPT,
+    val preferredBackend: PreferredBackend = PreferredBackend.CPU
 ) {
     companion object {
         const val DEFAULT_SYSTEM_PROMPT = """You are ASTRA, an intelligent on-device AI assistant — friendly, conversational, and helpful like ChatGPT.

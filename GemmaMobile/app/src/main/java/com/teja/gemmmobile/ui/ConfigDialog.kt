@@ -242,7 +242,8 @@ fun ConfigDialog(
                         topK = topK,
                         enableThinking = enableThinking,
                         thinkingBudget = thinkingBudget,
-                        systemPrompt = systemPrompt.trim()
+                        systemPrompt = systemPrompt.trim(),
+                        preferredBackend = currentConfig.preferredBackend
                     )
                     onApply(updated)
                     onDismiss()

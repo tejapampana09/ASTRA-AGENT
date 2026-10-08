@@ -137,8 +137,10 @@ class GemmaEngine(
                 return@withContext Result.failure(IllegalStateException(errorMsg))
             }
 
-            _engineState.value = EngineState.Loading("Initializing model on GPU...")
-            Log.i(TAG, "[$TAG] Trying GPU backend from $modelPath (${file.length()} bytes)...")
+            val preferCpu = currentConfig.preferredBackend == PreferredBackend.CPU
+
+            _engineState.value = EngineState.Loading(if (preferCpu) "Initializing model on CPU..." else "Initializing model on GPU...")
+            Log.i(TAG, "[$TAG] Loading model with preferred backend: ${currentConfig.preferredBackend} from $modelPath (${file.length()} bytes)...")
 
             // Brief yield so the UI Composables can render the loading state smoothly
             kotlinx.coroutines.delay(100)
@@ -147,64 +149,82 @@ class GemmaEngine(
             val effectiveCacheDir = cacheDirPath ?: File(File(modelPath).parentFile ?: File("."), "litert_cache").apply { mkdirs() }.absolutePath
             File(effectiveCacheDir).mkdirs()
             var loadedEngine: Engine? = null
-            var backendChosen = BackendType.GPU
-            var lastGpuError: String? = null
-
-            // Attempt 1: Try GPU with cacheDir and maxNumTokens (2048)
+            var backendChosen = if (preferCpu) BackendType.CPU else BackendType.GPU
             var testEngine: Engine? = null
-            try {
-                Log.d(TAG, "[$TAG] Attempting GPU initialization with cacheDir: $effectiveCacheDir...")
-                val config = EngineConfig(
-                    modelPath = modelPath,
-                    backend = Backend.GPU(),
-                    maxNumTokens = 2048,
-                    cacheDir = effectiveCacheDir
-                )
-                testEngine = Engine(config)
-                testEngine.initialize()
-                loadedEngine = testEngine
-                backendChosen = BackendType.GPU
-                Log.i(TAG, "[$TAG] Model loaded successfully on GPU")
-            } catch (eGpu: Throwable) {
-                lastGpuError = eGpu.message ?: "GPU unsupported or out of memory"
-                Log.w(TAG, "[$TAG] GPU initialization failed: $lastGpuError. Cleaning up before CPU fallback...")
+
+            if (preferCpu) {
+                // Initialize directly on CPU: Smooth, responsive, zero GPU lockups, zero phone freezing!
                 try {
-                    testEngine?.close()
-                } catch (_: Throwable) {}
-                testEngine = null
-                System.gc()
-
-                // Allow Linux kernel and GPU driver 300ms to reclaim native unmapped memory
-                kotlinx.coroutines.delay(300)
-
-                Log.i(TAG, "[$TAG] Falling back to CPU with 2 threads and 1536 token budget to avoid LMK...")
-                _engineState.value = EngineState.Loading("Falling back to CPU...")
-
-                // Attempt 2: CPU fallback with conservative thread count (2) and token budget (1536) to prevent process termination
-                try {
+                    Log.d(TAG, "[$TAG] Initializing directly on CPU with 4 threads and 1536 token budget...")
                     val config = EngineConfig(
                         modelPath = modelPath,
-                        backend = Backend.CPU(threadCount = 2),
+                        backend = Backend.CPU(threadCount = 4),
                         maxNumTokens = 1536,
                         cacheDir = effectiveCacheDir
                     )
                     testEngine = Engine(config)
                     testEngine.initialize()
                     loadedEngine = testEngine
-                    backendChosen = BackendType.CPU_FALLBACK
-                    Log.i(TAG, "[$TAG] Model loaded successfully on CPU fallback")
-                } catch (fatal: Throwable) {
-                    try {
-                        testEngine?.close()
-                    } catch (_: Throwable) {}
+                    backendChosen = BackendType.CPU
+                    Log.i(TAG, "[$TAG] Model loaded successfully on CPU (smooth & stable)")
+                } catch (cpuError: Throwable) {
+                    try { testEngine?.close() } catch (_: Throwable) {}
+                    testEngine = null
+                    if (cpuError is CancellationException) throw cpuError
+                    val fatalMsg = "Failed to load model on CPU: ${cpuError.localizedMessage}"
+                    Log.e(TAG, "[$TAG] $fatalMsg", cpuError)
+                    _engineState.value = EngineState.Error(fatalMsg)
+                    return@withContext Result.failure(Exception(fatalMsg, cpuError))
+                }
+            } else {
+                // User explicitly selected GPU: try GPU with fallback
+                var lastGpuError: String? = null
+                try {
+                    Log.d(TAG, "[$TAG] Attempting GPU initialization with cacheDir: $effectiveCacheDir...")
+                    val config = EngineConfig(
+                        modelPath = modelPath,
+                        backend = Backend.GPU(),
+                        maxNumTokens = 2048,
+                        cacheDir = effectiveCacheDir
+                    )
+                    testEngine = Engine(config)
+                    testEngine.initialize()
+                    loadedEngine = testEngine
+                    backendChosen = BackendType.GPU
+                    Log.i(TAG, "[$TAG] Model loaded successfully on GPU")
+                } catch (eGpu: Throwable) {
+                    lastGpuError = eGpu.message ?: "GPU unsupported or out of memory"
+                    Log.w(TAG, "[$TAG] GPU initialization failed: $lastGpuError. Cleaning up before CPU fallback...")
+                    try { testEngine?.close() } catch (_: Throwable) {}
                     testEngine = null
                     System.gc()
+                    kotlinx.coroutines.delay(300)
 
-                    if (fatal is CancellationException) throw fatal
-                    val fatalMsg = "Failed to load model: GPU error: [$lastGpuError]. CPU error: [${fatal.localizedMessage}]"
-                    Log.e(TAG, "[$TAG] $fatalMsg", fatal)
-                    _engineState.value = EngineState.Error(fatalMsg)
-                    return@withContext Result.failure(Exception(fatalMsg, fatal))
+                    Log.i(TAG, "[$TAG] Falling back to CPU with 4 threads and 1536 token budget...")
+                    _engineState.value = EngineState.Loading("Falling back to CPU...")
+
+                    try {
+                        val config = EngineConfig(
+                            modelPath = modelPath,
+                            backend = Backend.CPU(threadCount = 4),
+                            maxNumTokens = 1536,
+                            cacheDir = effectiveCacheDir
+                        )
+                        testEngine = Engine(config)
+                        testEngine.initialize()
+                        loadedEngine = testEngine
+                        backendChosen = BackendType.CPU_FALLBACK
+                        Log.i(TAG, "[$TAG] Model loaded successfully on CPU fallback")
+                    } catch (fatal: Throwable) {
+                        try { testEngine?.close() } catch (_: Throwable) {}
+                        testEngine = null
+                        System.gc()
+                        if (fatal is CancellationException) throw fatal
+                        val fatalMsg = "Failed to load model: GPU error: [$lastGpuError]. CPU error: [${fatal.localizedMessage}]"
+                        Log.e(TAG, "[$TAG] $fatalMsg", fatal)
+                        _engineState.value = EngineState.Error(fatalMsg)
+                        return@withContext Result.failure(Exception(fatalMsg, fatal))
+                    }
                 }
             }
 
@@ -259,7 +279,7 @@ data class EngineChunk(
         val effectiveThinking = enableThinkingOverride ?: currentConfig.enableThinking
         val effectiveThinkingBudget = if (effectiveThinking) minOf(currentConfig.thinkingBudget, 160) else 0
 
-        val totalModelMaxContext = if (activeBackend == BackendType.CPU_FALLBACK) 1536 else 2048
+        val totalModelMaxContext = if (activeBackend == BackendType.GPU) 2048 else 1536
         val safetyMargin = 48
 
         // Calculate actual safe headroom remaining in the KV cache

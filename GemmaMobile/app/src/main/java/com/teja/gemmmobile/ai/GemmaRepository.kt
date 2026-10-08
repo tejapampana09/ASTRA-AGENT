@@ -44,7 +44,7 @@ object GemmaRepository {
 
     fun resetToReady() {
         activeEngine?.resetToReady()
-        val backend = (activeEngine?.engineState?.value as? EngineState.Ready)?.backend ?: BackendType.GPU
+        val backend = (activeEngine?.engineState?.value as? EngineState.Ready)?.backend ?: BackendType.CPU
         _engineState.value = EngineState.Ready(backend)
     }
 
@@ -85,7 +85,7 @@ object GemmaRepository {
 
             val engine = initEngineInternal(modelFile, config, cacheDir)
             if (engine != null) {
-                val backend = (engine.engineState.value as? EngineState.Ready)?.backend ?: BackendType.GPU
+                val backend = (engine.engineState.value as? EngineState.Ready)?.backend ?: BackendType.CPU
                 _engineState.value = EngineState.Ready(backend)
                 _lastError.value = null
                 Result.success(backend)
@@ -119,7 +119,7 @@ object GemmaRepository {
             val result = newEngine.initialize()
             return if (result.isSuccess) {
                 activeEngine = newEngine
-                val backend = result.getOrNull() ?: BackendType.GPU
+                val backend = result.getOrNull() ?: BackendType.CPU
                 _engineState.value = EngineState.Ready(backend)
                 _lastError.value = null
                 newEngine

@@ -70,15 +70,23 @@ class ModelManager(private val context: Context) {
     }
 
     fun loadConfig(): GemmaConfig {
+        val backendStr = prefs.getString("config_preferred_backend", com.teja.gemmmobile.ai.PreferredBackend.CPU.name)
+        val preferred = try {
+            com.teja.gemmmobile.ai.PreferredBackend.valueOf(backendStr ?: com.teja.gemmmobile.ai.PreferredBackend.CPU.name)
+        } catch (_: Exception) {
+            com.teja.gemmmobile.ai.PreferredBackend.CPU
+        }
+
         return GemmaConfig(
-            temperature = prefs.getFloat("config_temp", 0.8f),
+            temperature = prefs.getFloat("config_temp", 0.65f),
             maxTokens = prefs.getInt("config_tokens", 1024),
-            topP = prefs.getFloat("config_topp", 0.95f),
+            topP = prefs.getFloat("config_topp", 0.90f),
             topK = prefs.getInt("config_topk", 40),
-            enableThinking = prefs.getBoolean("config_thinking", true),
-            thinkingBudget = prefs.getInt("config_thinking_budget", 512),
+            enableThinking = prefs.getBoolean("config_thinking", false),
+            thinkingBudget = prefs.getInt("config_thinking_budget", 0),
             systemPrompt = prefs.getString("config_system_prompt", GemmaConfig.DEFAULT_SYSTEM_PROMPT)
-                ?: GemmaConfig.DEFAULT_SYSTEM_PROMPT
+                ?: GemmaConfig.DEFAULT_SYSTEM_PROMPT,
+            preferredBackend = preferred
         )
     }
 
@@ -91,6 +99,7 @@ class ModelManager(private val context: Context) {
             .putBoolean("config_thinking", config.enableThinking)
             .putInt("config_thinking_budget", config.thinkingBudget)
             .putString("config_system_prompt", config.systemPrompt)
+            .putString("config_preferred_backend", config.preferredBackend.name)
             .apply()
     }
 
