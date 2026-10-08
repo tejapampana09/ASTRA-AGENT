@@ -3,7 +3,10 @@ package com.teja.gemmmobile.search
 import androidx.compose.runtime.Immutable
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import com.google.gson.JsonParser
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
@@ -25,9 +28,10 @@ data class SearchResult(
 )
 
 /**
- * Fast, lightweight on-device web search client.
- * Uses DuckDuckGo HTML as primary engine for high-precision, uncorrupted keyword results.
- * Falls back to DuckDuckGo Lite and Bing Web Search if needed.
+ * Fast, robust on-device web search client modeled after ChatGPT search.
+ * Uses DuckDuckGo Lite (POST) and Wikipedia API concurrently to get rich,
+ * unblocked results across the entire web (Wikipedia, IMDb, news, profiles, official sites).
+ * Falls back to DuckDuckGo HTML and Bing if needed.
  * Zero API keys required.
  */
 open class WebSearchClient {
@@ -121,38 +125,44 @@ open class WebSearchClient {
     }
 
     /**
-     * Executes web search with primary DuckDuckGo HTML engine and ranks by keyword relevance.
+     * Executes broad web search across DuckDuckGo Lite and Wikipedia in parallel.
      */
     open suspend fun search(query: String, maxResults: Int = 10): List<SearchResult> = withContext(Dispatchers.IO) {
         val clean = sanitizeQuery(query)
         if (clean.isBlank()) return@withContext emptyList()
 
         try {
-            Log.d(TAG, "[$TAG] Initiating web search for: '$clean' (raw: '$query')")
+            Log.d(TAG, "[$TAG] Initiating broad web search for: '$clean' (raw: '$query')")
 
-            // 1. Primary zero-cost engine: DuckDuckGo HTML (blazingly fast & accurate)
-            var candidates = fetchDuckDuckGoHtml(clean, maxResults * 2)
-
-            // 2. Secondary fallback: DuckDuckGo Lite
-            if (candidates.isEmpty()) {
-                Log.d(TAG, "[$TAG] DDG HTML empty, trying DDG Lite")
-                candidates = fetchDuckDuckGoLite(clean, maxResults * 2)
+            // Query DuckDuckGo Lite and Wikipedia in parallel
+            val (ddgCandidates, wikiCandidates) = coroutineScope {
+                val ddgDeferred = async { fetchDuckDuckGoLite(clean, maxResults * 2) }
+                val wikiDeferred = async { fetchWikipedia(clean, 3) }
+                Pair(ddgDeferred.await(), wikiDeferred.await())
             }
 
-            // 3. Tertiary fallback: Bing Web Search
-            if (candidates.isEmpty()) {
-                Log.d(TAG, "[$TAG] DDG engines empty, falling back to Bing")
-                candidates = fetchBingWeb(clean, maxResults * 2)
+            var combined = (wikiCandidates + ddgCandidates).toMutableList()
+
+            // If DDG Lite was empty or blocked, try DDG HTML and Bing as fallbacks
+            if (ddgCandidates.isEmpty()) {
+                Log.d(TAG, "[$TAG] DDG Lite empty, trying DDG HTML and Bing")
+                val ddgHtml = fetchDuckDuckGoHtml(clean, maxResults)
+                if (ddgHtml.isNotEmpty()) {
+                    combined.addAll(ddgHtml)
+                } else {
+                    val bing = fetchBingWeb(clean, maxResults)
+                    combined.addAll(bing)
+                }
             }
 
-            if (candidates.isEmpty()) {
+            if (combined.isEmpty()) {
                 Log.w(TAG, "[$TAG] All search providers returned 0 results for: '$clean'")
                 return@withContext emptyList()
             }
 
-            // Rank candidates by query relevance
-            val ranked = rankByRelevance(candidates, clean, maxResults)
-            Log.d(TAG, "[$TAG] Curated ${ranked.size} top results for '$clean'")
+            // Rank candidates by query relevance & domain diversity
+            val ranked = rankByRelevance(combined, clean, maxResults)
+            Log.d(TAG, "[$TAG] Curated ${ranked.size} broad web results for '$clean'")
             return@withContext ranked
         } catch (t: Throwable) {
             Log.e(TAG, "[$TAG] Search error", t)
@@ -161,63 +171,112 @@ open class WebSearchClient {
     }
 
     /**
-     * Ranks search candidates by keyword presence, exact phrase matches, and domain quality.
+     * Queries Wikipedia Search API directly (50ms, zero rate limits, high encyclopedic authority).
      */
-    private fun rankByRelevance(
-        results: List<SearchResult>,
-        cleanQuery: String,
-        maxResults: Int
-    ): List<SearchResult> {
-        val queryLower = cleanQuery.lowercase()
-        val queryTokens = queryLower.split(Regex("""\s+""")).filter { it.length >= 2 }
+    fun fetchWikipedia(query: String, maxResults: Int = 3): List<SearchResult> {
+        return try {
+            val encodedQuery = URLEncoder.encode(query, "UTF-8")
+            val endpoint = URL("https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=$encodedQuery&format=json&utf8=1&srlimit=$maxResults")
+            val conn = endpoint.openConnection() as HttpURLConnection
+            conn.requestMethod = "GET"
+            conn.connectTimeout = 3000
+            conn.readTimeout = 3000
+            conn.setRequestProperty("User-Agent", "GemmaMobile/1.0 (Android AI Assistant)")
+            conn.setRequestProperty("Accept", "application/json")
 
-        val seenUrls = mutableSetOf<String>()
-        val seenTitles = mutableSetOf<String>()
-        val scoredList = mutableListOf<Pair<SearchResult, Int>>()
+            if (conn.responseCode == 200) {
+                val json = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { it.readText() }
+                val root = JsonParser.parseString(json).asJsonObject
+                val searchArray = root.getAsJsonObject("query")?.getAsJsonArray("search") ?: return emptyList()
 
-        for (res in results) {
-            val normalizedUrl = res.url.trimEnd('/')
-            val normTitle = res.title.lowercase().replace(Regex("""[^a-z0-9]"""), "")
-            if (normalizedUrl in seenUrls || normTitle in seenTitles) continue
+                val results = mutableListOf<SearchResult>()
+                for (elem in searchArray) {
+                    val obj = elem.asJsonObject
+                    val rawTitle = obj.get("title")?.asString ?: continue
+                    val rawSnippet = obj.get("snippet")?.asString ?: ""
+                    val cleanSnippet = cleanHtml(rawSnippet)
+                    val pageUrl = "https://en.wikipedia.org/wiki/" + URLEncoder.encode(rawTitle.replace(" ", "_"), "UTF-8")
 
-            val titleLower = res.title.lowercase()
-            val snipLower = res.snippet.lowercase()
-            val combined = "$titleLower $snipLower"
-
-            // Compute relevance score
-            var score = 10
-
-            // Exact phrase match bonus
-            if (titleLower.contains(queryLower)) score += 50
-            if (snipLower.contains(queryLower)) score += 30
-
-            // Token overlap scoring
-            for (token in queryTokens) {
-                if (titleLower.contains(token)) score += 15
-                if (snipLower.contains(token)) score += 8
+                    results.add(
+                        SearchResult(
+                            title = "$rawTitle - Wikipedia",
+                            url = pageUrl,
+                            snippet = cleanSnippet.ifBlank { rawTitle }
+                        )
+                    )
+                }
+                results
+            } else {
+                emptyList()
             }
-
-            // High-authority platform bonus for entity searches
-            val urlLower = res.url.lowercase()
-            if (urlLower.contains("linkedin.com") || urlLower.contains("github.com") ||
-                urlLower.contains("huggingface.co") || urlLower.contains("wikipedia.org") ||
-                urlLower.contains("twitter.com") || urlLower.contains("x.com")) {
-                score += 10
-            }
-
-            seenUrls.add(normalizedUrl)
-            seenTitles.add(normTitle)
-            scoredList.add(Pair(res, score))
+        } catch (e: Exception) {
+            Log.d(TAG, "[$TAG] Wikipedia search skipped: ${e.message}")
+            emptyList()
         }
-
-        // Sort descending by relevance score
-        scoredList.sortByDescending { it.second }
-
-        return scoredList.map { it.first }.take(maxResults)
     }
 
     /**
-     * DuckDuckGo HTML search endpoint: https://html.duckduckgo.com/html/?q=...
+     * DuckDuckGo Lite search endpoint: https://lite.duckduckgo.com/lite/
+     * Uses POST, which bypasses duck CAPTCHAs and returns broad web results (Wikipedia, IMDb, news, blogs).
+     */
+    fun fetchDuckDuckGoLite(query: String, maxResults: Int): List<SearchResult> {
+        return try {
+            val endpoint = URL("https://lite.duckduckgo.com/lite/")
+            val conn = endpoint.openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 4500
+            conn.readTimeout = 4500
+            conn.doOutput = true
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
+            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+            conn.setRequestProperty("Accept", "text/html,application/xhtml+xml")
+
+            val postData = "q=" + URLEncoder.encode(query, "UTF-8")
+            OutputStreamWriter(conn.outputStream, "UTF-8").use { writer ->
+                writer.write(postData)
+                writer.flush()
+            }
+
+            if (conn.responseCode == 200) {
+                val html = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { it.readText() }
+                parseDdgLite(html, maxResults)
+            } else {
+                emptyList()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "[$TAG] DDG Lite query failed for '$query'", e)
+            emptyList()
+        }
+    }
+
+    fun parseDdgLite(html: String, maxResults: Int): List<SearchResult> {
+        val results = mutableListOf<SearchResult>()
+        val liteTagRegex = Regex("""<a\s+([^>]*class=['"][^'"]*result-link[^'"]*['"][^>]*)>(.*?)</a>""", RegexOption.DOT_MATCHES_ALL)
+        val liteSnippetRegex = Regex("""<td[^>]*class=['"][^'"]*result-snippet[^'"]*['"][^>]*>(.*?)</td>""", RegexOption.DOT_MATCHES_ALL)
+        val hrefRegex = Regex("""href=['"]([^'"]+)['"]""")
+
+        val liteLinks = liteTagRegex.findAll(html).toList()
+        val liteSnippets = liteSnippetRegex.findAll(html).toList()
+
+        val count = minOf(liteLinks.size, maxResults)
+        for (i in 0 until count) {
+            val attrs = liteLinks[i].groupValues[1]
+            val rawTitle = liteLinks[i].groupValues[2]
+            val hrefMatch = hrefRegex.find(attrs)
+            val rawUrl = hrefMatch?.groupValues?.get(1)?.let { cleanHtml(it) } ?: ""
+            val url = cleanUrl(rawUrl)
+            val title = cleanHtml(rawTitle)
+            val snippet = if (i < liteSnippets.size) cleanSnippetText(liteSnippets[i].groupValues[1]) else ""
+
+            if (title.isNotBlank() && url.isNotBlank() && url.startsWith("http")) {
+                results.add(SearchResult(title = title, url = url, snippet = snippet.ifBlank { title }))
+            }
+        }
+        return results
+    }
+
+    /**
+     * DuckDuckGo HTML search endpoint (fallback).
      */
     fun fetchDuckDuckGoHtml(query: String, maxResults: Int): List<SearchResult> {
         return try {
@@ -266,66 +325,7 @@ open class WebSearchClient {
     }
 
     /**
-     * DuckDuckGo Lite search endpoint: https://lite.duckduckgo.com/lite/
-     */
-    fun fetchDuckDuckGoLite(query: String, maxResults: Int): List<SearchResult> {
-        return try {
-            val endpoint = URL("https://lite.duckduckgo.com/lite/")
-            val conn = endpoint.openConnection() as HttpURLConnection
-            conn.requestMethod = "POST"
-            conn.connectTimeout = 4000
-            conn.readTimeout = 4000
-            conn.doOutput = true
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
-            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-            conn.setRequestProperty("Accept", "text/html,application/xhtml+xml")
-
-            val postData = "q=" + URLEncoder.encode(query, "UTF-8")
-            OutputStreamWriter(conn.outputStream, "UTF-8").use { writer ->
-                writer.write(postData)
-                writer.flush()
-            }
-
-            if (conn.responseCode == 200) {
-                val html = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { it.readText() }
-                parseDdgLite(html, maxResults)
-            } else {
-                emptyList()
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "[$TAG] DDG Lite query failed for '$query'", e)
-            emptyList()
-        }
-    }
-
-    private fun parseDdgLite(html: String, maxResults: Int): List<SearchResult> {
-        val results = mutableListOf<SearchResult>()
-        val liteTagRegex = Regex("""<a\s+([^>]*class=['"][^'"]*result-link[^'"]*['"][^>]*)>(.*?)</a>""", RegexOption.DOT_MATCHES_ALL)
-        val liteSnippetRegex = Regex("""<td[^>]*class=['"][^'"]*result-snippet[^'"]*['"][^>]*>(.*?)</td>""", RegexOption.DOT_MATCHES_ALL)
-        val hrefRegex = Regex("""href=['"]([^'"]+)['"]""")
-
-        val liteLinks = liteTagRegex.findAll(html).toList()
-        val liteSnippets = liteSnippetRegex.findAll(html).toList()
-
-        val count = minOf(liteLinks.size, maxResults)
-        for (i in 0 until count) {
-            val attrs = liteLinks[i].groupValues[1]
-            val rawTitle = liteLinks[i].groupValues[2]
-            val hrefMatch = hrefRegex.find(attrs)
-            val rawUrl = hrefMatch?.groupValues?.get(1)?.let { cleanHtml(it) } ?: ""
-            val url = cleanUrl(rawUrl)
-            val title = cleanHtml(rawTitle)
-            val snippet = if (i < liteSnippets.size) cleanSnippetText(liteSnippets[i].groupValues[1]) else ""
-
-            if (title.isNotBlank() && url.isNotBlank() && url.startsWith("http")) {
-                results.add(SearchResult(title = title, url = url, snippet = snippet.ifBlank { title }))
-            }
-        }
-        return results
-    }
-
-    /**
-     * Bing Web Search endpoint as tertiary fallback.
+     * Bing Web Search endpoint (tertiary fallback).
      */
     fun fetchBingWeb(query: String, maxResults: Int): List<SearchResult> {
         return try {
@@ -399,6 +399,67 @@ open class WebSearchClient {
             } catch (_: Exception) {}
         }
         return cleanUrl(unescaped)
+    }
+
+    /**
+     * Ranks search candidates by keyword presence, exact phrase matches, and domain quality.
+     */
+    private fun rankByRelevance(
+        results: List<SearchResult>,
+        cleanQuery: String,
+        maxResults: Int
+    ): List<SearchResult> {
+        val queryLower = cleanQuery.lowercase()
+        // Strip punctuation from query tokens so "SS" matches "S. S." and "S.S."
+        val queryTokens = queryLower.replace(Regex("""[^a-z0-9\s]"""), " ")
+            .split(Regex("""\s+""")).filter { it.length >= 2 }
+
+        val seenUrls = mutableSetOf<String>()
+        val seenTitles = mutableSetOf<String>()
+        val scoredList = mutableListOf<Pair<SearchResult, Int>>()
+
+        for (res in results) {
+            val normalizedUrl = res.url.trimEnd('/')
+            val normTitle = res.title.lowercase().replace(Regex("""[^a-z0-9]"""), "")
+            if (normalizedUrl in seenUrls || normTitle in seenTitles) continue
+
+            val titleClean = res.title.lowercase().replace(Regex("""[^a-z0-9\s]"""), " ")
+            val snipClean = res.snippet.lowercase().replace(Regex("""[^a-z0-9\s]"""), " ")
+
+            // Base score
+            var score = 10
+
+            // Exact phrase match bonus
+            if (titleClean.contains(queryLower)) score += 50
+            if (snipClean.contains(queryLower)) score += 30
+
+            // Token overlap scoring
+            for (token in queryTokens) {
+                if (titleClean.contains(token)) score += 15
+                if (snipClean.contains(token)) score += 8
+            }
+
+            // High-authority encyclopedic / reference platforms get top priority
+            val urlLower = res.url.lowercase()
+            when {
+                urlLower.contains("wikipedia.org") -> score += 35
+                urlLower.contains("imdb.com") -> score += 30
+                urlLower.contains("linkedin.com") -> score += 20
+                urlLower.contains("github.com") -> score += 20
+                urlLower.contains("huggingface.co") -> score += 20
+                urlLower.contains("gov") || urlLower.contains("edu") -> score += 20
+                urlLower.contains("instagram.com") || urlLower.contains("facebook.com") -> score -= 10 // deprioritize social directories below real articles
+            }
+
+            seenUrls.add(normalizedUrl)
+            seenTitles.add(normTitle)
+            scoredList.add(Pair(res, score))
+        }
+
+        // Sort descending by relevance score
+        scoredList.sortByDescending { it.second }
+
+        return scoredList.map { it.first }.take(maxResults)
     }
 
     private fun cleanUrl(raw: String): String {

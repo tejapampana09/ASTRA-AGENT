@@ -778,7 +778,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val effectiveSystemPrompt = when {
                     imageBytes != null -> "You are a helpful assistant. Directly and accurately describe what is in the image in plain language."
                     searchContext.isNotBlank() -> {
-                        "$baseSystemPrompt\n\nLive web search results are provided above. Use the facts, titles, and snippets directly to answer the user's inquiry thoroughly and accurately in the language of their prompt. Cite relevant sources."
+                        "$baseSystemPrompt\n\nLive web search results are provided above. Write a comprehensive, detailed, and informative response using the facts, history, achievements, and information from the search results. Respond naturally in the language of the prompt without using rigid bullet templates."
                     }
                     else -> baseSystemPrompt
                 }

@@ -63,4 +63,33 @@ class WebSearchClientTest {
         assertEquals("https://raw.example.org/simple", results[1].url)
         assertEquals("Another detailed snippet explaining quantum algorithms.", results[1].snippet)
     }
+
+    @Test
+    fun testParseDdgLite_extractsTitlesUrlsAndSnippets() {
+        val sampleLiteHtml = """
+            <table>
+              <tr>
+                <td><a class="result-link" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fen.wikipedia.org%2Fwiki%2FS._S._Rajamouli&rut=1">S. S. Rajamouli - Wikipedia</a></td>
+              </tr>
+              <tr>
+                <td class="result-snippet">S. S. Rajamouli is an Indian filmmaker who primarily works in Telugu cinema.</td>
+              </tr>
+              <tr>
+                <td><a class="result-link" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.imdb.com%2Fname%2Fnm1442514%2F&rut=1">S.S. Rajamouli - IMDb</a></td>
+              </tr>
+              <tr>
+                <td class="result-snippet">Director: RRR, Baahubali. Indian filmmaker known worldwide.</td>
+              </tr>
+            </table>
+        """.trimIndent()
+
+        val results = client.parseDdgLite(sampleLiteHtml, maxResults = 5)
+        assertEquals(2, results.size)
+        assertEquals("S. S. Rajamouli - Wikipedia", results[0].title)
+        assertEquals("https://en.wikipedia.org/wiki/S._S._Rajamouli", results[0].url)
+        assertEquals("S. S. Rajamouli is an Indian filmmaker who primarily works in Telugu cinema.", results[0].snippet)
+
+        assertEquals("S.S. Rajamouli - IMDb", results[1].title)
+        assertEquals("https://www.imdb.com/name/nm1442514/", results[1].url)
+    }
 }

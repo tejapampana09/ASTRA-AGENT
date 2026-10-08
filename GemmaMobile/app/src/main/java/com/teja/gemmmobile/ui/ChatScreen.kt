@@ -3184,6 +3184,32 @@ fun extractProfileCards(results: List<SearchResult>): List<ProfileCardData> {
                     )
                 )
             }
+            url.contains("wikipedia.org/wiki/") -> {
+                val cleanTitle = title.substringBefore("-").substringBefore("|").trim()
+                cards.add(
+                    ProfileCardData(
+                        title = cleanTitle.ifBlank { "Wikipedia" },
+                        subtitle = "Wikipedia • Encyclopedia",
+                        url = res.url,
+                        brand = "Wikipedia",
+                        iconColor = Color(0xFF636466),
+                        badgeLetter = "W"
+                    )
+                )
+            }
+            url.contains("imdb.com/") -> {
+                val cleanTitle = title.substringBefore("-").substringBefore("|").trim()
+                cards.add(
+                    ProfileCardData(
+                        title = cleanTitle.ifBlank { "IMDb" },
+                        subtitle = "IMDb • Movies & Filmography",
+                        url = res.url,
+                        brand = "IMDb",
+                        iconColor = Color(0xFFF5C518),
+                        badgeLetter = "★"
+                    )
+                )
+            }
             url.contains("srmist.edu") || url.contains("srmap.edu") || title.contains("SRM University", ignoreCase = true) -> {
                 cards.add(
                     ProfileCardData(
@@ -3198,7 +3224,7 @@ fun extractProfileCards(results: List<SearchResult>): List<ProfileCardData> {
             }
         }
     }
-    return cards.distinctBy { it.brand }.take(3)
+    return cards.distinctBy { it.brand }.take(4)
 }
 
 @Composable
