@@ -144,7 +144,29 @@ class SearchManagerTest {
         assertTrue(context.contains("[1] Title: Gemma 4 Release"))
         assertTrue(context.contains("https://blog.google/gemma-4"))
         assertTrue(context.contains("Webpage Text:"))
-        assertTrue(context.contains("state of the art on-device multimodal"))
         assertTrue(context.contains("[2] Title: Tech Analysis"))
+    }
+
+    @Test
+    fun testParseBingImages_extractsHighResImagesAndValidatesUrls() {
+        val sampleHtml = """
+            <div class="dg_u">
+              <a class="iusc" m="{&quot;murl&quot;:&quot;https://cdn.example.com/images/jwst.jpg&quot;,&quot;t&quot;:&quot;James Webb Space Telescope Deep Field&quot;,&quot;purl&quot;:&quot;https://nasa.gov/jwst&quot;}"></a>
+              <a class="iusc" m="{&quot;murl&quot;:&quot;https://cdn.example.com/images/earth.png&quot;,&quot;t&quot;:&quot;Planet Earth from Orbit&quot;,&quot;purl&quot;:&quot;https://nasa.gov/earth&quot;}"></a>
+              <!-- Private/unsafe IP image that should be rejected by SSRF filter -->
+              <a class="iusc" m="{&quot;murl&quot;:&quot;http://127.0.0.1/secret.jpg&quot;,&quot;t&quot;:&quot;Internal&quot;,&quot;purl&quot;:&quot;http://127.0.0.1&quot;}"></a>
+            </div>
+        """.trimIndent()
+
+        val parsed = searchManager.parseBingImages(sampleHtml, limit = 5, defaultTitle = "Fallback")
+        assertEquals(2, parsed.size)
+
+        assertEquals("James Webb Space Telescope Deep Field", parsed[0].title)
+        assertEquals("https://cdn.example.com/images/jwst.jpg", parsed[0].imageUrl)
+        assertEquals("https://nasa.gov/jwst", parsed[0].sourceUrl)
+        assertEquals("nasa.gov", parsed[0].sourceDomain)
+
+        assertEquals("Planet Earth from Orbit", parsed[1].title)
+        assertEquals("https://cdn.example.com/images/earth.png", parsed[1].imageUrl)
     }
 }

@@ -398,6 +398,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         return realTimeKeywords.any { keyword -> p.contains(keyword) }
     }
 
+    fun shouldQueryImages(prompt: String): Boolean {
+        val p = prompt.lowercase().trim()
+        val visualKeywords = listOf(
+            "image", "images", "photo", "photos", "picture", "pictures", "pic", "pics",
+            "diagram", "diagrams", "figure", "figures", "chart", "charts", "illustration",
+            "wallpaper", "wallpapers", "look like", "how does it look", "visualize", "visual",
+            "show me", "chupinchu", "chudu", "bomma", "bommalu"
+        )
+        return visualKeywords.any { keyword -> p.contains(keyword) }
+    }
+
     fun onInputTextChanged(text: String) {
         _inputText.value = text
     }
@@ -489,7 +500,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         _attachedDocument.value = null
         val userMessageId = UUID.randomUUID().toString()
-        val savedImagePath = if (isImage && doc?.imageBytes != null) {
+        val savedImagePath = if (isImage && doc.imageBytes != null) {
             try {
                 val dir = java.io.File(getApplication<Application>().filesDir, "chat_images").apply { mkdirs() }
                 val imgFile = java.io.File(dir, "${userMessageId}.jpg")
@@ -505,7 +516,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             id = userMessageId,
             role = MessageRole.USER,
             text = userBubbleText,
-            imageBitmap = if (isImage) doc?.previewBitmap else null,
+            imageBitmap = if (isImage) doc.previewBitmap else null,
             imagePath = savedImagePath,
             isImageAnalysis = isImage
         )
@@ -587,12 +598,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         if (!enrichedResults.isNullOrEmpty()) {
                             searchResults = enrichedResults.map { it.toSearchResult() }
                             searchContext = searchManager.formatGemmaWebContext(enrichedResults)
-                            try {
-                                searchImages = kotlinx.coroutines.withTimeoutOrNull(5000L) {
-                                    searchManager.searchImages(cleanQuery, enrichedResults)
-                                } ?: emptyList()
-                            } catch (e: Exception) {
-                                Log.w(TAG, "[$TAG] Image search failed", e)
+                            // Image search is strictly distinct from web search: only query images when user requests visual media
+                            if (shouldQueryImages(prompt)) {
+                                try {
+                                    searchImages = kotlinx.coroutines.withTimeoutOrNull(6000L) {
+                                        searchManager.searchImages(cleanQuery, enrichedResults, maxImages = 6)
+                                    } ?: emptyList()
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "[$TAG] Image search failed", e)
+                                }
                             }
                         }
                     } catch (t: Throwable) {

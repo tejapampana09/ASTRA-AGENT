@@ -266,33 +266,30 @@ open class SearchManager(
 
     /**
      * Extracts and retrieves high-signal search images for inline chat display (ChatGPT style).
+     * Strictly distinct from web search: focuses exclusively on visual diagrams, photos, and figures.
      */
     open suspend fun searchImages(
         query: String,
         enrichedPages: List<EnrichedSearchResult> = emptyList(),
         maxImages: Int = 8
     ): List<SearchImage> = withContext(Dispatchers.IO) {
+        val clean = sanitizeQuery(query)
+        if (clean.isBlank()) return@withContext emptyList()
+
         val images = mutableListOf<SearchImage>()
         val seenUrls = mutableSetOf<String>()
 
-        // 1. Gather high-fidelity OpenGraph images from verified public webpages
-        for (page in enrichedPages) {
-            val img = page.imageUrl
-            if (!img.isNullOrBlank() && seenUrls.add(img)) {
-                images.add(
-                    SearchImage(
-                        title = page.title,
-                        imageUrl = img,
-                        sourceUrl = page.url,
-                        sourceDomain = extractDomain(page.url)
-                    )
-                )
+        // 1. Primary zero-cost engine: High-resolution Bing Images
+        val bingImages = fetchBingImages(clean, maxImages)
+        for (img in bingImages) {
+            if (seenUrls.add(img.imageUrl)) {
+                images.add(img)
             }
         }
 
-        // 2. Fetch additional high-res images directly from DuckDuckGo Image Search
+        // 2. Fallback: DuckDuckGo Images if Bing returned fewer than desired
         if (images.size < maxImages) {
-            val ddgImages = fetchDuckDuckGoImages(query, maxImages - images.size)
+            val ddgImages = fetchDuckDuckGoImages(clean, maxImages - images.size)
             for (ddgImg in ddgImages) {
                 if (seenUrls.add(ddgImg.imageUrl)) {
                     images.add(ddgImg)
@@ -300,7 +297,92 @@ open class SearchManager(
             }
         }
 
+        // 3. Fallback: High-fidelity OpenGraph images from verified public webpages if engines returned empty
+        if (images.isEmpty() && enrichedPages.isNotEmpty()) {
+            for (page in enrichedPages) {
+                val img = page.imageUrl
+                if (!img.isNullOrBlank() && seenUrls.add(img) && webPageFetcher.isSafeUrl(img)) {
+                    images.add(
+                        SearchImage(
+                            title = page.title,
+                            imageUrl = img,
+                            sourceUrl = page.url,
+                            sourceDomain = extractDomain(page.url)
+                        )
+                    )
+                }
+                if (images.size >= maxImages) break
+            }
+        }
+
         images.take(maxImages)
+    }
+
+    fun fetchBingImages(query: String, limit: Int): List<SearchImage> {
+        if (query.isBlank() || limit <= 0) return emptyList()
+        return try {
+            val endpoint = URL("https://www.bing.com/images/search?q=" + URLEncoder.encode(query, "UTF-8"))
+            val conn = (endpoint.openConnection() as HttpURLConnection).apply {
+                connectTimeout = SearchConfig.IMAGE_CONNECT_TIMEOUT_MS
+                readTimeout = SearchConfig.IMAGE_READ_TIMEOUT_MS
+                requestMethod = "GET"
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+                setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                setRequestProperty("Accept-Language", "en-US,en;q=0.9")
+            }
+
+            if (conn.responseCode != 200) {
+                conn.disconnect()
+                return emptyList()
+            }
+
+            val html = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            conn.disconnect()
+
+            parseBingImages(html, limit, query)
+        } catch (e: Exception) {
+            Log.w(TAG, "[$TAG] Bing image search failed for '$query', falling back to DDG", e)
+            emptyList()
+        }
+    }
+
+    fun parseBingImages(html: String, limit: Int, defaultTitle: String): List<SearchImage> {
+        val iuscRegex = Regex("""class=["']iusc["'][^>]*m=["']([^"']+)["']""")
+        val matches = iuscRegex.findAll(html).toList()
+        val list = mutableListOf<SearchImage>()
+        val seenUrls = mutableSetOf<String>()
+
+        for (m in matches) {
+            if (list.size >= limit) break
+            val rawM = m.groupValues[1]
+            try {
+                val unescaped = rawM
+                    .replace("&quot;", "\"")
+                    .replace("&amp;", "&")
+                    .replace("&lt;", "<")
+                    .replace("&gt;", ">")
+                val json = JsonParser.parseString(unescaped).asJsonObject
+                val imgUrl = json.get("murl")?.asString?.trim() ?: continue
+                val srcUrl = json.get("purl")?.asString?.trim() ?: imgUrl
+                val title = json.get("t")?.asString?.trim()
+                    ?: json.get("desc")?.asString?.trim()
+                    ?: defaultTitle
+
+                if (imgUrl.isNotBlank() && imgUrl.startsWith("http") && seenUrls.add(imgUrl) && webPageFetcher.isSafeUrl(imgUrl)) {
+                    list.add(
+                        SearchImage(
+                            title = title,
+                            imageUrl = imgUrl,
+                            sourceUrl = srcUrl,
+                            sourceDomain = extractDomain(srcUrl)
+                        )
+                    )
+                }
+            } catch (_: Exception) {
+                // Ignore malformed card
+            }
+        }
+        return list
     }
 
     private fun fetchDuckDuckGoImages(query: String, limit: Int): List<SearchImage> {

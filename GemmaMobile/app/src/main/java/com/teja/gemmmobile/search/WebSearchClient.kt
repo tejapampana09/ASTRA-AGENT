@@ -227,6 +227,91 @@ open class WebSearchClient {
     }
 
     private fun fetchSingleQuery(query: String, maxResults: Int): List<SearchResult> {
+        // 1. Primary zero-cost engine: Bing Web Search (rich, multi-sentence snippets & current results)
+        val bingResults = fetchBingWeb(query, maxResults)
+        if (bingResults.isNotEmpty()) {
+            return bingResults
+        }
+
+        // 2. High-reliability fallback: DuckDuckGo Lite
+        return fetchDuckDuckGoLite(query, maxResults)
+    }
+
+    fun fetchBingWeb(query: String, maxResults: Int): List<SearchResult> {
+        return try {
+            val endpoint = URL("https://www.bing.com/search?q=" + URLEncoder.encode(query, "UTF-8"))
+            val conn = endpoint.openConnection() as HttpURLConnection
+            conn.requestMethod = "GET"
+            conn.connectTimeout = 4500
+            conn.readTimeout = 4500
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+            conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            conn.setRequestProperty("Accept-Language", "en-US,en;q=0.9")
+
+            if (conn.responseCode == 200) {
+                val html = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { it.readText() }
+                parseBingSearchResults(html, maxResults)
+            } else {
+                emptyList()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "[$TAG] Bing web query failed for '$query', falling back to DDG", e)
+            emptyList()
+        }
+    }
+
+    fun parseBingSearchResults(html: String, maxResults: Int): List<SearchResult> {
+        val results = mutableListOf<SearchResult>()
+        val itemRegex = Regex("""<li class="b_algo"[^>]*>(.*?)</li>""", RegexOption.DOT_MATCHES_ALL)
+        val h2Regex = Regex("""<h2[^>]*>(.*?)</h2>""", RegexOption.DOT_MATCHES_ALL)
+        val linkRegex = Regex("""<a\s+[^>]*href="([^"]+)"[^>]*>(.*?)</a>""", RegexOption.DOT_MATCHES_ALL)
+        val captionRegex = Regex("""<div class="b_caption"[^>]*>.*?<p[^>]*>(.*?)</p>""", RegexOption.DOT_MATCHES_ALL)
+        val pRegex = Regex("""<p[^>]*>(.*?)</p>""", RegexOption.DOT_MATCHES_ALL)
+
+        val items = itemRegex.findAll(html).toList()
+        for (item in items) {
+            if (results.size >= maxResults) break
+            val itemHtml = item.groupValues[1]
+
+            val h2Match = h2Regex.find(itemHtml) ?: continue
+            val linkMatch = linkRegex.find(h2Match.groupValues[1]) ?: continue
+
+            val rawUrl = linkMatch.groupValues[1]
+            val rawTitle = linkMatch.groupValues[2]
+
+            val title = cleanHtml(rawTitle)
+            val cleanUrl = decodeBingUrl(rawUrl)
+
+            val snipMatch = captionRegex.find(itemHtml) ?: pRegex.find(itemHtml)
+            val snippet = if (snipMatch != null) cleanHtml(snipMatch.groupValues[1]) else ""
+
+            if (title.isNotBlank() && cleanUrl.isNotBlank() && cleanUrl.startsWith("http")) {
+                results.add(SearchResult(title = title, url = cleanUrl, snippet = snippet.ifBlank { title }))
+            }
+        }
+        return results
+    }
+
+    fun decodeBingUrl(rawHref: String): String {
+        val unescaped = cleanHtml(rawHref)
+        val uMatch = Regex("""[?&]u=a1([a-zA-Z0-9_\-]+)""").find(unescaped)
+        if (uMatch != null) {
+            val b64Candidate = uMatch.groupValues[1]
+                .replace('-', '+')
+                .replace('_', '/')
+            val padded = b64Candidate + "=".repeat((4 - (b64Candidate.length % 4)) % 4)
+            try {
+                val decodedBytes = java.util.Base64.getDecoder().decode(padded)
+                val decodedUrl = String(decodedBytes, Charsets.UTF_8).trim()
+                if (decodedUrl.startsWith("http://") || decodedUrl.startsWith("https://")) {
+                    return decodedUrl
+                }
+            } catch (_: Exception) {}
+        }
+        return cleanUrl(unescaped)
+    }
+
+    private fun fetchDuckDuckGoLite(query: String, maxResults: Int): List<SearchResult> {
         return try {
             val endpoint = URL("https://lite.duckduckgo.com/lite/")
             val conn = endpoint.openConnection() as HttpURLConnection

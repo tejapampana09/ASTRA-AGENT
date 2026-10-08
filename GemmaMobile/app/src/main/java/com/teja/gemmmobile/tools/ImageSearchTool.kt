@@ -17,7 +17,8 @@ class ImageSearchTool(
 
     override val description: String =
         "Search the web for visual images, photographs, architecture diagrams, charts, and illustrations. " +
-        "Call this tool when the user asks to see, find, or show images, photos, architecture diagrams, or visual examples."
+        "Call this tool when the user asks to see, find, or show images, photos, architecture diagrams, or visual examples. " +
+        "DO NOT call this for text facts or news; call 'web_search' instead for web articles and facts."
 
     override val parametersJsonSchema: String = """
     {

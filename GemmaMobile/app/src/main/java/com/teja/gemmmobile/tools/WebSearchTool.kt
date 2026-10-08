@@ -17,8 +17,9 @@ class WebSearchTool(
     override val name: String = "web_search"
 
     override val description: String =
-        "Search the live internet for recent events, facts, news, websites, articles, and real-time information. " +
-        "Call this when the user asks about current facts, recent events, websites, or questions needing live web evidence."
+        "Search the live internet for recent events, facts, news, websites, articles, and real-time text information. " +
+        "Call this when the user asks about current facts, recent events, websites, or questions needing live web evidence. " +
+        "DO NOT use this tool for images or photos; use 'image_search' instead for visual media."
 
     override val parametersJsonSchema: String = """
     {
