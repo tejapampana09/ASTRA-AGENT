@@ -1261,8 +1261,10 @@ fun ChatScreen(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .navigationBarsPadding()
-                            .padding(bottom = 4.dp)
+                            .then(
+                                if (!isImeVisible) Modifier.navigationBarsPadding() else Modifier
+                            )
+                            .padding(bottom = if (isImeVisible) 4.dp else 8.dp)
                     ) {
                         // Attached Document / Image Preview (ChatGPT Floating Thumbnail Style)
                         if (attachedDocument != null) {
@@ -1622,8 +1624,10 @@ fun ChatScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .imePadding()
-                .navigationBarsPadding()
-                .padding(start = 20.dp, bottom = 72.dp),
+                .then(
+                    if (!isImeVisible) Modifier.navigationBarsPadding() else Modifier
+                )
+                .padding(start = 16.dp, bottom = 64.dp),
             contentAlignment = Alignment.BottomStart
         ) {
             Surface(
@@ -4118,11 +4122,11 @@ fun ChatInputBar(
     // Expand ONLY when keyboard is open (isImeVisible). When closed, returns to normal 80% floating bar.
     val isExpanded = isImeVisible
 
-    // ChatGPT mobile signature floating island behavior:
-    // When idle / keyboard closed: ~80% width with 34.dp margins, floating 12.dp above nav bar.
-    // When keyboard open: smoothly expands to ~94% width with 10.dp margins, docking right above keyboard.
+    // ChatGPT mobile floating island behavior:
+    // When idle / keyboard closed: floats comfortably above nav bar with 14.dp side margins.
+    // When keyboard open: docks directly above keyboard with 10.dp side margins.
     val horizontalPadding by animateDpAsState(
-        targetValue = if (isExpanded) 10.dp else 34.dp,
+        targetValue = if (isExpanded) 10.dp else 14.dp,
         animationSpec = spring(
             dampingRatio = 0.82f,
             stiffness = Spring.StiffnessMediumLow
@@ -4131,7 +4135,7 @@ fun ChatInputBar(
     )
 
     val bottomPadding by animateDpAsState(
-        targetValue = if (isExpanded) 4.dp else 12.dp,
+        targetValue = if (isExpanded) 2.dp else 4.dp,
         animationSpec = spring(
             dampingRatio = 0.82f,
             stiffness = Spring.StiffnessMediumLow
@@ -4143,9 +4147,6 @@ fun ChatInputBar(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .then(
-                if (!isImeVisible) Modifier.navigationBarsPadding() else Modifier
-            )
             .padding(start = horizontalPadding, end = horizontalPadding, top = 2.dp, bottom = bottomPadding),
         contentAlignment = Alignment.Center
     ) {
