@@ -564,7 +564,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             isImage -> {
                 val ocrText = doc.text.trim()
                 val ocrContext = if (ocrText.isNotBlank()) {
-                    "\n\n[Extracted Text from Image (OCR)]:\n${ocrText.take(1800)}"
+                    "\n\n[Extracted Text from Image (OCR)]:\n${ocrText.take(900)}"
                 } else ""
                 if (rawInput.isBlank()) {
                     "Examine this image in full detail. Transcribe and extract all visible text, numbers, headings, tables, labels, or data exactly as shown. If tabular data is present, format it into clean Markdown tables with column headers. Answer clearly, accurately, and thoroughly.$ocrContext"

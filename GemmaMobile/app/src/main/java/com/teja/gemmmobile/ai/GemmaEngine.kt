@@ -155,11 +155,11 @@ class GemmaEngine(
             if (preferCpu) {
                 // Initialize directly on CPU: Smooth, responsive, zero GPU lockups, zero phone freezing!
                 try {
-                    Log.d(TAG, "[$TAG] Initializing directly on CPU with 4 threads and 4096 token budget...")
+                    Log.d(TAG, "[$TAG] Initializing directly on CPU with 4 threads and 2048 token budget...")
                     val config = EngineConfig(
                         modelPath = modelPath,
                         backend = Backend.CPU(threadCount = 4),
-                        maxNumTokens = 4096,
+                        maxNumTokens = 2048,
                         cacheDir = effectiveCacheDir
                     )
                     testEngine = Engine(config)
@@ -184,7 +184,7 @@ class GemmaEngine(
                     val config = EngineConfig(
                         modelPath = modelPath,
                         backend = Backend.GPU(),
-                        maxNumTokens = 4096,
+                        maxNumTokens = 2048,
                         cacheDir = effectiveCacheDir
                     )
                     testEngine = Engine(config)
@@ -200,14 +200,14 @@ class GemmaEngine(
                     System.gc()
                     kotlinx.coroutines.delay(300)
 
-                    Log.i(TAG, "[$TAG] Falling back to CPU with 4 threads and 4096 token budget...")
+                    Log.i(TAG, "[$TAG] Falling back to CPU with 4 threads and 2048 token budget...")
                     _engineState.value = EngineState.Loading("Falling back to CPU...")
 
                     try {
                         val config = EngineConfig(
                             modelPath = modelPath,
                             backend = Backend.CPU(threadCount = 4),
-                            maxNumTokens = 4096,
+                            maxNumTokens = 2048,
                             cacheDir = effectiveCacheDir
                         )
                         testEngine = Engine(config)
@@ -279,7 +279,7 @@ data class EngineChunk(
         val effectiveThinking = enableThinkingOverride ?: currentConfig.enableThinking
         val effectiveThinkingBudget = if (effectiveThinking) minOf(currentConfig.thinkingBudget, 160) else 0
 
-        val totalModelMaxContext = 4096
+        val totalModelMaxContext = 2048
         val safetyMargin = 32
 
         try {
@@ -293,8 +293,9 @@ data class EngineChunk(
                 val imageTokens = if (currentImageBytes != null) 576 else 0
                 val totalPromptTokens = basePromptTokens + imageTokens
 
-                var currentThinking = effectiveThinking
-                var currentThinkBudget = effectiveThinkingBudget
+                // For multimodal vision inputs, disable thinking to reserve full KV-cache for generation
+                var currentThinking = if (currentImageBytes != null) false else effectiveThinking
+                var currentThinkBudget = if (currentImageBytes != null) 0 else effectiveThinkingBudget
 
                 var availableForOutput = totalModelMaxContext - totalPromptTokens - currentThinkBudget - safetyMargin
                 if (availableForOutput < 64 && currentThinking) {
