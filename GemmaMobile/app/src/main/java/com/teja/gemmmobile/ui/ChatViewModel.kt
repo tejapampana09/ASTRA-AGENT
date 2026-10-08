@@ -569,7 +569,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val promptForGemma = when {
             isImage -> {
                 if (rawInput.isBlank()) {
-                    "Examine this image in full detail and describe what you see."
+                    "What is in this image? Describe clearly."
                 } else {
                     rawInput.trim()
                 }
@@ -756,8 +756,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val memoryContext = memoryManager.getFormattedMemoryPrompt()
 
                 val baseSystemPrompt = _config.value.systemPrompt.ifBlank { GemmaConfig.DEFAULT_SYSTEM_PROMPT }
-                val effectiveSystemPrompt = if (searchContext.isNotBlank()) {
-                    """
+                val effectiveSystemPrompt = when {
+                    imageBytes != null -> "You are a helpful assistant. Directly and accurately describe what is in the image in plain language."
+                    searchContext.isNotBlank() -> {
+                        """
 $baseSystemPrompt
 
 ## WEB SEARCH MODE
@@ -778,9 +780,9 @@ You are provided with real-time web search results and extracted webpage content
 - **Person / Entity**: Name, Role, Key facts → Recent updates
 - **Price / Score / Stats**: State the exact figure first, then explain context
 - **General knowledge**: Direct answer → Explanation → Follow-up suggestions
-                    """.trimIndent()
-                } else {
-                    baseSystemPrompt
+                        """.trimIndent()
+                    }
+                    else -> baseSystemPrompt
                 }
 
                 val effectivePrompt = if (imageBytes != null) {
@@ -1257,7 +1259,7 @@ You are provided with real-time web search results and extracted webpage content
             try { java.io.File(userMsg.imagePath).readBytes() } catch (_: Exception) { null }
         } else null
 
-        val prompt = if (userMsg.text.isNotBlank()) userMsg.text else "Examine this image in full detail. Transcribe and extract all visible text, numbers, headings, tables, labels, or data exactly as shown. If tabular data is present, format it into clean Markdown tables with column headers. Answer clearly, accurately, and thoroughly."
+        val prompt = if (userMsg.text.isNotBlank()) userMsg.text else "What is in this image? Describe clearly."
 
         val useSearch = (_isWebSearchEnabled.value || shouldAutoSearch(prompt)) && imageBytesToSend == null
 
