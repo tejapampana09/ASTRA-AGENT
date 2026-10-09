@@ -860,9 +860,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 val imageJob = if (isProductRequest) {
                                     async {
                                         try {
-                                            val visualQ = searchManager.cleanVisualQuery(cleanQuery)
+                                            val baseVisualQ = searchManager.cleanVisualQuery(cleanQuery)
+                                            val productVisualQ = if (!baseVisualQ.lowercase().contains("product")) "$baseVisualQ product packshot" else baseVisualQ
                                             kotlinx.coroutines.withTimeoutOrNull(7000L) {
-                                                searchManager.searchImages(visualQ, maxImages = 6)
+                                                searchManager.searchImages(productVisualQ, maxImages = 6)
                                             } ?: emptyList()
                                         } catch (_: Exception) {
                                             emptyList()

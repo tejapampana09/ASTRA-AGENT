@@ -3249,12 +3249,24 @@ fun parseProductCardBlock(
         resolvedUrl.isNotBlank() -> extractDomain(resolvedUrl)
         else -> "amazon.in"
     }
+
     val matchedImage = findMatchingProductImage(title, searchImages, index)
+    val effectivePrice = price ?: run {
+        val cleanT = title.lowercase()
+        val words = cleanT.split(Regex("""[^a-zA-Z0-9]+""")).filter { it.length >= 3 }
+        val matchingRes = searchResults.firstOrNull { res ->
+            val rt = res.title.lowercase()
+            words.count { rt.contains(it) } >= 2
+        } ?: searchResults.getOrNull(index)
+        matchingRes?.snippet?.let { snip ->
+            Regex("""(?:₹|Rs\.?\s*)\s*(\d[\d,]*\b)""").find(snip)?.value
+        }
+    }
 
     return ProductCardData(
         title = title.removePrefix("**").removeSuffix("**").trim(),
         badge = badge,
-        price = price,
+        price = effectivePrice,
         description = descLines.joinToString(" ").trim(),
         sourceDomain = finalDomain,
         url = resolvedUrl,
@@ -3285,14 +3297,19 @@ fun resolveProductUrl(title: String, rawUrl: String, results: List<SearchResult>
     if (shoppingDomains.any { lower.contains(it) } || lower.contains("/dp/") || lower.contains("/p/") || lower.contains("/product/")) {
         return rawUrl
     }
-    // Check if any search result has a real shopping domain
+
+    // Match specific product title keywords against real shopping results
+    val clean = title.lowercase()
+    val words = clean.split(Regex("""[^a-zA-Z0-9]+""")).filter { it.length >= 3 }
     val storeResult = results.firstOrNull { res ->
         val resUrl = res.url.lowercase()
-        shoppingDomains.any { resUrl.contains(it) }
+        val resTitle = res.title.lowercase()
+        shoppingDomains.any { resUrl.contains(it) } && words.any { resTitle.contains(it) }
     }
     if (storeResult != null) {
         return storeResult.url
     }
+
     // Fall back to direct Amazon.in product search query so user can buy the exact item
     val cleanTitle = title.replace(Regex("""^\d+\.\s*"""), "").replace(Regex("""\([^)]*\)"""), "").trim()
     val encoded = try {
@@ -3306,12 +3323,12 @@ fun resolveProductUrl(title: String, rawUrl: String, results: List<SearchResult>
 fun findMatchingResultUrl(title: String, results: List<SearchResult>): String {
     if (results.isEmpty()) return ""
     val clean = title.lowercase()
-    val words = clean.split(Regex("""[^a-zA-Z0-9]+""")).filter { it.length > 2 }
+    val words = clean.split(Regex("""[^a-zA-Z0-9]+""")).filter { it.length >= 3 }
     val match = results.firstOrNull { res ->
         val rtitle = res.title.lowercase()
         words.count { rtitle.contains(it) } >= 2
     }
-    return match?.url ?: results.firstOrNull()?.url ?: ""
+    return match?.url ?: ""
 }
 
 fun extractFallbackProductCards(
@@ -3352,13 +3369,17 @@ fun extractFallbackProductCards(
         val imgUrl = findMatchingProductImage(cleanTitle, images, idx)
         val purchaseUrl = resolveProductUrl(cleanTitle, res.url, results)
 
+        // Try extracting real price from snippet (e.g. ₹499 or Rs 399)
+        val priceMatch = Regex("""(?:₹|Rs\.?\s*)\s*(\d[\d,]*\b)""").find(res.snippet)
+        val extractedPrice = priceMatch?.value
+
         cards.add(
             ProductCardData(
                 title = cleanTitle,
                 badge = badge,
-                price = null,
+                price = extractedPrice,
                 description = res.snippet.take(200).trim(),
-                sourceDomain = if (purchaseUrl.contains("amazon")) "amazon.in" else domain,
+                sourceDomain = if (purchaseUrl.contains("amazon")) "amazon.in" else if (purchaseUrl.contains("flipkart")) "flipkart.com" else domain,
                 url = purchaseUrl,
                 imageUrl = imgUrl
             )

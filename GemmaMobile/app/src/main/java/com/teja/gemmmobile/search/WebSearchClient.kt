@@ -190,14 +190,21 @@ open class WebSearchClient {
             Log.d(TAG, "[$TAG] Initiating broad parallel web search for: '$clean' (raw: '$query')")
 
             val isProduct = isProductSearch(clean)
-            val effectiveBingQuery = if (isProduct && !clean.lowercase().contains("buy") && !clean.lowercase().contains("price")) {
-                "$clean buy online Amazon Flipkart price"
+            val effectiveBingQuery = if (isProduct && !clean.lowercase().contains("amazon") && !clean.lowercase().contains("flipkart")) {
+                "$clean buy online Amazon Flipkart India price"
             } else clean
 
-            // Concurrently query DuckDuckGo Lite, Bing Web Search, and Wikipedia API in parallel
+            // Concurrently query search engines in parallel:
+            // For product queries: DDG HTML (best for Amazon.in, Flipkart, Indian prices) + Bing Web Search
             val (ddgCandidates, bingCandidates, wikiCandidates) = coroutineScope {
                 val ddgDeferred = async {
-                    try { fetchDuckDuckGoLite(clean, maxResults * 2) } catch (_: Exception) { emptyList() }
+                    try {
+                        if (isProduct) {
+                            fetchDuckDuckGoHtml(clean, maxResults * 2)
+                        } else {
+                            fetchDuckDuckGoLite(clean, maxResults * 2)
+                        }
+                    } catch (_: Exception) { emptyList() }
                 }
                 val bingDeferred = async {
                     try { fetchBingWeb(effectiveBingQuery, maxResults * 2) } catch (_: Exception) { emptyList() }
@@ -211,11 +218,12 @@ open class WebSearchClient {
             }
 
             val combined = mutableListOf<SearchResult>()
-            // Bing is PRIMARY for all queries (fast, broad index, zero CAPTCHA)
-            combined.addAll(bingCandidates)
             if (isProduct) {
+                // For shopping: DDG HTML brings actual Amazon.in and Flipkart product links with prices, Bing adds more stores
                 combined.addAll(ddgCandidates)
+                combined.addAll(bingCandidates)
             } else {
+                combined.addAll(bingCandidates)
                 combined.addAll(wikiCandidates)
                 combined.addAll(ddgCandidates)
             }
@@ -424,7 +432,7 @@ open class WebSearchClient {
             conn.readTimeout = 4000
             conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
             conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-            conn.setRequestProperty("Accept-Language", "en-US,en;q=0.9")
+            conn.setRequestProperty("Accept-Language", "en-IN,en;q=0.9,en-US;q=0.8")
 
             if (conn.responseCode == 200) {
                 val html = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { it.readText() }
