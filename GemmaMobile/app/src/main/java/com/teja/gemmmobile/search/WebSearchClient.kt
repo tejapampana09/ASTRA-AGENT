@@ -44,15 +44,57 @@ open class WebSearchClient {
         var query = raw.trim()
 
         val prefixes = listOf(
-            "can you please search the web for ", "can you please search for ", "can you please search ",
-            "can you search the web for ", "can you search web for ", "can you search for ", "can you search ",
-            "please search the web for ", "please search web for ", "please search for ", "please search ",
-            "search the web for ", "search the web ", "search web for ", "search web ",
+            "can you please search the web and give product links for ",
+            "can you please search the web and give product links ",
+            "can you please search the web and give links for ",
+            "can you please search the web and give links ",
+            "can you please search web and give product links for ",
+            "can you please search web and give product links ",
+            "can you please search web and give links for ",
+            "can you please search web and give links ",
+            "can you please search web and give ",
+            "can you please search web and ",
+            "can you please search the web and ",
+            "can you please search the web for ",
+            "can you please search web for ",
+            "can you please search for ",
+            "can you please search ",
+            "can you search the web and give product links ",
+            "can you search web and give product links ",
+            "can you search web and give links ",
+            "can you search web and ",
+            "can you search the web and ",
+            "can you search the web for ",
+            "can you search web for ",
+            "can you search for ",
+            "can you search ",
+            "please search the web and give product links ",
+            "please search web and give product links ",
+            "please search web and give links ",
+            "please search web and give ",
+            "please search web and ",
+            "please search the web and ",
+            "please search the web for ",
+            "please search web for ",
+            "please search for ",
+            "please search ",
+            "search the web and give product links ",
+            "search web and give product links ",
+            "search web and give links ",
+            "search web and give ",
+            "search web and ",
+            "search the web and ",
+            "search the web for ",
+            "search the web ",
+            "search web for ",
+            "search web ",
             "browse the web for ", "browse the web ", "browse web for ", "browse web ", "browse for ", "browse ",
             "google search for ", "google search ", "google for ", "google ",
             "look up on the web for ", "look up on web for ", "look up for ", "look up ",
             "find information about ", "find information on ", "find info about ", "find info on ",
             "find out about ", "find out ", "find for ", "find ",
+            "give product links for ", "give product links ", "give links for ", "give links ", "give options for ", "give options ",
+            "web and give product links for ", "web and give product links ", "web and give links ", "web and ",
             "tell me who is ", "tell me who was ", "tell me what is ", "tell me what was ", "tell me about ", "tell me ",
             "search for ", "search ",
             "who is ", "who was ", "who are ", "who were ",
@@ -64,7 +106,8 @@ open class WebSearchClient {
         )
 
         val teluguPrefixes = listOf(
-            "naaku ", "dayachesi ", "konchem ", "asalu "
+            "naaku ", "dayachesi ", "konchem ", "asalu ",
+            "web search chesi ", "net lo chusi ", "chusi cheppu ", "links ivvu "
         )
 
         val teluguSuffixes = listOf(
@@ -122,6 +165,18 @@ open class WebSearchClient {
         // Strip trailing punctuation like '?', '.', '!', quotes, commas
         query = query.trim('?', '.', '!', ',', '"', '\'', ':', ';', ' ')
         return query.ifBlank { raw.trim() }
+    }
+
+    /**
+     * Determines whether a query string is too generic or conversational to search alone.
+     */
+    fun isGenericQuery(query: String): Boolean {
+        val q = query.lowercase().trim()
+        val genericTerms = setOf(
+            "", "product links", "links", "products", "options", "it", "them", "this", "these",
+            "sites", "stores", "web", "online", "details", "info", "recommendations", "suggestions"
+        )
+        return q in genericTerms || q.length < 3
     }
 
     /**

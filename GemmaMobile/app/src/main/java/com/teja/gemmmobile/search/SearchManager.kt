@@ -95,6 +95,7 @@ open class SearchManager(
      * Sanitizes user input queries by stripping filler conversational commands.
      */
     fun sanitizeQuery(raw: String): String = webSearchClient.sanitizeQuery(raw)
+    fun isGenericQuery(query: String): Boolean = webSearchClient.isGenericQuery(query)
 
     /**
      * Normalizes a URL by stripping tracking parameters, fragments, and standardizing host case.

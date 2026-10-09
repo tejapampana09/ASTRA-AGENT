@@ -349,6 +349,7 @@ private fun TextBlockView(
 fun CopyIconButton(
     textToCopy: String,
     modifier: Modifier = Modifier,
+    showLabel: Boolean = false,
     toastMessage: String = "Copied to clipboard"
 ) {
     val context = LocalContext.current
@@ -363,17 +364,21 @@ fun CopyIconButton(
         }
     }
 
-    Box(
+    val greyColor = Color(0xFF9E9E9E)
+    val successColor = Color(0xFF10A37F)
+
+    Row(
         modifier = modifier
-            .size(32.dp)
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(6.dp))
             .clickable {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 clipboard.setText(AnnotatedString(textToCopy))
                 isCopied = true
                 Toast.makeText(context, toastMessage, Toast.LENGTH_SHORT).show()
-            },
-        contentAlignment = Alignment.Center
+            }
+            .padding(horizontal = 6.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         AnimatedContent(
             targetState = isCopied,
@@ -382,20 +387,24 @@ fun CopyIconButton(
             },
             label = "CopyIconAnimation"
         ) { copied ->
-            if (copied) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = "Copied",
-                    tint = Color(0xFF10A37F), // ChatGPT emerald green checkmark
-                    modifier = Modifier.size(18.dp)
+                    imageVector = if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
+                    contentDescription = if (copied) "Copied" else "Copy code",
+                    tint = if (copied) successColor else greyColor,
+                    modifier = Modifier.size(14.dp)
                 )
-            } else {
-                Icon(
-                    imageVector = Icons.Default.ContentCopy,
-                    contentDescription = "Copy",
-                    tint = Color(0xFFC7C7CC), // Apple/ChatGPT clean light gray
-                    modifier = Modifier.size(18.dp)
-                )
+                if (showLabel) {
+                    Text(
+                        text = if (copied) "Copied!" else "Copy code",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = if (copied) successColor else greyColor
+                    )
+                }
             }
         }
     }
@@ -538,11 +547,12 @@ private fun ProgrammingCodeBlockView(
             .clip(RoundedCornerShape(16.dp))
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // Header Bar: language name on left, copy icon on right (same background, no contrasting header!)
+            // Header Bar: language name on left, "Copy code" in sleek grey on right
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .background(Color(0xFF282828))
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -552,15 +562,15 @@ private fun ProgrammingCodeBlockView(
                         fontFamily = FontFamily.Default,
                         fontWeight = FontWeight.Medium,
                         fontSize = 12.sp,
-                        color = Color(0xFF8E8E93)
+                        color = Color(0xFF9E9E9E)
                     )
                 )
 
-                CopyIconButton(textToCopy = code)
+                CopyIconButton(textToCopy = code, showLabel = true)
             }
 
             // Subtle divider line
-            HorizontalDivider(color = Color(0xFF2E2E32), thickness = 0.8.dp)
+            HorizontalDivider(color = Color(0xFF333336), thickness = 0.8.dp)
 
             // Code Content
             Box(

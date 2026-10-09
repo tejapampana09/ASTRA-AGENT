@@ -216,6 +216,17 @@ class ToolRegistry {
             }
         }
 
+        // 2. Check function-call style fallback: e.g. web_search(query="...") or web_search("...")
+        val fnRegex = Regex("""(?:call:)?(web_search|image_search|manage_memory)\s*\(\s*(?:(?:query|q)=)?\s*["']([^"']+)["']\s*\)""", RegexOption.IGNORE_CASE)
+        val fnMatch = fnRegex.find(rawText)
+        if (fnMatch != null) {
+            val toolName = resolveToolName(fnMatch.groupValues[1])
+            val queryVal = fnMatch.groupValues[2].trim()
+            if (tools.containsKey(toolName) && queryVal.isNotBlank()) {
+                return ToolCallRequest(name = toolName, arguments = mapOf("query" to queryVal))
+            }
+        }
+
         return null
     }
 

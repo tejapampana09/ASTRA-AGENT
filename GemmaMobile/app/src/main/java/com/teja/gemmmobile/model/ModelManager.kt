@@ -80,7 +80,10 @@ class ModelManager(private val context: Context) {
         val savedPrompt = prefs.getString("config_system_prompt", null)
         val effectivePrompt = if (savedPrompt.isNullOrBlank() ||
             savedPrompt.contains("CONVERSATIONAL RESPONSE STYLE") ||
-            savedPrompt.contains("LANGUAGE RULE (CRITICAL)")
+            savedPrompt.contains("LANGUAGE RULE (CRITICAL)") ||
+            savedPrompt.contains("Break down key concepts or architecture using") ||
+            savedPrompt.contains("Begin with a clear 1-2 sentence core overview") ||
+            savedPrompt.contains("Interactive Engagement")
         ) {
             GemmaConfig.DEFAULT_SYSTEM_PROMPT
         } else {

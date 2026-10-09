@@ -22,6 +22,8 @@ import com.teja.gemmmobile.ocr.DocumentOcrHelper
 import com.teja.gemmmobile.ocr.ExtractedDocument
 import com.teja.gemmmobile.search.SearchResult
 import com.teja.gemmmobile.search.ProfileAvatarLoader
+import androidx.compose.runtime.Immutable
+import androidx.compose.ui.text.style.TextDecoration
 import com.teja.gemmmobile.util.ExportHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -1283,33 +1285,22 @@ fun ChatScreen(
 
             // Bottom Vignette & Floating Input Dock
             if (installState is ModelInstallState.Installed && (engineState is EngineState.Ready || engineState is EngineState.Generating)) {
-                // 1. Full-bleed Bottom Vignette extending seamlessly to the screen's bottom physical edge
+                // Bottom Vignette Gradient: Smooth feathering into chat from bottom edge
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(inputDockHeightDp + navBarBottomDp + 48.dp)
+                        .height(inputDockHeightDp + navBarBottomDp + 36.dp)
                         .align(Alignment.BottomCenter)
                         .background(
                             Brush.verticalGradient(
                                 0.0f to Color.Transparent,
-                                0.20f to currentTheme.background.copy(alpha = 0.25f),
-                                0.50f to currentTheme.background.copy(alpha = 0.70f),
-                                0.78f to currentTheme.background,
-                                1.0f to currentTheme.background
+                                0.30f to currentTheme.background.copy(alpha = 0.20f),
+                                0.60f to currentTheme.background.copy(alpha = 0.55f),
+                                0.85f to currentTheme.background.copy(alpha = 0.82f),
+                                1.0f to currentTheme.background.copy(alpha = 0.95f)
                             )
                         )
                 )
-
-                // 2. Solid color fill strictly covering the system navigation bar area
-                if (navBarBottomDp > 0.dp) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(navBarBottomDp)
-                            .align(Alignment.BottomCenter)
-                            .background(currentTheme.background)
-                    )
-                }
 
                 // 3. Floating Input Dock and Actions (safely padded above system navigation bar)
                 Box(
@@ -2431,14 +2422,47 @@ fun MessageBubble(
                         Spacer(modifier = Modifier.height(8.dp))
                     }
                     EmailDraftBox(draftText = body)
+                } else if (effectiveText.contains(":::product", ignoreCase = true)) {
+                    val productSegments = remember(effectiveText, message.searchImages, message.searchResults) {
+                        parseProductMessageSegments(effectiveText, message.searchImages, message.searchResults)
+                    }
+                    for (seg in productSegments) {
+                        when (seg) {
+                            is MessagePart.Text -> {
+                                if (seg.markdown.isNotBlank()) {
+                                    MarkdownText(text = seg.markdown, isUser = false, searchResults = message.searchResults)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                }
+                            }
+                            is MessagePart.Product -> {
+                                ProductRecommendationCard(card = seg.card)
+                                Spacer(modifier = Modifier.height(6.dp))
+                            }
+                        }
+                    }
                 } else {
                     MarkdownText(text = effectiveText, isUser = false, searchResults = message.searchResults)
                 }
             }
 
+                // Fallback Product Recommendation Cards (when model outputted text/bullets and not :::product tags)
+                val hasInlineProducts = effectiveText.contains(":::product", ignoreCase = true)
+                val fallbackProductCards = if (!hasInlineProducts && !message.isStreaming && effectiveText.isNotEmpty() && message.searchResults.isNotEmpty()) {
+                    remember(message.searchResults, message.searchImages) {
+                        extractFallbackProductCards(message.searchResults, message.searchImages)
+                    }
+                } else emptyList()
+
+                if (fallbackProductCards.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    ProductCardsList(cards = fallbackProductCards)
+                }
+
                 // Search Images Carousel & In-App Preview (ChatGPT style)
+                // Only show if no product cards were rendered to avoid duplicate images
+                val hasAnyProductCards = hasInlineProducts || fallbackProductCards.isNotEmpty()
                 var previewImage by remember { mutableStateOf<SearchImage?>(null) }
-                if (message.searchImages.isNotEmpty()) {
+                if (message.searchImages.isNotEmpty() && !hasAnyProductCards) {
                     Spacer(modifier = Modifier.height(8.dp))
                     SearchImagesCarousel(
                         images = message.searchImages,
@@ -3097,6 +3121,435 @@ fun DomainFaviconBadge(
                 fontSize = (size.value * 0.52f).sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White
+            )
+        }
+    }
+}
+
+/**
+ * Data model for ChatGPT-style product recommendation cards.
+ */
+@Immutable
+data class ProductCardData(
+    val title: String,
+    val badge: String? = null,
+    val price: String? = null,
+    val description: String = "",
+    val sourceDomain: String = "",
+    val url: String = "",
+    val imageUrl: String? = null
+)
+
+sealed class MessagePart {
+    data class Text(val markdown: String) : MessagePart()
+    data class Product(val card: ProductCardData) : MessagePart()
+}
+
+fun parseProductMessageSegments(
+    rawText: String,
+    searchImages: List<SearchImage>,
+    searchResults: List<SearchResult>
+): List<MessagePart> {
+    if (!rawText.contains(":::product", ignoreCase = true)) {
+        return listOf(MessagePart.Text(rawText))
+    }
+
+    val parts = mutableListOf<MessagePart>()
+    val productBlockRegex = Regex(":::product\\s*([\\s\\S]*?)(?::::|$)", RegexOption.IGNORE_CASE)
+
+    var lastIndex = 0
+    var cardIndex = 0
+
+    for (match in productBlockRegex.findAll(rawText)) {
+        val start = match.range.first
+        if (start > lastIndex) {
+            val preText = rawText.substring(lastIndex, start).trim()
+            if (preText.isNotEmpty()) {
+                parts.add(MessagePart.Text(preText))
+            }
+        }
+
+        val blockContent = match.groupValues[1].trim()
+        val card = parseProductCardBlock(blockContent, searchImages, searchResults, cardIndex)
+        if (card != null) {
+            parts.add(MessagePart.Product(card))
+            cardIndex++
+        }
+
+        lastIndex = match.range.last + 1
+    }
+
+    if (lastIndex < rawText.length) {
+        val postText = rawText.substring(lastIndex).trim()
+        if (postText.isNotEmpty()) {
+            parts.add(MessagePart.Text(postText))
+        }
+    }
+
+    return if (parts.isEmpty()) listOf(MessagePart.Text(rawText)) else parts
+}
+
+fun parseProductCardBlock(
+    block: String,
+    searchImages: List<SearchImage>,
+    searchResults: List<SearchResult>,
+    index: Int
+): ProductCardData? {
+    if (block.isBlank()) return null
+
+    var title = ""
+    var badge: String? = null
+    var price: String? = null
+    val descLines = mutableListOf<String>()
+    var source = ""
+    var url = ""
+
+    val lines = block.lines()
+    for (line in lines) {
+        val trimmed = line.trim()
+        when {
+            trimmed.startsWith("title:", ignoreCase = true) -> {
+                title = trimmed.substringAfter(":").trim()
+            }
+            trimmed.startsWith("badge:", ignoreCase = true) || trimmed.startsWith("pick:", ignoreCase = true) -> {
+                val b = trimmed.substringAfter(":").trim()
+                if (b.isNotBlank()) badge = b
+            }
+            trimmed.startsWith("price:", ignoreCase = true) || trimmed.startsWith("specs:", ignoreCase = true) -> {
+                val p = trimmed.substringAfter(":").trim()
+                if (p.isNotBlank()) price = p
+            }
+            trimmed.startsWith("source:", ignoreCase = true) || trimmed.startsWith("store:", ignoreCase = true) -> {
+                source = trimmed.substringAfter(":").trim()
+            }
+            trimmed.startsWith("url:", ignoreCase = true) || trimmed.startsWith("link:", ignoreCase = true) -> {
+                url = trimmed.substringAfter(":").trim()
+            }
+            trimmed.startsWith("description:", ignoreCase = true) || trimmed.startsWith("desc:", ignoreCase = true) -> {
+                val d = trimmed.substringAfter(":").trim()
+                if (d.isNotBlank()) descLines.add(d)
+            }
+            trimmed.isNotBlank() && !trimmed.startsWith(":::") -> {
+                descLines.add(trimmed)
+            }
+        }
+    }
+
+    if (title.isBlank()) {
+        title = lines.firstOrNull { it.isNotBlank() && !it.startsWith(":::") }?.trim() ?: "Recommended Product"
+    }
+
+    val matchedImage = findMatchingProductImage(title, searchImages, index)
+    val finalUrl = if (url.isNotBlank()) url else findMatchingResultUrl(title, searchResults)
+    val finalDomain = if (source.isNotBlank()) source else if (finalUrl.isNotBlank()) extractDomain(finalUrl) else ""
+
+    return ProductCardData(
+        title = title.removePrefix("**").removeSuffix("**").trim(),
+        badge = badge,
+        price = price,
+        description = descLines.joinToString(" ").trim(),
+        sourceDomain = finalDomain,
+        url = finalUrl,
+        imageUrl = matchedImage
+    )
+}
+
+fun findMatchingProductImage(title: String, images: List<SearchImage>, index: Int): String? {
+    if (images.isEmpty()) return null
+    val clean = title.lowercase()
+    val words = clean.split(Regex("""[^a-zA-Z0-9]+""")).filter { it.length > 2 }
+    val match = images.firstOrNull { img ->
+        val ititle = img.title.lowercase()
+        words.count { ititle.contains(it) } >= 2
+    }
+    return match?.imageUrl ?: images.getOrNull(index)?.imageUrl ?: images.firstOrNull()?.imageUrl
+}
+
+fun findMatchingResultUrl(title: String, results: List<SearchResult>): String {
+    if (results.isEmpty()) return ""
+    val clean = title.lowercase()
+    val words = clean.split(Regex("""[^a-zA-Z0-9]+""")).filter { it.length > 2 }
+    val match = results.firstOrNull { res ->
+        val rtitle = res.title.lowercase()
+        words.count { rtitle.contains(it) } >= 2
+    }
+    return match?.url ?: results.firstOrNull()?.url ?: ""
+}
+
+fun extractFallbackProductCards(
+    results: List<SearchResult>,
+    images: List<SearchImage>
+): List<ProductCardData> {
+    val shoppingDomains = setOf(
+        "amazon.in", "amazon.com", "flipkart.com", "myntra.com", "nykaa.com",
+        "beminimalist.co", "thedermaco.com", "aqualogica.in", "croma.com",
+        "91mobiles.com", "smartprix.com", "gsmarena.com", "apollopharmacy.in"
+    )
+
+    val candidates = results.filter { res ->
+        val url = res.url.lowercase()
+        val title = res.title.lowercase()
+        val snip = res.snippet.lowercase()
+        shoppingDomains.any { url.contains(it) } ||
+        title.contains("buy ") || title.contains("price") || title.contains("review") ||
+        snip.contains("₹") || snip.contains("rs.") || snip.contains("price:") || snip.contains("best ")
+    }
+
+    val cards = mutableListOf<ProductCardData>()
+    for ((idx, res) in candidates.take(3).withIndex()) {
+        val cleanTitle = res.title
+            .substringBefore(" - ")
+            .substringBefore(" | ")
+            .substringBefore(" : ")
+            .trim()
+
+        val badge = when (idx) {
+            0 -> "Top Recommendation"
+            1 -> "Best Value Pick"
+            else -> "Alternative Option"
+        }
+
+        val domain = extractDomain(res.url)
+        val imgUrl = findMatchingProductImage(cleanTitle, images, idx)
+
+        cards.add(
+            ProductCardData(
+                title = cleanTitle,
+                badge = badge,
+                price = null,
+                description = res.snippet.take(200).trim(),
+                sourceDomain = domain,
+                url = res.url,
+                imageUrl = imgUrl
+            )
+        )
+    }
+    return cards
+}
+
+@Composable
+fun ProductRecommendationCard(
+    card: ProductCardData,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = Color(0xFF141417),
+        border = BorderStroke(1.dp, Color(0xFF26262C)),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            // Left: White rounded thumbnail holding product packshot
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = Color.White,
+                modifier = Modifier
+                    .width(92.dp)
+                    .height(115.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    ProductImageThumbnail(
+                        imageUrl = card.imageUrl,
+                        pageUrl = card.url,
+                        title = card.title
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            // Right: Product details column
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                // Title
+                Text(
+                    text = card.title,
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        letterSpacing = (-0.2).sp
+                    ),
+                    color = Color.White
+                )
+
+                // Green badge pill (e.g. "Best evidence-led budget pick")
+                if (!card.badge.isNullOrBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .background(Color(0xFF0F3822), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 7.dp, vertical = 2.5.dp)
+                    ) {
+                        Text(
+                            text = card.badge,
+                            color = Color(0xFF25D366),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        )
+                    }
+                }
+
+                // Price line (muted grey)
+                if (!card.price.isNullOrBlank()) {
+                    Text(
+                        text = card.price,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.Normal
+                        ),
+                        color = Color(0xFF9E9E9E)
+                    )
+                }
+
+                // Description snippet
+                if (card.description.isNotBlank()) {
+                    Text(
+                        text = card.description,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontSize = 13.5.sp,
+                            lineHeight = 18.5.sp
+                        ),
+                        color = Color(0xFFEDEDED)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(2.dp))
+
+                // Source domain capsule pill
+                if (card.sourceDomain.isNotBlank() || card.url.isNotBlank()) {
+                    val domain = card.sourceDomain.ifBlank { extractDomain(card.url) }
+                    Surface(
+                        shape = CircleShape,
+                        color = Color(0xFF222226),
+                        border = BorderStroke(0.8.dp, Color(0xFF34343A)),
+                        modifier = Modifier.clip(CircleShape)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            DomainFaviconBadge(
+                                url = card.url,
+                                size = 12.dp
+                            )
+                            Text(
+                                text = domain,
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                color = Color(0xFFB0B0B5)
+                            )
+                        }
+                    }
+                }
+
+                // Action link (e.g. "Official product & details ↗")
+                if (card.url.isNotBlank()) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                try {
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(card.url))
+                                    context.startActivity(intent)
+                                } catch (_: Exception) {}
+                            }
+                            .padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Official product & details ↗",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.Medium,
+                                textDecoration = TextDecoration.Underline
+                            ),
+                            color = Color(0xFFE4E4E7)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ProductCardsList(
+    cards: List<ProductCardData>,
+    modifier: Modifier = Modifier
+) {
+    if (cards.isEmpty()) return
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        cards.forEach { card ->
+            ProductRecommendationCard(card = card)
+        }
+    }
+}
+
+@Composable
+fun ProductImageThumbnail(
+    imageUrl: String?,
+    pageUrl: String,
+    title: String,
+    modifier: Modifier = Modifier
+) {
+    var thumbBitmap by remember(imageUrl, pageUrl) {
+        mutableStateOf<Bitmap?>(
+            imageUrl?.let { ProfileAvatarLoader.getCachedImage(it) }
+                ?: ProfileAvatarLoader.getCached(pageUrl)
+        )
+    }
+
+    LaunchedEffect(imageUrl, pageUrl) {
+        if (thumbBitmap == null) {
+            withContext(Dispatchers.IO) {
+                val bmp = if (!imageUrl.isNullOrBlank()) {
+                    ProfileAvatarLoader.loadImage(imageUrl)
+                } else if (pageUrl.isNotBlank()) {
+                    ProfileAvatarLoader.loadAvatar(pageUrl)
+                } else null
+                thumbBitmap = bmp
+            }
+        }
+    }
+
+    val currentBmp = thumbBitmap
+    if (currentBmp != null) {
+        androidx.compose.foundation.Image(
+            bitmap = currentBmp.asImageBitmap(),
+            contentDescription = title,
+            contentScale = ContentScale.Fit,
+            modifier = modifier.fillMaxSize()
+        )
+    } else {
+        Box(
+            modifier = modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            DomainFaviconBadge(
+                url = pageUrl.ifBlank { imageUrl ?: "" },
+                size = 32.dp
             )
         }
     }
