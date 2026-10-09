@@ -202,65 +202,73 @@ open class SearchManager(
             return@withContext cached.second
         }
 
-        // 1. Try Serper.dev (1,900+ credits, ultra-fast <500ms POST JSON Google Search & Shopping)
-        if (serperClient.isAvailable()) {
-            try {
-                val serperResult = serperClient.search(cleanQuery, maxResults, isProduct = isProduct)
-                if (serperResult != null && serperResult.results.isNotEmpty()) {
-                    Log.d(TAG, "[$TAG] Serper.dev returned ${serperResult.results.size} high-fidelity results and ${serperResult.images.size} images")
-                    val enriched = serperResult.results.map { res ->
-                        EnrichedSearchResult(
-                            title = res.title,
-                            url = normalizeUrl(res.url),
-                            snippet = res.snippet,
-                            pageContent = "",
-                            fetchSucceeded = false,
-                            imageUrl = serperResult.images.firstOrNull { it.title == res.title }?.imageUrl,
-                            sourceType = ContentSourceType.SEARCH_SNIPPET
+        // 1. For PRODUCTS & SHOPPING ONLY: Use Serper.dev / SerpApi for real prices, direct store links, packshots
+        // Normal web searches (isProduct == false) will NEVER touch Serper or SerpApi (0 credits used, 100% free Bing/DDG)
+        if (isProduct) {
+            // Try Serper.dev first (1,900+ credits)
+            if (serperClient.isAvailable()) {
+                try {
+                    val serperResult = serperClient.search(cleanQuery, maxResults, isProduct = true)
+                    if (serperResult != null && serperResult.results.isNotEmpty()) {
+                        Log.d(TAG, "[$TAG] Serper.dev returned ${serperResult.results.size} product results and ${serperResult.images.size} images")
+                        val enriched = serperResult.results.map { res ->
+                            EnrichedSearchResult(
+                                title = res.title,
+                                url = normalizeUrl(res.url),
+                                snippet = res.snippet,
+                                pageContent = "",
+                                fetchSucceeded = false,
+                                imageUrl = serperResult.images.firstOrNull { it.title == res.title }?.imageUrl,
+                                sourceType = ContentSourceType.SEARCH_SNIPPET
+                            )
+                        }
+                        val response = SearchResponse(
+                            status = SearchStatus.SUCCESS,
+                            results = enriched,
+                            images = serperResult.images
                         )
+                        searchCache[cacheKey] = Pair(System.currentTimeMillis(), response)
+                        return@withContext response
                     }
-                    val response = SearchResponse(
-                        status = SearchStatus.SUCCESS,
-                        results = enriched,
-                        images = serperResult.images
-                    )
-                    searchCache[cacheKey] = Pair(System.currentTimeMillis(), response)
-                    return@withContext response
+                } catch (t: Throwable) {
+                    Log.w(TAG, "[$TAG] Serper.dev product search failed, falling back to SerpApi", t)
                 }
-            } catch (t: Throwable) {
-                Log.w(TAG, "[$TAG] Serper.dev search failed, falling back to SerpApi", t)
+            }
+
+            // Try SerpApi backup (230+ credits)
+            if (serpApiClient.isAvailable()) {
+                try {
+                    val serpResult = serpApiClient.search(cleanQuery, maxResults, isProduct = true)
+                    if (serpResult != null && serpResult.results.isNotEmpty()) {
+                        Log.d(TAG, "[$TAG] SerpApi returned ${serpResult.results.size} product results and ${serpResult.images.size} images")
+                        val enriched = serpResult.results.map { res ->
+                            EnrichedSearchResult(
+                                title = res.title,
+                                url = normalizeUrl(res.url),
+                                snippet = res.snippet,
+                                pageContent = "",
+                                fetchSucceeded = false,
+                                imageUrl = serpResult.images.firstOrNull { it.title == res.title }?.imageUrl,
+                                sourceType = ContentSourceType.SEARCH_SNIPPET
+                            )
+                        }
+                        val response = SearchResponse(
+                            status = SearchStatus.SUCCESS,
+                            results = enriched,
+                            images = serpResult.images
+                        )
+                        searchCache[cacheKey] = Pair(System.currentTimeMillis(), response)
+                        return@withContext response
+                    }
+                } catch (t: Throwable) {
+                    Log.w(TAG, "[$TAG] SerpApi product search failed, falling back to WebSearchClient", t)
+                }
             }
         }
 
-        // 2. Try SerpApi (Backup 230+ credits Google Search & Google Shopping in India)
-        if (serpApiClient.isAvailable()) {
-            try {
-                val serpResult = serpApiClient.search(cleanQuery, maxResults, isProduct = isProduct)
-                if (serpResult != null && serpResult.results.isNotEmpty()) {
-                    Log.d(TAG, "[$TAG] SerpApi returned ${serpResult.results.size} high-fidelity results and ${serpResult.images.size} images")
-                    val enriched = serpResult.results.map { res ->
-                        EnrichedSearchResult(
-                            title = res.title,
-                            url = normalizeUrl(res.url),
-                            snippet = res.snippet,
-                            pageContent = "",
-                            fetchSucceeded = false,
-                            imageUrl = serpResult.images.firstOrNull { it.title == res.title }?.imageUrl,
-                            sourceType = ContentSourceType.SEARCH_SNIPPET
-                        )
-                    }
-                    val response = SearchResponse(
-                        status = SearchStatus.SUCCESS,
-                        results = enriched,
-                        images = serpResult.images
-                    )
-                    searchCache[cacheKey] = Pair(System.currentTimeMillis(), response)
-                    return@withContext response
-                }
-            } catch (t: Throwable) {
-                Log.w(TAG, "[$TAG] SerpApi search failed, falling back to WebSearchClient", t)
-            }
-        }
+        // 2. FOR ALL NORMAL WEB SEARCHES (isProduct == false) OR PRODUCT FALLBACK:
+        // Exclusively use 100% FREE on-device DuckDuckGo Lite, Wikipedia, and Bing!
+        // ZERO API KEYS, ZERO CREDITS, 100% FREE UNLIMITED FOREVER!
 
         // 3. Fallback to on-device DuckDuckGo / Wikipedia pipeline
         val rawResults: List<SearchResult>

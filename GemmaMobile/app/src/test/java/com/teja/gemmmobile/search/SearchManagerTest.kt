@@ -181,6 +181,45 @@ class SearchManagerTest {
     }
 
     @Test
+    fun testSearchAndReadWithStatus_nonProductDoesNotUseSerperOrSerpApi() = runBlocking {
+        var serperCalled = false
+        var serpApiCalled = false
+
+        val mockSerper = object : SerperClient("dummy-key") {
+            override suspend fun search(query: String, maxResults: Int, isProduct: Boolean): SerpApiResult {
+                serperCalled = true
+                return SerpApiResult(emptyList(), emptyList())
+            }
+        }
+
+        val mockSerp = object : SerpApiClient("dummy-key") {
+            override suspend fun search(query: String, maxResults: Int, isProduct: Boolean): SerpApiResult {
+                serpApiCalled = true
+                return SerpApiResult(emptyList(), emptyList())
+            }
+        }
+
+        val mockWebClient = object : WebSearchClient() {
+            override suspend fun search(query: String, maxResults: Int): List<SearchResult> {
+                return listOf(SearchResult("Free Wikipedia Article", "https://en.wikipedia.org/wiki/India", "Free snippet"))
+            }
+        }
+
+        val manager = SearchManager(
+            webSearchClient = mockWebClient,
+            serperClient = mockSerper,
+            serpApiClient = mockSerp
+        )
+
+        val response = manager.searchAndReadWithStatus("tell me about India history", maxResults = 5, isProduct = false)
+
+        assertEquals(SearchStatus.SUCCESS, response.status)
+        assertFalse("Serper must NOT be called for non-product general searches!", serperCalled)
+        assertFalse("SerpApi must NOT be called for non-product general searches!", serpApiCalled)
+        assertEquals("Free Wikipedia Article", response.results[0].title)
+    }
+
+    @Test
     fun testFormatGemmaWebContext_includesUntrustedDelimitersAndCitations() {
         val results = listOf(
             EnrichedSearchResult(
