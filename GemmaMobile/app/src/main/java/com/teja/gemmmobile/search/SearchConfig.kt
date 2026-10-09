@@ -39,4 +39,10 @@ object SearchConfig {
     const val SERPAPI_READ_TIMEOUT_MS = 5500
     const val SERPAPI_COUNTRY = "in"
     const val SERPAPI_LANGUAGE = "en"
+
+    // Serper.dev Integration (1,900+ free queries, high-speed Google Search & Shopping)
+    const val SERPER_API_KEY = "af077176ca8f3640dedb5573509e74048fa50e2d"
+    const val SERPER_BASE_URL = "https://google.serper.dev"
+    const val SERPER_CONNECT_TIMEOUT_MS = 4000
+    const val SERPER_READ_TIMEOUT_MS = 5000
 }

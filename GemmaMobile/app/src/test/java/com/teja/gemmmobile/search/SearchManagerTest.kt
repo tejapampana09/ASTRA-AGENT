@@ -73,7 +73,8 @@ class SearchManagerTest {
         val manager = SearchManager(
             webSearchClient = mockClient,
             webPageFetcher = mockFetcher,
-            serpApiClient = SerpApiClient("")
+            serpApiClient = SerpApiClient(""),
+            serperClient = SerperClient("")
         )
         val response = manager.searchAndReadWithStatus("test query", maxResults = 5)
 
@@ -98,7 +99,11 @@ class SearchManagerTest {
             override suspend fun search(query: String, maxResults: Int): List<SearchResult> = emptyList()
         }
 
-        val manager = SearchManager(webSearchClient = mockClient, serpApiClient = SerpApiClient(""))
+        val manager = SearchManager(
+            webSearchClient = mockClient,
+            serpApiClient = SerpApiClient(""),
+            serperClient = SerperClient("")
+        )
         val response = manager.searchAndReadWithStatus("nonexistent query", maxResults = 5)
 
         assertEquals(SearchStatus.NO_RESULTS, response.status)
@@ -113,7 +118,11 @@ class SearchManagerTest {
             }
         }
 
-        val manager = SearchManager(webSearchClient = mockClient, serpApiClient = SerpApiClient(""))
+        val manager = SearchManager(
+            webSearchClient = mockClient,
+            serpApiClient = SerpApiClient(""),
+            serperClient = SerperClient("")
+        )
         val response = manager.searchAndReadWithStatus("error query", maxResults = 5)
 
         assertEquals(SearchStatus.PROVIDER_ERROR, response.status)
@@ -122,7 +131,32 @@ class SearchManagerTest {
     }
 
     @Test
-    fun testSearchAndReadWithStatus_serpApiPrimarySuccess() = runBlocking {
+    fun testSearchAndReadWithStatus_serperPrimarySuccess() = runBlocking {
+        val mockSerper = object : SerperClient("dummy-key") {
+            override suspend fun search(query: String, maxResults: Int, isProduct: Boolean): SerpApiResult {
+                return SerpApiResult(
+                    results = listOf(
+                        SearchResult("Dot & Key Sunscreen", "https://amazon.in/dp/123", "₹224 on Amazon.in.")
+                    ),
+                    images = listOf(
+                        SearchImage("Dot & Key Sunscreen", "https://img.com/dotkey.jpg", "https://amazon.in/dp/123", "Amazon.in")
+                    )
+                )
+            }
+        }
+
+        val manager = SearchManager(serperClient = mockSerper, serpApiClient = SerpApiClient(""))
+        val response = manager.searchAndReadWithStatus("dot and key sunscreen", maxResults = 5, isProduct = true)
+
+        assertEquals(SearchStatus.SUCCESS, response.status)
+        assertEquals(1, response.results.size)
+        assertEquals("Dot & Key Sunscreen", response.results[0].title)
+        assertEquals(1, response.images.size)
+        assertEquals("https://img.com/dotkey.jpg", response.images[0].imageUrl)
+    }
+
+    @Test
+    fun testSearchAndReadWithStatus_serpApiBackupSuccess() = runBlocking {
         val mockSerp = object : SerpApiClient("dummy-key") {
             override suspend fun search(query: String, maxResults: Int, isProduct: Boolean): SerpApiResult {
                 return SerpApiResult(
@@ -136,7 +170,7 @@ class SearchManagerTest {
             }
         }
 
-        val manager = SearchManager(serpApiClient = mockSerp)
+        val manager = SearchManager(serperClient = SerperClient(""), serpApiClient = mockSerp)
         val response = manager.searchAndReadWithStatus("best phone under 20000", maxResults = 5, isProduct = true)
 
         assertEquals(SearchStatus.SUCCESS, response.status)

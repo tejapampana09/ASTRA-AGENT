@@ -73,14 +73,16 @@ data class EnrichedSearchResult(
 
 /**
  * Central orchestrator for on-device web search.
- * Uses SerpApi Google Search & Google Shopping as primary provider for 100% genuine products,
- * live INR prices, packshot images, and direct store URLs.
- * Seamlessly falls back to on-device zero-cost DuckDuckGo Lite & Wikipedia if SerpApi quota runs out.
+ * Uses Serper.dev (1,900+ queries) and SerpApi (230+ queries) as primary providers
+ * for 100% genuine products, live INR prices, packshot images, and direct store URLs.
+ * Seamlessly falls back to on-device zero-cost DuckDuckGo Lite & Wikipedia if API quotas run out.
+ * Includes a 24-hour smart LRU cache to conserve API credits.
  */
 open class SearchManager(
     private val webSearchClient: WebSearchClient = WebSearchClient(),
     private val webPageFetcher: WebPageFetcher = WebPageFetcher(),
-    private val serpApiClient: SerpApiClient = SerpApiClient()
+    private val serpApiClient: SerpApiClient = SerpApiClient(),
+    private val serperClient: SerperClient = SerperClient()
 ) {
 
     companion object {
@@ -88,6 +90,8 @@ open class SearchManager(
             "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
             "fbclid", "gclid", "ref", "ved", "usqp", "source", "srsltid"
         )
+        private val searchCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, SearchResponse>>()
+        private const val CACHE_TTL_MS = 24 * 60 * 60 * 1000L // 24 hours
     }
 
     /**
@@ -190,7 +194,45 @@ open class SearchManager(
 
         Log.d(TAG, "[$TAG] Executing searchAndRead for query: \"$cleanQuery\" (isProduct=$isProduct)")
 
-        // 1. Try SerpApi (Google Search & Google Shopping in India) first if key is present
+        // 0. Check 24-hour in-memory cache to save API credits
+        val cacheKey = "$isProduct:${cleanQuery.lowercase()}"
+        val cached = searchCache[cacheKey]
+        if (cached != null && System.currentTimeMillis() - cached.first < CACHE_TTL_MS) {
+            Log.d(TAG, "[$TAG] Returning 24h cached search response for: \"$cleanQuery\"")
+            return@withContext cached.second
+        }
+
+        // 1. Try Serper.dev (1,900+ credits, ultra-fast <500ms POST JSON Google Search & Shopping)
+        if (serperClient.isAvailable()) {
+            try {
+                val serperResult = serperClient.search(cleanQuery, maxResults, isProduct = isProduct)
+                if (serperResult != null && serperResult.results.isNotEmpty()) {
+                    Log.d(TAG, "[$TAG] Serper.dev returned ${serperResult.results.size} high-fidelity results and ${serperResult.images.size} images")
+                    val enriched = serperResult.results.map { res ->
+                        EnrichedSearchResult(
+                            title = res.title,
+                            url = normalizeUrl(res.url),
+                            snippet = res.snippet,
+                            pageContent = "",
+                            fetchSucceeded = false,
+                            imageUrl = serperResult.images.firstOrNull { it.title == res.title }?.imageUrl,
+                            sourceType = ContentSourceType.SEARCH_SNIPPET
+                        )
+                    }
+                    val response = SearchResponse(
+                        status = SearchStatus.SUCCESS,
+                        results = enriched,
+                        images = serperResult.images
+                    )
+                    searchCache[cacheKey] = Pair(System.currentTimeMillis(), response)
+                    return@withContext response
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "[$TAG] Serper.dev search failed, falling back to SerpApi", t)
+            }
+        }
+
+        // 2. Try SerpApi (Backup 230+ credits Google Search & Google Shopping in India)
         if (serpApiClient.isAvailable()) {
             try {
                 val serpResult = serpApiClient.search(cleanQuery, maxResults, isProduct = isProduct)
@@ -207,18 +249,20 @@ open class SearchManager(
                             sourceType = ContentSourceType.SEARCH_SNIPPET
                         )
                     }
-                    return@withContext SearchResponse(
+                    val response = SearchResponse(
                         status = SearchStatus.SUCCESS,
                         results = enriched,
                         images = serpResult.images
                     )
+                    searchCache[cacheKey] = Pair(System.currentTimeMillis(), response)
+                    return@withContext response
                 }
             } catch (t: Throwable) {
-                Log.w(TAG, "[$TAG] SerpApi primary search failed, falling back to WebSearchClient", t)
+                Log.w(TAG, "[$TAG] SerpApi search failed, falling back to WebSearchClient", t)
             }
         }
 
-        // 2. Fallback to on-device DuckDuckGo / Wikipedia pipeline
+        // 3. Fallback to on-device DuckDuckGo / Wikipedia pipeline
         val rawResults: List<SearchResult>
         try {
             rawResults = webSearchClient.search(cleanQuery, maxResults = 12)
