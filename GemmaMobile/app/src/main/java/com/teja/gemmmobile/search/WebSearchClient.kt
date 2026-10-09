@@ -211,14 +211,13 @@ open class WebSearchClient {
             }
 
             val combined = mutableListOf<SearchResult>()
+            // Bing is PRIMARY for all queries (fast, broad index, zero CAPTCHA)
+            combined.addAll(bingCandidates)
             if (isProduct) {
-                // For shopping queries, prioritize direct store results from Bing
-                combined.addAll(bingCandidates)
                 combined.addAll(ddgCandidates)
             } else {
                 combined.addAll(wikiCandidates)
                 combined.addAll(ddgCandidates)
-                combined.addAll(bingCandidates)
             }
 
             // If primary engines were empty, fall back to DDG HTML
