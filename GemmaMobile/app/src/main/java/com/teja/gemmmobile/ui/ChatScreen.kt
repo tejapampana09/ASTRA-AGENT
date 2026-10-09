@@ -3239,9 +3239,17 @@ fun parseProductCardBlock(
         title = lines.firstOrNull { it.isNotBlank() && !it.startsWith(":::") }?.trim() ?: "Recommended Product"
     }
 
+    val resolvedUrl = resolveProductUrl(title, if (url.isNotBlank()) url else findMatchingResultUrl(title, searchResults), searchResults)
+    val finalDomain = when {
+        resolvedUrl.contains("amazon") -> "amazon.in"
+        resolvedUrl.contains("flipkart") -> "flipkart.com"
+        resolvedUrl.contains("nykaa") -> "nykaa.com"
+        resolvedUrl.contains("myntra") -> "myntra.com"
+        source.isNotBlank() && !source.contains("nytimes") && !source.contains("goodhousekeeping") && !source.contains("forbes") -> source
+        resolvedUrl.isNotBlank() -> extractDomain(resolvedUrl)
+        else -> "amazon.in"
+    }
     val matchedImage = findMatchingProductImage(title, searchImages, index)
-    val finalUrl = if (url.isNotBlank()) url else findMatchingResultUrl(title, searchResults)
-    val finalDomain = if (source.isNotBlank()) source else if (finalUrl.isNotBlank()) extractDomain(finalUrl) else ""
 
     return ProductCardData(
         title = title.removePrefix("**").removeSuffix("**").trim(),
@@ -3249,7 +3257,7 @@ fun parseProductCardBlock(
         price = price,
         description = descLines.joinToString(" ").trim(),
         sourceDomain = finalDomain,
-        url = finalUrl,
+        url = resolvedUrl,
         imageUrl = matchedImage
     )
 }
@@ -3262,7 +3270,37 @@ fun findMatchingProductImage(title: String, images: List<SearchImage>, index: In
         val ititle = img.title.lowercase()
         words.count { ititle.contains(it) } >= 2
     }
-    return match?.imageUrl ?: images.getOrNull(index)?.imageUrl ?: images.firstOrNull()?.imageUrl
+    // Never reuse the exact same photo across distinct product cards
+    return match?.imageUrl ?: images.getOrNull(index)?.imageUrl
+}
+
+fun resolveProductUrl(title: String, rawUrl: String, results: List<SearchResult>): String {
+    val shoppingDomains = setOf(
+        "amazon.in", "amazon.com", "flipkart.com", "myntra.com", "nykaa.com",
+        "beminimalist.co", "thedermaco.com", "aqualogica.in", "croma.com",
+        "reliancedigital.in", "tatacliq.com", "apollopharmacy.in", "pharmeasy.in",
+        "meesho.com", "jiomart.com"
+    )
+    val lower = rawUrl.lowercase()
+    if (shoppingDomains.any { lower.contains(it) } || lower.contains("/dp/") || lower.contains("/p/") || lower.contains("/product/")) {
+        return rawUrl
+    }
+    // Check if any search result has a real shopping domain
+    val storeResult = results.firstOrNull { res ->
+        val resUrl = res.url.lowercase()
+        shoppingDomains.any { resUrl.contains(it) }
+    }
+    if (storeResult != null) {
+        return storeResult.url
+    }
+    // Fall back to direct Amazon.in product search query so user can buy the exact item
+    val cleanTitle = title.replace(Regex("""^\d+\.\s*"""), "").replace(Regex("""\([^)]*\)"""), "").trim()
+    val encoded = try {
+        java.net.URLEncoder.encode(cleanTitle, "UTF-8")
+    } catch (_: Exception) {
+        cleanTitle.replace(" ", "+")
+    }
+    return "https://www.amazon.in/s?k=$encoded"
 }
 
 fun findMatchingResultUrl(title: String, results: List<SearchResult>): String {
@@ -3283,16 +3321,17 @@ fun extractFallbackProductCards(
     val shoppingDomains = setOf(
         "amazon.in", "amazon.com", "flipkart.com", "myntra.com", "nykaa.com",
         "beminimalist.co", "thedermaco.com", "aqualogica.in", "croma.com",
-        "91mobiles.com", "smartprix.com", "gsmarena.com", "apollopharmacy.in"
+        "reliancedigital.in", "tatacliq.com", "apollopharmacy.in", "pharmeasy.in",
+        "meesho.com", "jiomart.com"
     )
 
+    // MUST be a verified shopping store or direct product listing (NEVER blog articles like forbes/nytimes)
     val candidates = results.filter { res ->
         val url = res.url.lowercase()
-        val title = res.title.lowercase()
-        val snip = res.snippet.lowercase()
-        shoppingDomains.any { url.contains(it) } ||
-        title.contains("buy ") || title.contains("price") || title.contains("review") ||
-        snip.contains("₹") || snip.contains("rs.") || snip.contains("price:") || snip.contains("best ")
+        val domain = extractDomain(res.url)
+        val isArticle = domain.contains("nytimes") || domain.contains("goodhousekeeping") ||
+            domain.contains("forbes") || domain.contains("healthline") || domain.contains("wikipedia")
+        !isArticle && (shoppingDomains.any { domain.contains(it) } || url.contains("/dp/") || url.contains("/p/") || url.contains("/product/"))
     }
 
     val cards = mutableListOf<ProductCardData>()
@@ -3311,6 +3350,7 @@ fun extractFallbackProductCards(
 
         val domain = extractDomain(res.url)
         val imgUrl = findMatchingProductImage(cleanTitle, images, idx)
+        val purchaseUrl = resolveProductUrl(cleanTitle, res.url, results)
 
         cards.add(
             ProductCardData(
@@ -3318,8 +3358,8 @@ fun extractFallbackProductCards(
                 badge = badge,
                 price = null,
                 description = res.snippet.take(200).trim(),
-                sourceDomain = domain,
-                url = res.url,
+                sourceDomain = if (purchaseUrl.contains("amazon")) "amazon.in" else domain,
+                url = purchaseUrl,
                 imageUrl = imgUrl
             )
         )
@@ -3475,14 +3515,22 @@ fun ProductRecommendationCard(
                             .padding(vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        val actionLabel = when {
+                            card.sourceDomain.contains("amazon") -> "Buy on Amazon ↗"
+                            card.sourceDomain.contains("flipkart") -> "Buy on Flipkart ↗"
+                            card.sourceDomain.contains("nykaa") -> "Buy on Nykaa ↗"
+                            card.sourceDomain.contains("myntra") -> "Buy on Myntra ↗"
+                            card.sourceDomain.isNotBlank() -> "View on ${card.sourceDomain} ↗"
+                            else -> "Check price & buy ↗"
+                        }
                         Text(
-                            text = "Official product & details ↗",
+                            text = actionLabel,
                             style = MaterialTheme.typography.labelMedium.copy(
                                 fontSize = 12.5.sp,
-                                fontWeight = FontWeight.Medium,
+                                fontWeight = FontWeight.SemiBold,
                                 textDecoration = TextDecoration.Underline
                             ),
-                            color = Color(0xFFE4E4E7)
+                            color = Color(0xFF10A37F)
                         )
                     }
                 }

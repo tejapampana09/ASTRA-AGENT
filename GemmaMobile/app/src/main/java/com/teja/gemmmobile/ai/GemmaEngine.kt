@@ -342,11 +342,14 @@ data class EngineChunk(
         val maxAllowedPromptTokens = 1050
         val rawPromptTokens = com.teja.gemmmobile.context.ContextManager.estimateTokens(prompt)
         val safePrompt = if (rawPromptTokens > maxAllowedPromptTokens) {
-            val excessChars = (rawPromptTokens - maxAllowedPromptTokens) * 2
-            if (prompt.length > excessChars + 300) {
-                prompt.takeLast(prompt.length - excessChars)
+            val allowedChars = maxAllowedPromptTokens * 2
+            if (prompt.length > allowedChars) {
+                val half = allowedChars / 2
+                val head = prompt.take(half)
+                val tail = prompt.takeLast(half)
+                "$head\n...[trimmed to fit budget]...\n$tail"
             } else {
-                prompt.takeLast(1100)
+                prompt
             }
         } else {
             prompt
@@ -354,7 +357,7 @@ data class EngineChunk(
 
         // Sanitize string against null bytes / control codes before passing to JNI / LiteRT-LM C++
         val jniSafePrompt = safePrompt.filter { it.code >= 32 || it == '\n' || it == '\t' || it == '\r' }
-        val basePromptTokens = com.teja.gemmmobile.context.ContextManager.estimateTokens(jniSafePrompt) + sysTokens
+        var basePromptTokens = com.teja.gemmmobile.context.ContextManager.estimateTokens(jniSafePrompt) + sysTokens
         val effectiveThinking = enableThinkingOverride ?: currentConfig.enableThinking
         val effectiveThinkingBudget = if (effectiveThinking) minOf(currentConfig.thinkingBudget, 160) else 0
 
@@ -370,7 +373,7 @@ data class EngineChunk(
                 attempt++
 
                 val imageTokens = if (currentImageBytes != null) 576 else 0
-                val totalPromptTokens = basePromptTokens + imageTokens
+                var totalPromptTokens = basePromptTokens + imageTokens
 
                 // For multimodal vision inputs, disable thinking to reserve full KV-cache for generation
                 var currentThinking = if (currentImageBytes != null) false else effectiveThinking
@@ -384,9 +387,20 @@ data class EngineChunk(
                 }
 
                 if (availableForOutput < 32) {
-                    val errorMsg = "Context budget reached ($totalPromptTokens tokens). Maximum context is $totalModelMaxContext tokens. Please start a new chat or shorten the message."
-                    Log.w(TAG, "[$TAG] $errorMsg")
-                    throw IllegalStateException(errorMsg)
+                    // Graceful auto-recovery: trim base prompt to fit rather than crashing
+                    val emergencyBudget = totalModelMaxContext - currentThinkBudget - safetyMargin - 128
+                    if (emergencyBudget > 200 && totalPromptTokens > emergencyBudget) {
+                        Log.w(TAG, "[$TAG] Adapting prompt from $totalPromptTokens tokens to $emergencyBudget tokens to avoid context overflow")
+                        val emergencyChars = emergencyBudget * 2
+                        val recoveredPrompt = jniSafePrompt.takeLast(emergencyChars)
+                        basePromptTokens = com.teja.gemmmobile.context.ContextManager.estimateTokens(recoveredPrompt) + sysTokens
+                        totalPromptTokens = basePromptTokens + imageTokens
+                        availableForOutput = (totalModelMaxContext - totalPromptTokens - currentThinkBudget - safetyMargin).coerceAtLeast(64)
+                    } else {
+                        val errorMsg = "Context budget reached ($totalPromptTokens tokens). Maximum context is $totalModelMaxContext tokens. Please start a new chat or shorten the message."
+                        Log.w(TAG, "[$TAG] $errorMsg")
+                        throw IllegalStateException(errorMsg)
+                    }
                 }
 
                 val requestedOutput = dynamicMaxOutputOverride ?: currentConfig.maxTokens

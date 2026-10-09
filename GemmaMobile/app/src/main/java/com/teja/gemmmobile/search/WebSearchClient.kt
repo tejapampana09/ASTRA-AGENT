@@ -189,24 +189,37 @@ open class WebSearchClient {
         try {
             Log.d(TAG, "[$TAG] Initiating broad parallel web search for: '$clean' (raw: '$query')")
 
+            val isProduct = isProductSearch(clean)
+            val effectiveBingQuery = if (isProduct && !clean.lowercase().contains("buy") && !clean.lowercase().contains("price")) {
+                "$clean buy online Amazon Flipkart price"
+            } else clean
+
             // Concurrently query DuckDuckGo Lite, Bing Web Search, and Wikipedia API in parallel
             val (ddgCandidates, bingCandidates, wikiCandidates) = coroutineScope {
                 val ddgDeferred = async {
                     try { fetchDuckDuckGoLite(clean, maxResults * 2) } catch (_: Exception) { emptyList() }
                 }
                 val bingDeferred = async {
-                    try { fetchBingWeb(clean, maxResults * 2) } catch (_: Exception) { emptyList() }
+                    try { fetchBingWeb(effectiveBingQuery, maxResults * 2) } catch (_: Exception) { emptyList() }
                 }
-                val wikiDeferred = async {
-                    try { fetchWikipedia(clean, 3) } catch (_: Exception) { emptyList() }
-                }
-                Triple(ddgDeferred.await(), bingDeferred.await(), wikiDeferred.await())
+                val wikiDeferred = if (!isProduct) {
+                    async {
+                        try { fetchWikipedia(clean, 3) } catch (_: Exception) { emptyList() }
+                    }
+                } else null
+                Triple(ddgDeferred.await(), bingDeferred.await(), wikiDeferred?.await() ?: emptyList())
             }
 
             val combined = mutableListOf<SearchResult>()
-            combined.addAll(wikiCandidates)
-            combined.addAll(ddgCandidates)
-            combined.addAll(bingCandidates)
+            if (isProduct) {
+                // For shopping queries, prioritize direct store results from Bing
+                combined.addAll(bingCandidates)
+                combined.addAll(ddgCandidates)
+            } else {
+                combined.addAll(wikiCandidates)
+                combined.addAll(ddgCandidates)
+                combined.addAll(bingCandidates)
+            }
 
             // If primary engines were empty, fall back to DDG HTML
             if (combined.isEmpty()) {
@@ -221,7 +234,7 @@ open class WebSearchClient {
             }
 
             // Rank candidates by query relevance & domain diversity
-            val ranked = rankByRelevance(combined, clean, maxResults)
+            val ranked = rankByRelevance(combined, clean, maxResults, isProduct)
             Log.d(TAG, "[$TAG] Curated ${ranked.size} broad web results for '$clean'")
             return@withContext ranked
         } catch (t: Throwable) {
@@ -275,6 +288,18 @@ open class WebSearchClient {
         }
     }
 
+    fun isProductSearch(query: String): Boolean {
+        val q = query.lowercase().trim()
+        val terms = listOf(
+            "suggest", "recommend", "best phone", "best mobile", "best laptop", "best sunscreen",
+            "phone under", "mobile under", "laptop under", "under 10000", "under 15000", "under 20000",
+            "under 25000", "under 30000", "under 40000", "under 50000", "under 500", "under 1000",
+            "sunscreen", "mobile", "phone", "laptop", "smartwatch", "earbuds", "headphones",
+            "buy ", "price", "shopping", "products", "manchi phone", "manchi mobile"
+        )
+        return terms.any { q.contains(it) }
+    }
+
     /**
      * DuckDuckGo Lite search endpoint: https://lite.duckduckgo.com/lite/
      * Uses POST, which bypasses duck CAPTCHAs and returns broad web results (Wikipedia, IMDb, news, blogs).
@@ -299,6 +324,10 @@ open class WebSearchClient {
 
             if (conn.responseCode == 200) {
                 val html = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { it.readText() }
+                if (html.contains("anomaly-modal") || html.contains("challenge-form") || html.contains("anomaly-modal__check")) {
+                    Log.w(TAG, "[$TAG] DDG Lite returned CAPTCHA/anomaly modal for '$query'. Discarding DDG.")
+                    return emptyList()
+                }
                 parseDdgLite(html, maxResults)
             } else {
                 emptyList()
@@ -467,7 +496,8 @@ open class WebSearchClient {
     private fun rankByRelevance(
         results: List<SearchResult>,
         cleanQuery: String,
-        maxResults: Int
+        maxResults: Int,
+        isProduct: Boolean = false
     ): List<SearchResult> {
         val queryLower = cleanQuery.lowercase()
         // Strip punctuation from query tokens so "SS" matches "S. S." and "S.S."
@@ -499,16 +529,29 @@ open class WebSearchClient {
                 if (snipClean.contains(token)) score += 8
             }
 
-            // High-authority encyclopedic / reference platforms get top priority
+            // High-authority encyclopedic / reference platforms get top priority for general queries
             val urlLower = res.url.lowercase()
             when {
-                urlLower.contains("wikipedia.org") -> score += 35
-                urlLower.contains("imdb.com") -> score += 30
-                urlLower.contains("linkedin.com") -> score += 20
-                urlLower.contains("github.com") -> score += 20
+                urlLower.contains("wikipedia.org") -> score += if (isProduct) -15 else 35
+                urlLower.contains("imdb.com") -> score += if (isProduct) -15 else 30
+                urlLower.contains("linkedin.com") -> score += if (isProduct) -15 else 20
+                urlLower.contains("github.com") -> score += if (isProduct) -15 else 20
                 urlLower.contains("huggingface.co") -> score += 20
                 urlLower.contains("gov") || urlLower.contains("edu") -> score += 20
-                urlLower.contains("instagram.com") || urlLower.contains("facebook.com") -> score -= 10 // deprioritize social directories below real articles
+                urlLower.contains("instagram.com") || urlLower.contains("facebook.com") -> score -= 10
+            }
+
+            if (isProduct) {
+                if (urlLower.contains("amazon.") || urlLower.contains("flipkart.com") || urlLower.contains("nykaa.com") ||
+                    urlLower.contains("myntra.com") || urlLower.contains("croma.com") || urlLower.contains("beminimalist.co") ||
+                    urlLower.contains("thedermaco.com") || urlLower.contains("aqualogica.in") || urlLower.contains("apollopharmacy.in") ||
+                    urlLower.contains("reliancedigital.in") || urlLower.contains("tatacliq.com")) {
+                    score += 50
+                }
+                // Deprioritize generic blog articles for product shopping queries
+                if (urlLower.contains("nytimes") || urlLower.contains("goodhousekeeping") || urlLower.contains("forbes") || urlLower.contains("healthline")) {
+                    score -= 30
+                }
             }
 
             seenUrls.add(normalizedUrl)

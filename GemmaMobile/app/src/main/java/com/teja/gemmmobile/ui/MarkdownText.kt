@@ -23,6 +23,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.Icon
@@ -35,9 +36,11 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -432,8 +435,473 @@ fun isMarkdownOrTextBlock(language: String, code: String): Boolean {
     return false
 }
 
+fun isMermaidFlowchart(language: String, code: String): Boolean {
+    val clean = language.trim().lowercase()
+    if (clean in setOf("mermaid", "flowchart", "graph")) return true
+    val firstLine = code.trim().lines().firstOrNull()?.trim()?.lowercase() ?: ""
+    return firstLine.startsWith("graph ") || firstLine.startsWith("flowchart ") || firstLine.startsWith("sequencediagram")
+}
+
+enum class FlowNodeType {
+    START_END,
+    PROCESS,
+    DECISION,
+    DATABASE
+}
+
+data class FlowNode(
+    val id: String,
+    val label: String,
+    val type: FlowNodeType
+)
+
+data class FlowEdge(
+    val fromId: String,
+    val toId: String,
+    val label: String? = null
+)
+
+data class ParsedFlowchart(
+    val nodes: List<FlowNode>,
+    val edges: List<FlowEdge>
+)
+
+fun parseMermaidFlowchart(code: String): ParsedFlowchart {
+    val nodeMap = linkedMapOf<String, FlowNode>()
+    val edges = mutableListOf<FlowEdge>()
+
+    val dbRegex = Regex("""([a-zA-Z0-9_-]+)\s*\[\((.*?)\)\]""")
+    val roundPillRegex = Regex("""([a-zA-Z0-9_-]+)\s*\(\[(.*?)\]\)""")
+    val decisionRegex = Regex("""([a-zA-Z0-9_-]+)\s*\{(.*?)\}""")
+    val startEndRegex = Regex("""([a-zA-Z0-9_-]+)\s*\((.*?)\)""")
+    val processRegex = Regex("""([a-zA-Z0-9_-]+)\s*\[(.*?)\]""")
+    val edgeRegex = Regex("""([a-zA-Z0-9_-]+)\s*(?:-->|---|==>|-\.->)\s*(?:\|([^|]+)\|)?\s*([a-zA-Z0-9_-]+)""")
+
+    for (line in code.lines()) {
+        val trimmed = line.trim()
+        if (trimmed.isBlank() || trimmed.startsWith("graph", ignoreCase = true) ||
+            trimmed.startsWith("flowchart", ignoreCase = true) || trimmed.startsWith("%%")) {
+            continue
+        }
+
+        // 1. Check database [(...)]
+        dbRegex.findAll(trimmed).forEach { m ->
+            val id = m.groupValues[1]
+            val lbl = m.groupValues[2].trim().ifBlank { id }
+            nodeMap[id] = FlowNode(id, lbl, FlowNodeType.DATABASE)
+        }
+        // 2. Check round pill ([...])
+        roundPillRegex.findAll(trimmed).forEach { m ->
+            val id = m.groupValues[1]
+            val lbl = m.groupValues[2].trim().ifBlank { id }
+            nodeMap[id] = FlowNode(id, lbl, FlowNodeType.START_END)
+        }
+        // 3. Check decision {...}
+        decisionRegex.findAll(trimmed).forEach { m ->
+            val id = m.groupValues[1]
+            val lbl = m.groupValues[2].trim().ifBlank { id }
+            nodeMap[id] = FlowNode(id, lbl, FlowNodeType.DECISION)
+        }
+        // 4. Check start/end (...)
+        startEndRegex.findAll(trimmed).forEach { m ->
+            val id = m.groupValues[1]
+            val lbl = m.groupValues[2].trim().ifBlank { id }
+            if (!nodeMap.containsKey(id)) {
+                nodeMap[id] = FlowNode(id, lbl, FlowNodeType.START_END)
+            }
+        }
+        // 5. Check process [...]
+        processRegex.findAll(trimmed).forEach { m ->
+            val id = m.groupValues[1]
+            val lbl = m.groupValues[2].trim().ifBlank { id }
+            if (!nodeMap.containsKey(id)) {
+                nodeMap[id] = FlowNode(id, lbl, FlowNodeType.PROCESS)
+            }
+        }
+
+        // 6. Check edges
+        edgeRegex.findAll(trimmed).forEach { m ->
+            val from = m.groupValues[1]
+            val edgeLbl = m.groupValues[2].trim().ifBlank { null }
+            val to = m.groupValues[3]
+            edges.add(FlowEdge(from, to, edgeLbl))
+            if (!nodeMap.containsKey(from)) {
+                nodeMap[from] = FlowNode(from, from, FlowNodeType.PROCESS)
+            }
+            if (!nodeMap.containsKey(to)) {
+                nodeMap[to] = FlowNode(to, to, FlowNodeType.PROCESS)
+            }
+        }
+    }
+
+    return ParsedFlowchart(nodeMap.values.toList(), edges)
+}
+
+/**
+ * ChatGPT-style Interactive Mermaid Flowchart Block.
+ * Features:
+ * - Top header with AccountTree icon and "Flowchart" label
+ * - Segmented pill toggle: [ Diagram | Code ]
+ * - Interactive node shapes (Decision diamonds/amber, Start/End emerald, Database purple, Process slate)
+ * - Step numbering pills (Step 1, Step 2, ...)
+ * - Connector arrows with condition badges ([Yes], [No], etc.)
+ * - 1-click copy with toast & haptic feedback
+ */
+@Composable
+fun MermaidFlowchartBlockView(
+    code: String,
+    modifier: Modifier = Modifier
+) {
+    val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    var isCopied by remember { mutableStateOf(false) }
+    var showDiagram by remember { mutableStateOf(true) }
+
+    val parsedFlowchart = remember(code) { parseMermaidFlowchart(code) }
+
+    LaunchedEffect(isCopied) {
+        if (isCopied) {
+            delay(2000)
+            isCopied = false
+        }
+    }
+
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = Color(0xFF18181B),
+        border = BorderStroke(1.dp, Color(0xFF2E2E34)),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp)
+    ) {
+        Column {
+            // Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF222226))
+                    .padding(horizontal = 14.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.AccountTree,
+                        contentDescription = "Flowchart",
+                        tint = Color(0xFF10A37F),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(7.dp))
+                    Text(
+                        text = "Flowchart",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.5.sp
+                        ),
+                        color = Color(0xFFECECEC)
+                    )
+                }
+
+                // Toggle pills: [ Diagram | Code ]
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFF141416),
+                    border = BorderStroke(0.8.dp, Color(0xFF33333A))
+                ) {
+                    Row(modifier = Modifier.padding(2.dp)) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (showDiagram) Color(0xFF2E2E36) else Color.Transparent)
+                                .clickable { showDiagram = true }
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                        ) {
+                            Text(
+                                text = "Diagram",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 11.sp,
+                                    fontWeight = if (showDiagram) FontWeight.Bold else FontWeight.Normal
+                                ),
+                                color = if (showDiagram) Color.White else Color(0xFF9E9E9E)
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (!showDiagram) Color(0xFF2E2E36) else Color.Transparent)
+                                .clickable { showDiagram = false }
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                        ) {
+                            Text(
+                                text = "Code",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 11.sp,
+                                    fontWeight = if (!showDiagram) FontWeight.Bold else FontWeight.Normal
+                                ),
+                                color = if (!showDiagram) Color.White else Color(0xFF9E9E9E)
+                            )
+                        }
+                    }
+                }
+
+                // Copy button
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            clipboardManager.setText(AnnotatedString(code))
+                            isCopied = true
+                            Toast.makeText(context, "Copied flowchart to clipboard", Toast.LENGTH_SHORT).show()
+                        }
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                        contentDescription = "Copy",
+                        tint = if (isCopied) Color(0xFF10A37F) else Color(0xFFB0B0B0),
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = if (isCopied) "Copied!" else "Copy",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                        color = if (isCopied) Color(0xFF10A37F) else Color(0xFFB0B0B0)
+                    )
+                }
+            }
+
+            HorizontalDivider(thickness = 0.8.dp, color = Color(0xFF2B2B32))
+
+            // Body
+            if (showDiagram) {
+                FlowchartDiagramView(parsedFlowchart)
+            } else {
+                ProgrammingCodeBlockView(
+                    language = "mermaid",
+                    code = code,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun FlowchartDiagramView(flowchart: ParsedFlowchart) {
+    if (flowchart.nodes.isEmpty()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("Flowchart structure ready", color = Color(0xFF9E9E9E), fontSize = 12.sp)
+        }
+        return
+    }
+
+    val scrollState = rememberScrollState()
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(scrollState)
+            .padding(horizontal = 16.dp, vertical = 18.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        val nodes = flowchart.nodes
+        val edges = flowchart.edges
+
+        nodes.forEachIndexed { index, node ->
+            FlowStepNodeCard(
+                node = node,
+                stepNumber = index + 1
+            )
+
+            // Connect to next node if not the last
+            if (index < nodes.size - 1) {
+                val nextNode = nodes[index + 1]
+                val matchingEdge = edges.firstOrNull { it.fromId == node.id && it.toId == nextNode.id }
+                    ?: edges.firstOrNull { it.fromId == node.id }
+
+                FlowConnectorLine(label = matchingEdge?.label)
+            }
+        }
+    }
+}
+
+@Composable
+fun FlowStepNodeCard(
+    node: FlowNode,
+    stepNumber: Int
+) {
+    val (bgColor, borderColor, badgeText, badgeColor, badgeBg) = when (node.type) {
+        FlowNodeType.START_END -> FlowNodeStyle(
+            bgColor = Color(0xFF10281E),
+            borderColor = Color(0xFF10B981),
+            badgeText = "Start / End ⏵",
+            badgeColor = Color(0xFF34D399),
+            badgeBg = Color(0xFF0B3824)
+        )
+        FlowNodeType.DECISION -> FlowNodeStyle(
+            bgColor = Color(0xFF2A2312),
+            borderColor = Color(0xFFEAB308),
+            badgeText = "Condition ❖",
+            badgeColor = Color(0xFFFBBF24),
+            badgeBg = Color(0xFF42320E)
+        )
+        FlowNodeType.DATABASE -> FlowNodeStyle(
+            bgColor = Color(0xFF24152E),
+            borderColor = Color(0xFFA855F7),
+            badgeText = "Database 🗄",
+            badgeColor = Color(0xFFC084FC),
+            badgeBg = Color(0xFF3B1852)
+        )
+        FlowNodeType.PROCESS -> FlowNodeStyle(
+            bgColor = Color(0xFF212128),
+            borderColor = Color(0xFF383844),
+            badgeText = "Process ⚙",
+            badgeColor = Color(0xFFD1D5DB),
+            badgeBg = Color(0xFF2D2D38)
+        )
+    }
+
+    Surface(
+        shape = if (node.type == FlowNodeType.START_END) RoundedCornerShape(24.dp) else RoundedCornerShape(12.dp),
+        color = bgColor,
+        border = BorderStroke(1.2.dp, borderColor),
+        modifier = Modifier
+            .widthIn(min = 220.dp, max = 340.dp)
+            .padding(vertical = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Step pill
+                Box(
+                    modifier = Modifier
+                        .background(Color(0xFF2A2A34), CircleShape)
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "Step $stepNumber",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        ),
+                        color = Color(0xFFE0E0E0)
+                    )
+                }
+
+                // Type badge
+                Box(
+                    modifier = Modifier
+                        .background(badgeBg, RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = badgeText,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = badgeColor
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Node label text
+            Text(
+                text = node.label,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.5.sp,
+                    lineHeight = 18.sp
+                ),
+                color = Color.White,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+data class FlowNodeStyle(
+    val bgColor: Color,
+    val borderColor: Color,
+    val badgeText: String,
+    val badgeColor: Color,
+    val badgeBg: Color
+)
+
+@Composable
+fun FlowConnectorLine(label: String? = null) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.padding(vertical = 3.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .width(2.dp)
+                .height(10.dp)
+                .background(Color(0xFF4A4A58))
+        )
+
+        if (!label.isNullOrBlank()) {
+            val isYes = label.equals("yes", ignoreCase = true) || label.equals("valid", ignoreCase = true) || label.equals("true", ignoreCase = true)
+            val isNo = label.equals("no", ignoreCase = true) || label.equals("invalid", ignoreCase = true) || label.equals("false", ignoreCase = true)
+
+            val pillBg = when {
+                isYes -> Color(0xFF0F3822)
+                isNo -> Color(0xFF3E1418)
+                else -> Color(0xFF2C2C38)
+            }
+            val pillColor = when {
+                isYes -> Color(0xFF34D399)
+                isNo -> Color(0xFFF87171)
+                else -> Color(0xFFD1D5DB)
+            }
+
+            Box(
+                modifier = Modifier
+                    .background(pillBg, RoundedCornerShape(6.dp))
+                    .padding(horizontal = 7.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = pillColor
+                )
+            }
+        }
+
+        Text(
+            text = "↓",
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold
+            ),
+            color = Color(0xFF9CA3AF)
+        )
+    }
+}
+
 /**
  * ChatGPT-style Code / Markdown Block.
+ * - For Mermaid flowcharts: Interactive visual flowchart diagram with [Diagram | Code] toggle.
  * - For markdown/text: seamless dark container (0xFF212121), copy button on top-right, clean typography.
  * - For programming code: seamless dark container (0xFF212121), language badge on left, copy button on right, syntax highlighting.
  */
@@ -443,19 +911,29 @@ fun CodeBlockView(
     code: String,
     modifier: Modifier = Modifier
 ) {
+    val isMermaid = remember(language, code) { isMermaidFlowchart(language, code) }
     val isMarkdownOrText = remember(language, code) { isMarkdownOrTextBlock(language, code) }
 
-    if (isMarkdownOrText) {
-        MarkdownCardView(
-            code = code,
-            modifier = modifier
-        )
-    } else {
-        ProgrammingCodeBlockView(
-            language = language,
-            code = code,
-            modifier = modifier
-        )
+    when {
+        isMermaid -> {
+            MermaidFlowchartBlockView(
+                code = code,
+                modifier = modifier
+            )
+        }
+        isMarkdownOrText -> {
+            MarkdownCardView(
+                code = code,
+                modifier = modifier
+            )
+        }
+        else -> {
+            ProgrammingCodeBlockView(
+                language = language,
+                code = code,
+                modifier = modifier
+            )
+        }
     }
 }
 

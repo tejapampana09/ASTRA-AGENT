@@ -83,7 +83,8 @@ class ModelManager(private val context: Context) {
             savedPrompt.contains("LANGUAGE RULE (CRITICAL)") ||
             savedPrompt.contains("Break down key concepts or architecture using") ||
             savedPrompt.contains("Begin with a clear 1-2 sentence core overview") ||
-            savedPrompt.contains("Interactive Engagement")
+            savedPrompt.contains("Interactive Engagement") ||
+            !savedPrompt.contains("Flowcharts & Visual Workflows")
         ) {
             GemmaConfig.DEFAULT_SYSTEM_PROMPT
         } else {

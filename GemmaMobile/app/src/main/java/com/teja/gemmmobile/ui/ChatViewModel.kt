@@ -484,7 +484,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                lower.contains("can't provide real-time") ||
                lower.contains("data i was trained on") ||
                lower.contains("cannot browse live") ||
-               lower.contains("can't browse live")
+               lower.contains("can't browse live") ||
+               lower.contains("web browse cheyalenu") ||
+               lower.contains("internet access ledu") ||
+               lower.contains("live search cheyalenu") ||
+               lower.contains("real-time samacharam ledu")
     }
 
     private fun extractSearchQuery(raw: String): String {
@@ -563,6 +567,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                p == "continue please" ||
                p == "inka cheppu" ||
                p == "continue cheyyi"
+    }
+
+    fun isFlowchartRequest(prompt: String): Boolean {
+        val p = prompt.lowercase().trim()
+        val keywords = listOf(
+            "flowchart", "flow chart", "workflow", "process flow", "architecture flow",
+            "mermaid", "flow chats", "flowchat", "flow chart lo", "diagram lo", "flowchart lo",
+            "explain with flowchart", "flowchart tho"
+        )
+        return keywords.any { p.contains(it) }
     }
 
     fun stripToolCallJson(text: String): String {
@@ -887,26 +901,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val memoryContext = memoryManager.getFormattedMemoryPrompt()
 
                 val baseSystemPrompt = _config.value.systemPrompt.ifBlank { GemmaConfig.DEFAULT_SYSTEM_PROMPT }
-                val allowTools = !isDocument && !hasDocInSession && imageBytes == null
+                val allowTools = !isDocument && !hasDocInSession && imageBytes == null && searchContext.isBlank()
 
                 val effectiveSystemPrompt = when {
                     imageBytes != null -> "You are a helpful assistant. Directly and accurately describe what is in the image in plain language."
                     searchContext.isNotBlank() && isProductRequest -> {
-                        "$baseSystemPrompt\n\n## PRODUCT RECOMMENDATION INSTRUCTION\n" +
-                        "Live web search evidence with verified product listings, specs, and links is provided above. " +
-                        "Synthesize the findings into clear, direct recommendations like ChatGPT:\n" +
-                        "1. Write a natural introduction in smooth prose explaining the choices.\n" +
-                        "2. For each recommended product (2 to 4 items), output a structured block:\n" +
+                        "$baseSystemPrompt\n\n## PRODUCT RECOMMENDATIONS\n" +
+                        "Live web results with real products and shopping links are provided above. " +
+                        "Recommend 2 to 3 top specific products (e.g. Minimalist, Neutrogena, Derma Co) in clean ChatGPT format:\n" +
+                        "1. Write 1 natural introductory sentence in the user's language.\n" +
+                        "2. For each recommended product, output a structured block:\n" +
                         ":::product\n" +
-                        "title: [Exact product name]\n" +
-                        "badge: [e.g. Best overall / Top budget pick / Best value] (optional)\n" +
-                        "price: [e.g. Listed around ₹499; verify current pricing]\n" +
-                        "description: [2-3 sentences explaining why it is recommended, key features, and real-world performance]\n" +
-                        "source: [Store/Brand name, e.g. Amazon / Minimalist / Apollo Pharmacy]\n" +
-                        "url: [Direct product link or store URL from evidence]\n" +
+                        "title: [Specific Brand & Product Name]\n" +
+                        "badge: [e.g. Top Recommendation / Best Budget Pick / Best Overall]\n" +
+                        "price: [e.g. ₹399 / Around ₹499]\n" +
+                        "description: [2 sentences on why it is recommended and key benefits]\n" +
+                        "source: [Store or brand name, e.g. Amazon / Nykaa / Minimalist]\n" +
+                        "url: [Store URL from live results or https://www.amazon.in/s?k=ProductName]\n" +
                         ":::\n" +
-                        "3. Conclude with a helpful tip or usage advice in natural prose.\n" +
-                        "Never say you cannot browse or access live shopping sites; live web data is provided to you above."
+                        "3. Conclude with 1 helpful tip. Never say you cannot browse or provide links."
                     }
                     searchContext.isNotBlank() -> {
                         "$baseSystemPrompt\n\n## WEB SEARCH EVIDENCE INSTRUCTION\n" +
@@ -916,6 +929,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         "Do NOT assume or guess gender if unconfirmed; refer to the person by name or neutral phrasing. " +
                         "Never claim you cannot browse or access real-time information; live web search evidence is provided to you above. " +
                         "Deliver a polished, complete explanation directly answering the user."
+                    }
+                    isFlowchartRequest(prompt) -> {
+                        "$baseSystemPrompt\n\n## FLOWCHART & PROCESS DIAGRAM INSTRUCTION\n" +
+                        "The user requested an explanation with a flowchart.\n" +
+                        "1. Output a valid, clean Mermaid diagram code block:\n" +
+                        "```mermaid\n" +
+                        "graph TD\n" +
+                        "    A[Start Step] --> B{Decision / Check?}\n" +
+                        "    B -->|Yes| C[Process Action]\n" +
+                        "    B -->|No| D[Alternative Action]\n" +
+                        "```\n" +
+                        "2. Below the diagram, explain each step thoroughly in natural, well-structured prose like ChatGPT."
                     }
                     allowTools -> {
                         "$baseSystemPrompt\n\n${toolRegistry.getToolsDocumentation()}\n" +
@@ -946,10 +971,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         else -> prompt
                     }
                     val historyTurns = targetMsgs.filter { it.id != assistantMessageId }.dropLast(1)
-                    val allowTools = !isDocument && !hasDocInSession
+                    val allowToolsInPrompt = !isDocument && !hasDocInSession && searchContext.isBlank()
                     contextManager.buildPrompt(
                         systemPrompt = "", // Handled natively in ConversationConfig
-                        toolsDocumentation = if (allowTools) toolRegistry.getToolsDocumentation() else "",
+                        toolsDocumentation = if (allowToolsInPrompt) toolRegistry.getToolsDocumentation() else "",
                         memoryContext = memoryContext,
                         conversationHistory = historyTurns,
                         currentPrompt = promptToUse,

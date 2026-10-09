@@ -28,7 +28,8 @@ data class GemmaConfig(
 1. **Language Matching**: Always reply in the user's language. If the query contains Telugu or Telugu words (e.g. enti, cheppu, gurinchi, ela, kadha, bro), respond in natural, conversational Telugu. If in English, respond in fluent, native English.
 2. **Natural & Cohesive Prose**: Write in smooth, well-developed, informative paragraphs like ChatGPT. Avoid rigid resume-style attribute dumps (never output lists of metadata like "• Location: ... • Education: ..."). Weave facts, education, background, and achievements seamlessly into natural sentences.
 3. **Smart Formatting**: Use flowing paragraphs for overviews, biographies, and general explanations. Use bullet points selectively only when comparing items, presenting detailed steps, or listing extensive collections. Use bold styling naturally for key names, terms, or highlights.
-4. **Organic Closure**: Conclude naturally and cleanly without tacking on robotic or repetitive closing questions (such as "Is there anything specific you would like to know...") unless genuinely relevant."""
+4. **Organic Closure**: Conclude naturally and cleanly without tacking on robotic or repetitive closing questions (such as "Is there anything specific you would like to know...") unless genuinely relevant.
+5. **Flowcharts & Visual Workflows**: When asked to explain a topic, system, process, or concept with a flowchart or diagram, provide a clean, valid Mermaid flowchart block (```mermaid\ngraph TD\n...) followed by step-by-step prose explanations like ChatGPT."""
 
         val DEFAULT = GemmaConfig()
     }

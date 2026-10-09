@@ -27,8 +27,8 @@ object SearchConfig {
     const val MAX_CONCURRENT_FETCHES = 2
 
     // Context Window Safety (strictly bounded to fit LiteRT-LM 2048 KV-cache limit)
-    const val MAX_WEB_CONTEXT_CHARS = 1600
-    const val MAX_WEB_OUTPUT_TOKENS = 550
-    const val MAX_TOOL_ARG_STRING_CHARS = 500
+    const val MAX_WEB_CONTEXT_CHARS = 900
+    const val MAX_WEB_OUTPUT_TOKENS = 650
+    const val MAX_TOOL_ARG_STRING_CHARS = 400
     const val MAX_TOOL_STEPS = 2
 }
