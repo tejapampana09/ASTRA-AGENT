@@ -641,7 +641,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             isSearchingWeb = useWebSearch,
             isImageAnalysis = isImage,
             citedPages = promptResult?.citedPages ?: emptyList(),
-            sourceFileName = if (isDocument && doc != null) doc.fileName else null
+            sourceFileName = if (isDocument) doc.fileName else null
         )
 
         val currSessionId = _currentSessionId.value

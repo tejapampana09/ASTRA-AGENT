@@ -390,7 +390,7 @@ data class EngineChunk(
                 }
 
                 val requestedOutput = dynamicMaxOutputOverride ?: currentConfig.maxTokens
-                val dynamicMaxOutput = minOf(requestedOutput, maxOf(128, availableForOutput))
+                val dynamicMaxOutput = minOf(requestedOutput, availableForOutput)
                 Log.d(TAG, "[$TAG] Starting attempt $attempt with promptTokens=$totalPromptTokens, maxOutput=$dynamicMaxOutput, thinking=$currentThinking, thinkBudget=$currentThinkBudget, hasImage=${currentImageBytes != null}")
 
                 val thinkingConfig = ThinkingConfig(
@@ -437,6 +437,7 @@ data class EngineChunk(
                                 if (bmp != null) {
                                     val pngStream = java.io.ByteArrayOutputStream()
                                     bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, pngStream)
+                                    try { bmp.recycle() } catch (_: Throwable) {}
                                     val pngBytes = pngStream.toByteArray()
                                     val contents = Contents.of(
                                         Content.ImageBytes(pngBytes),

@@ -1287,26 +1287,29 @@ fun ChatScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(inputDockHeightDp + navBarBottomDp + 40.dp)
+                        .height(inputDockHeightDp + navBarBottomDp + 48.dp)
                         .align(Alignment.BottomCenter)
                         .background(
                             Brush.verticalGradient(
                                 0.0f to Color.Transparent,
-                                0.30f to currentTheme.background.copy(alpha = 0.50f),
-                                0.65f to currentTheme.background.copy(alpha = 0.92f),
+                                0.20f to currentTheme.background.copy(alpha = 0.25f),
+                                0.50f to currentTheme.background.copy(alpha = 0.70f),
+                                0.78f to currentTheme.background,
                                 1.0f to currentTheme.background
                             )
                         )
                 )
 
-                // 2. Solid color fill directly behind the navigation bar area (ensures zero transparent gap)
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(navBarBottomDp + 18.dp)
-                        .align(Alignment.BottomCenter)
-                        .background(currentTheme.background)
-                )
+                // 2. Solid color fill strictly covering the system navigation bar area
+                if (navBarBottomDp > 0.dp) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(navBarBottomDp)
+                            .align(Alignment.BottomCenter)
+                            .background(currentTheme.background)
+                    )
+                }
 
                 // 3. Floating Input Dock and Actions (safely padded above system navigation bar)
                 Box(
