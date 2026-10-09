@@ -3245,6 +3245,11 @@ fun parseProductCardBlock(
         resolvedUrl.contains("flipkart") -> "flipkart.com"
         resolvedUrl.contains("nykaa") -> "nykaa.com"
         resolvedUrl.contains("myntra") -> "myntra.com"
+        resolvedUrl.contains("meesho") -> "meesho.com"
+        resolvedUrl.contains("purplle") -> "purplle.com"
+        resolvedUrl.contains("reliance") -> "reliancedigital.in"
+        resolvedUrl.contains("blinkit") -> "blinkit.com"
+        resolvedUrl.contains("ibp=oshop") -> "Google Shopping"
         source.isNotBlank() && !source.contains("nytimes") && !source.contains("goodhousekeeping") && !source.contains("forbes") -> source
         resolvedUrl.isNotBlank() -> extractDomain(resolvedUrl)
         else -> "amazon.in"
@@ -3291,10 +3296,10 @@ fun resolveProductUrl(title: String, rawUrl: String, results: List<SearchResult>
         "amazon.in", "amazon.com", "flipkart.com", "myntra.com", "nykaa.com",
         "beminimalist.co", "thedermaco.com", "aqualogica.in", "croma.com",
         "reliancedigital.in", "tatacliq.com", "apollopharmacy.in", "pharmeasy.in",
-        "meesho.com", "jiomart.com"
+        "meesho.com", "jiomart.com", "purplle.com", "1mg.com", "blinkit.com", "bigbasket.com"
     )
     val lower = rawUrl.lowercase()
-    if (shoppingDomains.any { lower.contains(it) } || lower.contains("/dp/") || lower.contains("/p/") || lower.contains("/product/")) {
+    if (shoppingDomains.any { lower.contains(it) } || lower.contains("/dp/") || lower.contains("/p/") || lower.contains("/product/") || lower.contains("/prid/") || lower.contains("/pd/") || lower.contains("ibp=oshop") || lower.contains("prds=catalogid")) {
         return rawUrl
     }
 
@@ -3304,10 +3309,18 @@ fun resolveProductUrl(title: String, rawUrl: String, results: List<SearchResult>
     val storeResult = results.firstOrNull { res ->
         val resUrl = res.url.lowercase()
         val resTitle = res.title.lowercase()
-        shoppingDomains.any { resUrl.contains(it) } && words.any { resTitle.contains(it) }
+        (shoppingDomains.any { resUrl.contains(it) } || resUrl.contains("ibp=oshop") || resUrl.contains("prds=catalogid")) && words.any { resTitle.contains(it) }
     }
     if (storeResult != null) {
         return storeResult.url
+    }
+
+    val anyStoreResult = results.firstOrNull { res ->
+        val resUrl = res.url.lowercase()
+        shoppingDomains.any { resUrl.contains(it) } || resUrl.contains("ibp=oshop") || resUrl.contains("prds=catalogid")
+    }
+    if (anyStoreResult != null) {
+        return anyStoreResult.url
     }
 
     // Fall back to direct Amazon.in product search query so user can buy the exact item
@@ -3339,7 +3352,7 @@ fun extractFallbackProductCards(
         "amazon.in", "amazon.com", "flipkart.com", "myntra.com", "nykaa.com",
         "beminimalist.co", "thedermaco.com", "aqualogica.in", "croma.com",
         "reliancedigital.in", "tatacliq.com", "apollopharmacy.in", "pharmeasy.in",
-        "meesho.com", "jiomart.com"
+        "meesho.com", "jiomart.com", "purplle.com", "1mg.com", "blinkit.com", "bigbasket.com"
     )
 
     // MUST be a verified shopping store or direct product listing (NEVER blog articles like forbes/nytimes)
@@ -3348,7 +3361,7 @@ fun extractFallbackProductCards(
         val domain = extractDomain(res.url)
         val isArticle = domain.contains("nytimes") || domain.contains("goodhousekeeping") ||
             domain.contains("forbes") || domain.contains("healthline") || domain.contains("wikipedia")
-        !isArticle && (shoppingDomains.any { domain.contains(it) } || url.contains("/dp/") || url.contains("/p/") || url.contains("/product/"))
+        !isArticle && (shoppingDomains.any { domain.contains(it) } || url.contains("/dp/") || url.contains("/p/") || url.contains("/product/") || url.contains("/prid/") || url.contains("/pd/") || url.contains("ibp=oshop") || url.contains("prds=catalogid"))
     }
 
     val cards = mutableListOf<ProductCardData>()
@@ -3373,13 +3386,29 @@ fun extractFallbackProductCards(
         val priceMatch = Regex("""(?:₹|Rs\.?\s*)\s*(\d[\d,]*\b)""").find(res.snippet)
         val extractedPrice = priceMatch?.value
 
+        val finalDomain = when {
+            purchaseUrl.contains("amazon") -> "amazon.in"
+            purchaseUrl.contains("flipkart") -> "flipkart.com"
+            purchaseUrl.contains("nykaa") -> "nykaa.com"
+            purchaseUrl.contains("myntra") -> "myntra.com"
+            purchaseUrl.contains("meesho") -> "meesho.com"
+            purchaseUrl.contains("purplle") -> "purplle.com"
+            purchaseUrl.contains("reliance") -> "reliancedigital.in"
+            purchaseUrl.contains("blinkit") -> "blinkit.com"
+            purchaseUrl.contains("ibp=oshop") -> {
+                val onMatch = Regex("""on\s+([A-Za-z0-9\.\-]+)""").find(res.snippet)?.groupValues?.get(1)
+                onMatch ?: "Google Shopping"
+            }
+            else -> domain
+        }
+
         cards.add(
             ProductCardData(
                 title = cleanTitle,
                 badge = badge,
                 price = extractedPrice,
                 description = res.snippet.take(200).trim(),
-                sourceDomain = if (purchaseUrl.contains("amazon")) "amazon.in" else if (purchaseUrl.contains("flipkart")) "flipkart.com" else domain,
+                sourceDomain = finalDomain,
                 url = purchaseUrl,
                 imageUrl = imgUrl
             )
@@ -3537,11 +3566,16 @@ fun ProductRecommendationCard(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         val actionLabel = when {
-                            card.sourceDomain.contains("amazon") -> "Buy on Amazon ↗"
-                            card.sourceDomain.contains("flipkart") -> "Buy on Flipkart ↗"
-                            card.sourceDomain.contains("nykaa") -> "Buy on Nykaa ↗"
-                            card.sourceDomain.contains("myntra") -> "Buy on Myntra ↗"
-                            card.sourceDomain.isNotBlank() -> "View on ${card.sourceDomain} ↗"
+                            card.sourceDomain.contains("amazon", ignoreCase = true) -> "Buy on Amazon ↗"
+                            card.sourceDomain.contains("flipkart", ignoreCase = true) -> "Buy on Flipkart ↗"
+                            card.sourceDomain.contains("nykaa", ignoreCase = true) -> "Buy on Nykaa ↗"
+                            card.sourceDomain.contains("myntra", ignoreCase = true) -> "Buy on Myntra ↗"
+                            card.sourceDomain.contains("meesho", ignoreCase = true) -> "Buy on Meesho ↗"
+                            card.sourceDomain.contains("purplle", ignoreCase = true) -> "Buy on Purplle ↗"
+                            card.sourceDomain.contains("reliance", ignoreCase = true) -> "Buy on Reliance Digital ↗"
+                            card.sourceDomain.contains("blinkit", ignoreCase = true) -> "Buy on Blinkit ↗"
+                            card.url.contains("ibp=oshop") -> "View & Buy on Google Shopping ↗"
+                            card.sourceDomain.isNotBlank() -> "Buy on ${card.sourceDomain.substringBefore(".")} ↗"
                             else -> "Check price & buy ↗"
                         }
                         Text(

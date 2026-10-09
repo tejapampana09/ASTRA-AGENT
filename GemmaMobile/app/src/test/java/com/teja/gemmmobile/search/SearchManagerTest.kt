@@ -70,7 +70,11 @@ class SearchManagerTest {
             }
         }
 
-        val manager = SearchManager(webSearchClient = mockClient, webPageFetcher = mockFetcher)
+        val manager = SearchManager(
+            webSearchClient = mockClient,
+            webPageFetcher = mockFetcher,
+            serpApiClient = SerpApiClient("")
+        )
         val response = manager.searchAndReadWithStatus("test query", maxResults = 5)
 
         assertEquals(SearchStatus.SUCCESS, response.status)
@@ -94,7 +98,7 @@ class SearchManagerTest {
             override suspend fun search(query: String, maxResults: Int): List<SearchResult> = emptyList()
         }
 
-        val manager = SearchManager(webSearchClient = mockClient)
+        val manager = SearchManager(webSearchClient = mockClient, serpApiClient = SerpApiClient(""))
         val response = manager.searchAndReadWithStatus("nonexistent query", maxResults = 5)
 
         assertEquals(SearchStatus.NO_RESULTS, response.status)
@@ -109,12 +113,37 @@ class SearchManagerTest {
             }
         }
 
-        val manager = SearchManager(webSearchClient = mockClient)
+        val manager = SearchManager(webSearchClient = mockClient, serpApiClient = SerpApiClient(""))
         val response = manager.searchAndReadWithStatus("error query", maxResults = 5)
 
         assertEquals(SearchStatus.PROVIDER_ERROR, response.status)
         assertTrue(response.results.isEmpty())
         assertTrue(response.errorMessage?.contains("DuckDuckGo connection refused") == true)
+    }
+
+    @Test
+    fun testSearchAndReadWithStatus_serpApiPrimarySuccess() = runBlocking {
+        val mockSerp = object : SerpApiClient("dummy-key") {
+            override suspend fun search(query: String, maxResults: Int, isProduct: Boolean): SerpApiResult {
+                return SerpApiResult(
+                    results = listOf(
+                        SearchResult("Realme P4 5G", "https://www.google.com/search?ibp=oshop&prds=catalogid:123", "₹18,499 on Reliance Digital.")
+                    ),
+                    images = listOf(
+                        SearchImage("Realme P4 5G", "https://img.com/thumb.jpg", "https://reliancedigital.in/p4", "Reliance Digital")
+                    )
+                )
+            }
+        }
+
+        val manager = SearchManager(serpApiClient = mockSerp)
+        val response = manager.searchAndReadWithStatus("best phone under 20000", maxResults = 5, isProduct = true)
+
+        assertEquals(SearchStatus.SUCCESS, response.status)
+        assertEquals(1, response.results.size)
+        assertEquals("Realme P4 5G", response.results[0].title)
+        assertEquals(1, response.images.size)
+        assertEquals("https://img.com/thumb.jpg", response.images[0].imageUrl)
     }
 
     @Test

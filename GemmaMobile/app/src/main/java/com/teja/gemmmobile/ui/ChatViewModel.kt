@@ -849,7 +849,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 val searchJob = async {
                                     try {
                                         kotlinx.coroutines.withTimeoutOrNull(10000L) {
-                                            searchManager.searchAndRead(cleanQuery, maxResults = SearchConfig.DEFAULT_MAX_SEARCH_RESULTS)
+                                            searchManager.searchAndReadWithStatus(cleanQuery, maxResults = SearchConfig.DEFAULT_MAX_SEARCH_RESULTS, isProduct = isProductRequest)
                                         }
                                     } catch (t: Throwable) {
                                         Log.w(TAG, "[$TAG] Web search failed", t)
@@ -871,12 +871,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     }
                                 } else null
 
-                                val enrichedResults = searchJob.await()
-                                if (!enrichedResults.isNullOrEmpty()) {
-                                    searchResults = enrichedResults.map { it.toSearchResult() }
-                                    searchContext = searchManager.formatGemmaWebContext(enrichedResults)
+                                val searchResp = searchJob.await()
+                                if (searchResp != null && searchResp.results.isNotEmpty()) {
+                                    searchResults = searchResp.results.map { it.toSearchResult() }
+                                    searchContext = searchManager.formatGemmaWebContext(searchResp.results)
+                                    if (searchResp.images.isNotEmpty()) {
+                                        searchImages = searchResp.images
+                                    }
                                 }
-                                if (imageJob != null) {
+                                if (searchImages.isEmpty() && imageJob != null) {
                                     searchImages = imageJob.await()
                                 }
                             }
@@ -918,7 +921,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         "price: [e.g. ₹399 / Around ₹499]\n" +
                         "description: [2 sentences on why it is recommended and key benefits]\n" +
                         "source: [Store or brand name, e.g. Amazon / Nykaa / Minimalist]\n" +
-                        "url: [Store URL from live results or https://www.amazon.in/s?k=ProductName]\n" +
+                        "url: [Direct product Source URL from live web results above]\n" +
                         ":::\n" +
                         "3. Conclude with 1 helpful tip. Never say you cannot browse or provide links."
                     }

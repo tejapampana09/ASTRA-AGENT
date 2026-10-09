@@ -44,7 +44,8 @@ enum class ContentSourceType {
 data class SearchResponse(
     val status: SearchStatus,
     val results: List<EnrichedSearchResult> = emptyList(),
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val images: List<SearchImage> = emptyList()
 )
 
 /**
@@ -71,17 +72,15 @@ data class EnrichedSearchResult(
 }
 
 /**
- * Central orchestrator for ₹0 on-device web search.
- * Pipeline:
- * User Query -> WebSearchClient (DuckDuckGo Lite / Multi-query)
- *            -> Normalize & Deduplicate
- *            -> Domain Diversity Ranking
- *            -> WebPageFetcher (Bounded concurrency, per-page timeouts, SSRF safe)
- *            -> EnrichedSearchResult[]
+ * Central orchestrator for on-device web search.
+ * Uses SerpApi Google Search & Google Shopping as primary provider for 100% genuine products,
+ * live INR prices, packshot images, and direct store URLs.
+ * Seamlessly falls back to on-device zero-cost DuckDuckGo Lite & Wikipedia if SerpApi quota runs out.
  */
 open class SearchManager(
     private val webSearchClient: WebSearchClient = WebSearchClient(),
-    private val webPageFetcher: WebPageFetcher = WebPageFetcher()
+    private val webPageFetcher: WebPageFetcher = WebPageFetcher(),
+    private val serpApiClient: SerpApiClient = SerpApiClient()
 ) {
 
     companion object {
@@ -181,16 +180,45 @@ open class SearchManager(
      */
     open suspend fun searchAndReadWithStatus(
         query: String,
-        maxResults: Int = SearchConfig.DEFAULT_MAX_SEARCH_RESULTS
+        maxResults: Int = SearchConfig.DEFAULT_MAX_SEARCH_RESULTS,
+        isProduct: Boolean = false
     ): SearchResponse = withContext(Dispatchers.IO) {
         val cleanQuery = sanitizeQuery(query)
         if (cleanQuery.isBlank()) {
             return@withContext SearchResponse(SearchStatus.NO_RESULTS, emptyList(), "Empty query")
         }
 
-        Log.d(TAG, "[$TAG] Executing searchAndRead for query: \"$cleanQuery\"")
+        Log.d(TAG, "[$TAG] Executing searchAndRead for query: \"$cleanQuery\" (isProduct=$isProduct)")
 
-        // 1. Fetch raw search results from DuckDuckGo
+        // 1. Try SerpApi (Google Search & Google Shopping in India) first if key is present
+        if (serpApiClient.isAvailable()) {
+            try {
+                val serpResult = serpApiClient.search(cleanQuery, maxResults, isProduct = isProduct)
+                if (serpResult != null && serpResult.results.isNotEmpty()) {
+                    Log.d(TAG, "[$TAG] SerpApi returned ${serpResult.results.size} high-fidelity results and ${serpResult.images.size} images")
+                    val enriched = serpResult.results.map { res ->
+                        EnrichedSearchResult(
+                            title = res.title,
+                            url = normalizeUrl(res.url),
+                            snippet = res.snippet,
+                            pageContent = "",
+                            fetchSucceeded = false,
+                            imageUrl = serpResult.images.firstOrNull { it.title == res.title }?.imageUrl,
+                            sourceType = ContentSourceType.SEARCH_SNIPPET
+                        )
+                    }
+                    return@withContext SearchResponse(
+                        status = SearchStatus.SUCCESS,
+                        results = enriched,
+                        images = serpResult.images
+                    )
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "[$TAG] SerpApi primary search failed, falling back to WebSearchClient", t)
+            }
+        }
+
+        // 2. Fallback to on-device DuckDuckGo / Wikipedia pipeline
         val rawResults: List<SearchResult>
         try {
             rawResults = webSearchClient.search(cleanQuery, maxResults = 12)
@@ -205,13 +233,13 @@ open class SearchManager(
             return@withContext SearchResponse(SearchStatus.NO_RESULTS, emptyList())
         }
 
-        // 2. Deduplicate, filter junk/unsafe targets, and ensure domain diversity
+        // 3. Deduplicate, filter junk/unsafe targets, and ensure domain diversity
         val rankedResults = deduplicateAndRank(rawResults, maxResults)
         if (rankedResults.isEmpty()) {
             return@withContext SearchResponse(SearchStatus.NO_RESULTS, emptyList())
         }
 
-        // 3. Concurrently fetch top public pages with bounded semaphore concurrency
+        // 4. Concurrently fetch top public pages with bounded semaphore concurrency
         val semaphore = Semaphore(SearchConfig.MAX_CONCURRENT_FETCHES)
 
         val enrichedList = coroutineScope {
@@ -268,9 +296,10 @@ open class SearchManager(
      */
     open suspend fun searchAndRead(
         query: String,
-        maxResults: Int = SearchConfig.DEFAULT_MAX_SEARCH_RESULTS
+        maxResults: Int = SearchConfig.DEFAULT_MAX_SEARCH_RESULTS,
+        isProduct: Boolean = false
     ): List<EnrichedSearchResult> {
-        return searchAndReadWithStatus(query, maxResults).results
+        return searchAndReadWithStatus(query, maxResults, isProduct).results
     }
 
     /**
