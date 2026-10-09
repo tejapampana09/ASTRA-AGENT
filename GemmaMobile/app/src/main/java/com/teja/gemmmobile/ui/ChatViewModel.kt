@@ -641,7 +641,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             isSearchingWeb = useWebSearch,
             isImageAnalysis = isImage,
             citedPages = promptResult?.citedPages ?: emptyList(),
-            sourceFileName = if (isDocument) doc?.fileName else null
+            sourceFileName = if (isDocument && doc != null) doc.fileName else null
         )
 
         val currSessionId = _currentSessionId.value
@@ -805,9 +805,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         else -> prompt
                     }
                     val historyTurns = targetMsgs.filter { it.id != assistantMessageId }.dropLast(1)
+                    val allowTools = !isDocument && !hasDocInSession
                     contextManager.buildPrompt(
                         systemPrompt = "", // Handled natively in ConversationConfig
-                        toolsDocumentation = if (effectiveUseWebSearch || isVisualQuery || isDocument || hasDocInSession || !_isWebSearchEnabled.value) "" else toolRegistry.getToolsDocumentation(),
+                        toolsDocumentation = if (allowTools) toolRegistry.getToolsDocumentation() else "",
                         memoryContext = memoryContext,
                         conversationHistory = historyTurns,
                         currentPrompt = promptToUse,
@@ -825,7 +826,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     systemInstruction = effectiveSystemPrompt,
                     imageBytes = imageBytes,
                     enableThinkingOverride = if (useWebSearch) false else null,
-                    dynamicMaxOutputOverride = if (useWebSearch) 400 else null
+                    dynamicMaxOutputOverride = if (useWebSearch) com.teja.gemmmobile.search.SearchConfig.MAX_WEB_OUTPUT_TOKENS else null
                 )
                     .catch { error ->
                         Log.e(TAG, "[$TAG] Stream error", error)
@@ -892,7 +893,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val calledToolsHistory = mutableListOf<com.teja.gemmmobile.tools.ToolCallRequest>()
                 var currentSearchImages = emptyList<SearchImage>()
 
-                val allowToolCalls = _isWebSearchEnabled.value && !isDocument && !hasDocInSession && imageBytes == null && searchResults.isEmpty()
+                val allowToolCalls = !isDocument && !hasDocInSession && imageBytes == null
                 while (allowToolCalls && currentToolStep < MAX_TOOL_STEPS) {
                     var detectedToolCall = toolRegistry.parseToolCall(currentGenerationText) ?: break
 
@@ -980,7 +981,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         eng.sendMessage(
                             prompt = nextTurnPrompt,
                             systemInstruction = effectiveSystemPrompt,
-                            dynamicMaxOutputOverride = 350
+                            dynamicMaxOutputOverride = com.teja.gemmmobile.search.SearchConfig.MAX_WEB_OUTPUT_TOKENS
                         ).collect { chunk ->
                             if (chunk.thought.isNotEmpty()) thoughtBuilder.append(chunk.thought)
                             val clean = chunk.text.replace("<thought>", "").replace("</thought>", "")

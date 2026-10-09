@@ -14,8 +14,8 @@ class ContextManager(
 ) {
 
     companion object {
-        const val MAX_WEB_SEARCH_CONTEXT_CHARS = 700
-        const val MAX_TOOL_RESULT_CONTEXT_CHARS = 700
+        const val MAX_WEB_SEARCH_CONTEXT_CHARS = 1600
+        const val MAX_TOOL_RESULT_CONTEXT_CHARS = 1200
         const val MAX_USER_PROMPT_CHARS = 1200
 
         const val SAFETY_INSTRUCTION =

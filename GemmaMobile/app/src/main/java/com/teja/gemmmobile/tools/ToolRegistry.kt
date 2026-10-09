@@ -31,8 +31,18 @@ class ToolRegistry {
         Log.d(TAG, "[$TAG] Registered tool: ${tool.name}")
     }
 
+    fun resolveToolName(name: String): String {
+        return when (name.lowercase().trim()) {
+            "web_search", "websearch", "search", "search_web", "google_search", "bing_search", "duckduckgo_search" -> "web_search"
+            "image_search", "imagesearch", "image", "images", "search_images", "visual_search" -> "image_search"
+            "manage_memory", "memory_store", "memory", "store_memory", "remember", "save_memory" -> "manage_memory"
+            "ocr", "ocr_tool", "scan_document" -> "ocr"
+            else -> name
+        }
+    }
+
     fun get(name: String): GemmaTool? {
-        val resolvedName = if (name == "memory_store") "manage_memory" else name
+        val resolvedName = resolveToolName(name)
         return tools[resolvedName]
     }
 
@@ -102,16 +112,31 @@ class ToolRegistry {
      * Executes a tool by name with arguments, enforcing validation and catching all errors.
      */
     suspend fun execute(name: String, arguments: Map<String, Any?>): ToolResult {
-        val resolvedName = if (name == "memory_store") "manage_memory" else name
+        val resolvedName = resolveToolName(name)
         val tool = tools[resolvedName] ?: return ToolResult.failure("Unknown tool: '$name'")
 
-        // Normalize memory_store args if called
-        val normalizedArgs = if (name == "memory_store" && !arguments.containsKey("action")) {
-            val fact = arguments["fact"] as? String
-                ?: listOfNotNull(arguments["key"] as? String, arguments["value"] as? String).joinToString(": ")
-            mapOf("action" to "save", "fact" to fact)
-        } else {
-            arguments
+        // Normalize argument keys
+        val normalizedArgs = mutableMapOf<String, Any?>()
+        normalizedArgs.putAll(arguments)
+
+        if (resolvedName == "web_search" || resolvedName == "image_search") {
+            if (!normalizedArgs.containsKey("query")) {
+                val candidateQuery = normalizedArgs["q"] ?: normalizedArgs["search_query"] ?: normalizedArgs["input"] ?: normalizedArgs["keywords"]
+                if (candidateQuery != null) {
+                    normalizedArgs["query"] = candidateQuery
+                }
+            }
+        } else if (resolvedName == "manage_memory") {
+            if (!normalizedArgs.containsKey("action")) {
+                normalizedArgs["action"] = "save"
+            }
+            if (!normalizedArgs.containsKey("fact")) {
+                val candidateFact = (normalizedArgs["text"] ?: normalizedArgs["info"] ?: normalizedArgs["value"]) as? String
+                    ?: listOfNotNull(normalizedArgs["key"] as? String, normalizedArgs["val"] as? String).joinToString(": ").ifBlank { null }
+                if (!candidateFact.isNullOrBlank()) {
+                    normalizedArgs["fact"] = candidateFact
+                }
+            }
         }
 
         // Enforce argument validation
@@ -158,12 +183,14 @@ class ToolRegistry {
                     obj
                 }
 
-                val toolName = when {
+                val rawToolName = when {
                     targetObj.has("name") -> targetObj.get("name").asString
                     targetObj.has("tool") -> targetObj.get("tool").asString
                     targetObj.has("function") -> targetObj.get("function").asString
                     else -> null
                 } ?: continue
+
+                val toolName = resolveToolName(rawToolName)
 
                 // Tool must be registered in this registry
                 if (!tools.containsKey(toolName)) continue

@@ -125,34 +125,39 @@ open class WebSearchClient {
     }
 
     /**
-     * Executes broad web search across DuckDuckGo Lite and Wikipedia in parallel.
+     * Executes broad web search across DuckDuckGo Lite, Bing Web Search, and Wikipedia API in parallel.
      */
     open suspend fun search(query: String, maxResults: Int = 10): List<SearchResult> = withContext(Dispatchers.IO) {
         val clean = sanitizeQuery(query)
         if (clean.isBlank()) return@withContext emptyList()
 
         try {
-            Log.d(TAG, "[$TAG] Initiating broad web search for: '$clean' (raw: '$query')")
+            Log.d(TAG, "[$TAG] Initiating broad parallel web search for: '$clean' (raw: '$query')")
 
-            // Query DuckDuckGo Lite and Wikipedia in parallel
-            val (ddgCandidates, wikiCandidates) = coroutineScope {
-                val ddgDeferred = async { fetchDuckDuckGoLite(clean, maxResults * 2) }
-                val wikiDeferred = async { fetchWikipedia(clean, 3) }
-                Pair(ddgDeferred.await(), wikiDeferred.await())
+            // Concurrently query DuckDuckGo Lite, Bing Web Search, and Wikipedia API in parallel
+            val (ddgCandidates, bingCandidates, wikiCandidates) = coroutineScope {
+                val ddgDeferred = async {
+                    try { fetchDuckDuckGoLite(clean, maxResults * 2) } catch (_: Exception) { emptyList() }
+                }
+                val bingDeferred = async {
+                    try { fetchBingWeb(clean, maxResults * 2) } catch (_: Exception) { emptyList() }
+                }
+                val wikiDeferred = async {
+                    try { fetchWikipedia(clean, 3) } catch (_: Exception) { emptyList() }
+                }
+                Triple(ddgDeferred.await(), bingDeferred.await(), wikiDeferred.await())
             }
 
-            var combined = (wikiCandidates + ddgCandidates).toMutableList()
+            val combined = mutableListOf<SearchResult>()
+            combined.addAll(wikiCandidates)
+            combined.addAll(ddgCandidates)
+            combined.addAll(bingCandidates)
 
-            // If DDG Lite was empty or blocked, try DDG HTML and Bing as fallbacks
-            if (ddgCandidates.isEmpty()) {
-                Log.d(TAG, "[$TAG] DDG Lite empty, trying DDG HTML and Bing")
+            // If primary engines were empty, fall back to DDG HTML
+            if (combined.isEmpty()) {
+                Log.d(TAG, "[$TAG] Primary engines empty, trying DDG HTML fallback")
                 val ddgHtml = fetchDuckDuckGoHtml(clean, maxResults)
-                if (ddgHtml.isNotEmpty()) {
-                    combined.addAll(ddgHtml)
-                } else {
-                    val bing = fetchBingWeb(clean, maxResults)
-                    combined.addAll(bing)
-                }
+                combined.addAll(ddgHtml)
             }
 
             if (combined.isEmpty()) {
@@ -459,7 +464,30 @@ open class WebSearchClient {
         // Sort descending by relevance score
         scoredList.sortByDescending { it.second }
 
-        return scoredList.map { it.first }.take(maxResults)
+        val domainCounts = mutableMapOf<String, Int>()
+        val diverseList = mutableListOf<SearchResult>()
+        for (item in scoredList.map { it.first }) {
+            val host = try {
+                val hostStr = java.net.URI(item.url).host ?: ""
+                hostStr.lowercase().removePrefix("www.")
+            } catch (_: Exception) { "" }
+            val count = domainCounts.getOrDefault(host, 0)
+            if (host.isNotBlank() && count >= 2) continue
+            if (host.isNotBlank()) domainCounts[host] = count + 1
+            diverseList.add(item)
+            if (diverseList.size >= maxResults) break
+        }
+
+        if (diverseList.size < maxResults) {
+            for (item in scoredList.map { it.first }) {
+                if (!diverseList.contains(item)) {
+                    diverseList.add(item)
+                    if (diverseList.size >= maxResults) break
+                }
+            }
+        }
+
+        return diverseList
     }
 
     private fun cleanUrl(raw: String): String {
