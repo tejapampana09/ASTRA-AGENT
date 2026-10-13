@@ -858,11 +858,14 @@ class ToolRegistry:
 
         # Determine if approval is needed:
         # 1. Dangerous tools/commands (always require approval)
-        # 2. Strict mode: all MODERATE/DANGEROUS actions (write, edit, create, delete, run_command)
+        # 2. Strict/Ask mode: all MODERATE/DANGEROUS actions or run_command
+        # 3. Interactive CLI ask_commands confirmation (Antigravity mode)
         from astra.config import settings
-        requires_approval = (permission == PermissionLevel.DANGEROUS) or (
-            getattr(settings, "permission_mode", "balanced") == "strict"
-            and permission != PermissionLevel.SAFE
+        perm_mode = getattr(settings, "permission_mode", "balanced").lower()
+        requires_approval = (
+            (permission == PermissionLevel.DANGEROUS)
+            or (perm_mode in ("strict", "ask") and permission != PermissionLevel.SAFE)
+            or (approval_callback is not None and getattr(approval_callback, "ask_commands", False) and name == "run_command")
         )
 
         approved = False

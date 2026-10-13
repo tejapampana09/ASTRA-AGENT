@@ -100,10 +100,111 @@ class TerminalCallback(AgentCallback):
 
 
 class AstraCLI:
-    def __init__(self, workspace_path: Optional[str] = None, model: Optional[str] = None):
+    def __init__(
+        self,
+        workspace_path: Optional[str] = None,
+        model: Optional[str] = None,
+        ask_commands: bool = True,
+    ):
         self.workspace_path = Path(workspace_path or settings.workspace_path).resolve()
         self.model = model or settings.default_model
         self.tools = ToolExecutor(self.workspace_path)
+        self.ask_commands = ask_commands
+        self.active_status = None
+
+    def cli_approval_handler(self, tool_name: str, description: str, args: Dict[str, Any]) -> bool:
+        """Interactive Antigravity-style command approval guard."""
+        if tool_name == "run_command":
+            if not getattr(self.cli_approval_handler, "ask_commands", True) and not self.ask_commands:
+                return True
+
+            cmd = args.get("command", "")
+            if self.active_status:
+                try:
+                    self.active_status.stop()
+                except Exception:
+                    pass
+
+            console.print()
+            console.print(
+                Panel(
+                    f"[bold yellow]$[/bold yellow] [bold white]{cmd}[/bold white]",
+                    title="[bold yellow]🛡️ ASTRA Shell Command Confirmation[/bold yellow]",
+                    subtitle="[dim]Antigravity Security Guard[/dim]",
+                    border_style="yellow",
+                    padding=(0, 2),
+                )
+            )
+            try:
+                choice = console.input("[bold cyan]Execute this command? [Y/n/always/quit]: [/bold cyan]").strip().lower()
+                if choice in ("a", "always"):
+                    self.ask_commands = False
+                    self.cli_approval_handler.ask_commands = False
+                    console.print("[dim]✓ Auto-approve enabled for remaining commands in this run.[/dim]\n")
+                    if self.active_status:
+                        try:
+                            self.active_status.start()
+                        except Exception:
+                            pass
+                    return True
+                if choice in ("q", "quit", "exit"):
+                    console.print("\n[red]✗ Task cancelled by user.[/red]\n")
+                    raise KeyboardInterrupt("Cancelled by user")
+
+                approved = choice in ("", "y", "yes")
+                if not approved:
+                    console.print("[red]✗ Command rejected by user.[/red]\n")
+                if self.active_status:
+                    try:
+                        self.active_status.start()
+                    except Exception:
+                        pass
+                return approved
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n[red]✗ Command rejected by user.[/red]\n")
+                if self.active_status:
+                    try:
+                        self.active_status.start()
+                    except Exception:
+                        pass
+                return False
+
+        elif tool_name in ("write_file", "edit_file", "create_file", "delete_file"):
+            if not getattr(self.cli_approval_handler, "ask_commands", True) and not self.ask_commands:
+                return True
+            fp = args.get("file_path", "")
+            if self.active_status:
+                try:
+                    self.active_status.stop()
+                except Exception:
+                    pass
+            console.print()
+            try:
+                choice = console.input(f"[bold yellow]Allow {tool_name} on '{fp}'? [Y/n/always]: [/bold yellow]").strip().lower()
+                if choice in ("a", "always"):
+                    self.ask_commands = False
+                    self.cli_approval_handler.ask_commands = False
+                    if self.active_status:
+                        try:
+                            self.active_status.start()
+                        except Exception:
+                            pass
+                    return True
+                approved = choice in ("", "y", "yes")
+                if self.active_status:
+                    try:
+                        self.active_status.start()
+                    except Exception:
+                        pass
+                return approved
+            except (KeyboardInterrupt, EOFError):
+                if self.active_status:
+                    try:
+                        self.active_status.start()
+                    except Exception:
+                        pass
+                return False
+        return True
 
     def print_banner(self) -> None:
         console.print(BANNER_ART)
@@ -118,6 +219,8 @@ class AstraCLI:
         table.add_row("Model:", get_model_badge(self.model))
         table.add_row("Workspace:", f"[dim]{self.workspace_path}[/dim]")
         table.add_row("Git:", f"[cyan]{git_summary}[/cyan]")
+        confirm_badge = "[bold green]ON (Ask before run)[/bold green]" if self.ask_commands else "[dim]OFF (Auto-run)[/dim]"
+        table.add_row("Confirm:", confirm_badge)
 
         console.print(Panel(table, border_style="cyan", title="[bold]ASTRA Status[/bold]", title_align="left"))
         console.print("[dim]Type your goal in plain English, or [bold cyan]/help[/bold cyan] for commands.[/dim]\n")
@@ -128,6 +231,7 @@ class AstraCLI:
         table.add_column("Description")
 
         table.add_row("<your goal>", "Execute any coding task (e.g. 'Fix login test in test_auth.py')")
+        table.add_row("/ask, /confirm", "Toggle interactive command confirmation (Antigravity mode)")
         table.add_row("/model [name]", "Switch or view LLM (e.g. 'groq', 'gemini', 'teja-gemma', 'ollama')")
         table.add_row("/status, /git", "Check git status and modified files in workspace")
         table.add_row("/diff", "Show colorized git diff of changes")
@@ -198,15 +302,22 @@ class AstraCLI:
         )
 
         callback = TerminalCallback()
+        self.cli_approval_handler.ask_commands = self.ask_commands
         agent = AstraAgent(
             workspace_path=self.workspace_path,
             model_name=self.model,
             max_iterations=15,
             callback=callback,
+            approval_handler=self.cli_approval_handler,
         )
 
-        with console.status("[bold cyan]ASTRA is working autonomously...[/bold cyan]", spinner="dots"):
-            result = agent.run(goal)
+        status_spinner = console.status("[bold cyan]ASTRA is working autonomously...[/bold cyan]", spinner="dots")
+        self.active_status = status_spinner
+        try:
+            with status_spinner:
+                result = agent.run(goal)
+        finally:
+            self.active_status = None
 
         console.print()
         status = result.get("status")
@@ -353,6 +464,13 @@ class AstraCLI:
                         console.print(f"Active Workspace: [cyan]{self.workspace_path}[/cyan]\n")
                     continue
 
+                if user_input in ("/ask", "/confirm", "/safety"):
+                    self.ask_commands = not self.ask_commands
+                    self.cli_approval_handler.ask_commands = self.ask_commands
+                    status_str = "[bold green]ON (will prompt before running commands)[/bold green]" if self.ask_commands else "[dim]OFF (auto-run commands)[/dim]"
+                    console.print(f"🛡️ [bold cyan]Command Confirmation Guard:[/bold cyan] {status_str}\n")
+                    continue
+
                 # Run autonomous goal
                 self.execute_goal(user_input)
 
@@ -369,6 +487,8 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8765, help="Port for ASTRA API server (default: 8765)")
     parser.add_argument("--model", "-m", default=None, help="LLM model (e.g. gemini, ollama, teja-gemma)")
     parser.add_argument("--repo", "-r", default=None, help="Target workspace path")
+    parser.add_argument("--ask", action="store_true", default=None, help="Prompt for approval before running shell commands (like Antigravity)")
+    parser.add_argument("-y", "--yes", action="store_true", help="Auto-run commands without interactive approval prompts")
     parser.add_argument("--status", action="store_true", help="Show workspace git status")
     parser.add_argument("--diff", action="store_true", help="Show workspace git diff")
     parser.add_argument("--help", "-h", action="store_true", help="Show help information")
@@ -381,7 +501,19 @@ def main() -> None:
         run_server(port=args.port)
         return
 
-    cli = AstraCLI(workspace_path=args.repo, model=args.model)
+    # Determine ask_commands preference:
+    # 1. If -y/--yes explicitly passed -> False
+    # 2. If --ask explicitly passed -> True
+    # 3. Otherwise default to True for interactive REPL or settings
+    if args.yes:
+        ask_pref = False
+    elif args.ask:
+        ask_pref = True
+    else:
+        # Default: True (Antigravity-style confirmation on commands)
+        ask_pref = True
+
+    cli = AstraCLI(workspace_path=args.repo, model=args.model, ask_commands=ask_pref)
 
     if args.help:
         cli.print_banner()
