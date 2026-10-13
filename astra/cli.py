@@ -222,7 +222,7 @@ class AstraCLI:
                 return options[0] if options else "(Cancelled)"
 
         if tool_name == "run_command":
-            if not getattr(self.cli_approval_handler, "ask_commands", True) and not self.ask_commands:
+            if not self.ask_commands:
                 return True
 
             cmd = args.get("command", "")
@@ -246,7 +246,6 @@ class AstraCLI:
                 choice = console.input("[bold cyan]Execute this command? [Y/n/always/quit]: [/bold cyan]").strip().lower()
                 if choice in ("a", "always"):
                     self.ask_commands = False
-                    self.cli_approval_handler.ask_commands = False
                     console.print("[dim]✓ Auto-approve enabled for remaining commands in this run.[/dim]\n")
                     if self.active_status:
                         try:
@@ -277,7 +276,7 @@ class AstraCLI:
                 return False
 
         elif tool_name in ("write_file", "edit_file", "create_file", "delete_file"):
-            if not getattr(self.cli_approval_handler, "ask_commands", True) and not self.ask_commands:
+            if not self.ask_commands:
                 return True
             fp = args.get("file_path", "")
             if self.active_status:
@@ -290,7 +289,6 @@ class AstraCLI:
                 choice = console.input(f"[bold yellow]Allow {tool_name} on '{fp}'? [Y/n/always]: [/bold yellow]").strip().lower()
                 if choice in ("a", "always"):
                     self.ask_commands = False
-                    self.cli_approval_handler.ask_commands = False
                     if self.active_status:
                         try:
                             self.active_status.start()
@@ -409,7 +407,6 @@ class AstraCLI:
         )
 
         callback = TerminalCallback()
-        self.cli_approval_handler.ask_commands = self.ask_commands
         agent = AstraAgent(
             workspace_path=self.workspace_path,
             model_name=self.model,
@@ -573,7 +570,6 @@ class AstraCLI:
 
                 if user_input in ("/ask", "/confirm", "/safety"):
                     self.ask_commands = not self.ask_commands
-                    self.cli_approval_handler.ask_commands = self.ask_commands
                     status_str = "[bold green]ON (will prompt before running commands)[/bold green]" if self.ask_commands else "[dim]OFF (auto-run commands)[/dim]"
                     console.print(f"🛡️ [bold cyan]Command Confirmation Guard:[/bold cyan] {status_str}\n")
                     continue
