@@ -728,6 +728,17 @@ class GroqProvider(LLMProvider):
                         "function": {"name": fn.get("name"), "arguments": parsed_args},
                     })
 
+                if not tool_calls and content:
+                    content, tool_calls = parse_tool_calls_from_text(content)
+
+                return LLMResponse(
+                    content=content,
+                    tool_calls=tool_calls,
+                    raw_content=data,
+                    provider="groq",
+                    model=model_id,
+                )
+
         except Exception as exc:
             err_str = str(exc)
             if "429" in err_str or "too many requests" in err_str.lower() or "rate" in err_str.lower():
