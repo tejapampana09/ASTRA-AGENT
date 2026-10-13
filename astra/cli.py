@@ -11,11 +11,12 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
+from rich.text import Text
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -78,25 +79,70 @@ class TerminalCallback(AgentCallback):
         args_preview = ", ".join(f"{k}={repr(v)[:50]}" for k, v in args.items())
         console.print(f"  [bold yellow]⚙️ Executing:[/bold yellow] [bold]{name}[/bold] [dim]({args_preview})[/dim]")
 
-    def on_tool_result(self, name: str, result: str) -> None:
+    def on_tool_result(self, name: str, result: str, duration_ms: float = 0.0, exit_code: Optional[int] = None) -> None:
         lines = result.strip().splitlines()
         preview = lines[0] if lines else ""
         if len(lines) > 1:
             preview += f" [dim](+{len(lines)-1} more lines)[/dim]"
-        console.print(f"  [dim]↳ Result: {preview[:100]}[/dim]")
+
+        meta_parts = []
+        if duration_ms > 0:
+            meta_parts.append(f"⚡ {duration_ms:.0f}ms")
+        if exit_code is not None:
+            meta_parts.append(f"exit {exit_code}")
+        meta_str = f" [dim cyan]({ ' • '.join(meta_parts) })[/dim cyan]" if meta_parts else ""
+
+        console.print(f"  [dim]↳ Result: {preview[:100]}[/dim]{meta_str}")
 
     def on_state_change(self, state: Any, details: str = "") -> None:
         pass
 
-    def on_file_changed(self, file_path: str, action: str = "modified") -> None:
+    def on_file_changed(self, file_path: str, action: str = "modified", diff: str = "") -> None:
         tag = "Created" if action == "created" else ("Deleted" if action == "deleted" else "Modified")
         console.print(f"  [bold green]📝 {tag} File:[/bold green] [cyan]{file_path}[/cyan]")
+        if diff and diff.strip():
+            syntax = Syntax(diff.strip(), "diff", theme="monokai", line_numbers=True)
+            console.print(
+                Panel(
+                    syntax,
+                    title=f"[bold green]🔍 Unified Patch Preview: {file_path}[/bold green]",
+                    subtitle="[dim]Antigravity Color Diff[/dim]",
+                    border_style="green",
+                    padding=(0, 1),
+                )
+            )
 
     def on_verification(self, passed: bool, summary: str, details: str = "") -> None:
         if passed:
             console.print(f"  [bold green]✅ Independent Verification Passed:[/bold green] [dim]{summary}[/dim]")
         else:
             console.print(f"  [bold red]❌ Independent Verification Failed:[/bold red] [yellow]{summary}[/yellow]")
+
+    def on_plan_updated(self, steps: Any) -> None:
+        if not steps:
+            return
+        table = Table(box=None, show_header=False, padding=(0, 1))
+        table.add_column("Icon", width=5)
+        table.add_column("Step")
+        for s in steps:
+            title = getattr(s, "title", "") or (s.get("title") if isinstance(s, dict) else str(s))
+            raw_st = getattr(s, "status", "") or (s.get("status") if isinstance(s, dict) else "")
+            st = str(raw_st.value if hasattr(raw_st, "value") else raw_st).upper()
+            if "COMPLETED" in st:
+                table.add_row("[bold green][✓][/bold green]", f"[green]{title}[/green]")
+            elif "IN_PROGRESS" in st:
+                table.add_row("[bold cyan][▶][/bold cyan]", f"[bold cyan]{title}[/bold cyan] [dim](in progress)[/dim]")
+            elif "FAILED" in st:
+                table.add_row("[bold red][✗][/bold red]", f"[red]{title}[/red]")
+            else:
+                table.add_row("[dim][ ][/dim]", f"[dim]{title}[/dim]")
+
+        console.print(Panel(
+            table,
+            title="[bold cyan]📋 ASTRA Dynamic Execution Plan[/bold cyan]",
+            border_style="cyan",
+            padding=(0, 1),
+        ))
 
 
 class AstraCLI:
@@ -112,8 +158,69 @@ class AstraCLI:
         self.ask_commands = ask_commands
         self.active_status = None
 
-    def cli_approval_handler(self, tool_name: str, description: str, args: Dict[str, Any]) -> bool:
-        """Interactive Antigravity-style command approval guard."""
+    def cli_approval_handler(self, tool_name: str, description: str, args: Dict[str, Any]) -> Any:
+        """Interactive Antigravity-style command approval guard and question prompter."""
+        if tool_name == "ask_question":
+            question = args.get("question", "")
+            options = args.get("options") or []
+            if self.active_status:
+                try:
+                    self.active_status.stop()
+                except Exception:
+                    pass
+
+            table = Table(box=None, show_header=False, padding=(0, 2))
+            table.add_column("Num", style="bold green", width=6)
+            table.add_column("Option", style="bold white")
+            if options:
+                for idx, opt in enumerate(options, 1):
+                    rec = " [bold green](Recommended)[/bold green]" if idx == 1 and not opt.startswith("(") else ""
+                    table.add_row(f"[{idx}]", f"{opt}{rec}")
+
+            console.print()
+            content_items = [Text(question, style="bold cyan")]
+            if options:
+                content_items.append(Text(""))
+                content_items.append(table)
+
+            console.print(
+                Panel(
+                    Group(*content_items),
+                    title="[bold yellow]❓ ASTRA Interactive Question[/bold yellow]",
+                    subtitle="[dim]Antigravity Multi-Choice Selector[/dim]",
+                    border_style="yellow",
+                    padding=(1, 2),
+                )
+            )
+
+            try:
+                if options:
+                    ans = console.input(f"[bold cyan]Select option [1-{len(options)}] or write response: [/bold cyan]").strip()
+                    if ans.isdigit() and 1 <= int(ans) <= len(options):
+                        chosen = options[int(ans) - 1]
+                    elif not ans:
+                        chosen = options[0]
+                    else:
+                        chosen = ans
+                else:
+                    ans = console.input("[bold cyan]Your response: [/bold cyan]").strip()
+                    chosen = ans or "(Accepted default)"
+
+                console.print(f"[green]✓ Selected:[/green] [white]{chosen}[/white]\n")
+                if self.active_status:
+                    try:
+                        self.active_status.start()
+                    except Exception:
+                        pass
+                return chosen
+            except (KeyboardInterrupt, EOFError):
+                if self.active_status:
+                    try:
+                        self.active_status.start()
+                    except Exception:
+                        pass
+                return options[0] if options else "(Cancelled)"
+
         if tool_name == "run_command":
             if not getattr(self.cli_approval_handler, "ask_commands", True) and not self.ask_commands:
                 return True

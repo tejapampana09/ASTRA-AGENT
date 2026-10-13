@@ -89,3 +89,33 @@ def test_tool_registry_execution(temp_workspace):
     res_read = registry.execute("read_file", {"file_path": "calc.py"})
     assert res_read.success is True
     assert "x = 100" in res_read.output
+
+
+def test_ask_question_tool_execution(temp_workspace):
+    registry = ToolRegistry(temp_workspace)
+
+    # Test ask_question with callback
+    def mock_approval(name, desc, args):
+        if name == "ask_question":
+            return args.get("options", ["opt1"])[0]
+        return True
+
+    res = registry.execute(
+        "ask_question",
+        {"question": "Which DB?", "options": ["SQLite (Recommended)", "Postgres"]},
+        approval_callback=mock_approval,
+    )
+    assert res.success is True
+    assert "SQLite (Recommended)" in res.output
+
+
+def test_visual_diff_computation(temp_workspace):
+    registry = ToolRegistry(temp_workspace)
+    old_content = "def add(a, b):\n    return a - b\n"
+    new_content = "def add(a, b):\n    return a + b\n"
+
+    diff = ToolExecutor.compute_diff("math.py", old_content, new_content)
+    assert "--- a/math.py" in diff
+    assert "+++ b/math.py" in diff
+    assert "-    return a - b" in diff
+    assert "+    return a + b" in diff

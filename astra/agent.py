@@ -86,6 +86,7 @@ AVAILABLE TOOLS:
 - git_status(): Check git status
 - git_diff(): View git diff
 - web_search(query): Search the web
+- ask_question(question, options): Ask the user an interactive question with selectable options
 """
 
 
@@ -104,13 +105,16 @@ class AgentCallback:
     def on_tool_call(self, name: str, args: Dict[str, Any]) -> None:
         pass
 
-    def on_tool_result(self, name: str, result: str) -> None:
+    def on_tool_result(self, name: str, result: str, duration_ms: float = 0.0, exit_code: Optional[int] = None) -> None:
         pass
 
-    def on_file_changed(self, file_path: str, action: str = "modified") -> None:
+    def on_file_changed(self, file_path: str, action: str = "modified", diff: str = "") -> None:
         pass
 
     def on_verification(self, passed: bool, summary: str, details: str = "") -> None:
+        pass
+
+    def on_plan_updated(self, steps: List[Any]) -> None:
         pass
 
 
@@ -309,6 +313,9 @@ class AstraAgent:
             "model": self.model_name,
             "task_type": task_model.task_type.value,
         })
+
+        if hasattr(self.controller, "task_state") and self.controller.task_state.plan:
+            self.callback.on_plan_updated(self.controller.task_state.plan.steps)
 
         if existing_messages:
             messages: List[Dict[str, Any]] = existing_messages
@@ -519,7 +526,12 @@ class AstraAgent:
                 )
 
                 tool_out = tool_res.to_string()
-                self.callback.on_tool_result(fn_name, tool_out)
+                self.callback.on_tool_result(
+                    fn_name,
+                    tool_out,
+                    duration_ms=tool_res.duration_ms,
+                    exit_code=tool_res.exit_code,
+                )
 
                 if fn_name == "run_command":
                     self._emit_event(EventType.COMMAND_OUTPUT, {
@@ -533,6 +545,8 @@ class AstraAgent:
                     tool_args=fn_args,
                     tool_result=tool_res,
                 )
+                if hasattr(self.controller, "task_state") and self.controller.task_state.plan:
+                    self.callback.on_plan_updated(self.controller.task_state.plan.steps)
 
                 # 4. TRACK WORKSPACE FILE MODIFICATIONS
                 if fn_name in ("write_file", "edit_file"):
@@ -540,19 +554,19 @@ class AstraAgent:
                     if fp and tool_res.success:
                         s_fp = str(fp)
                         self.files_modified.add(s_fp)
-                        self.callback.on_file_changed(s_fp, "modified")
+                        self.callback.on_file_changed(s_fp, "modified", diff=tool_res.diff or "")
                 elif fn_name == "create_file":
                     fp = fn_args.get("file_path") or fn_args.get("path")
                     if fp and tool_res.success:
                         s_fp = str(fp)
                         self.files_created.add(s_fp)
-                        self.callback.on_file_changed(s_fp, "created")
+                        self.callback.on_file_changed(s_fp, "created", diff=tool_res.diff or "")
                 elif fn_name == "delete_file":
                     fp = fn_args.get("file_path") or fn_args.get("path")
                     if fp and tool_res.success:
                         s_fp = str(fp)
                         self.files_deleted.add(s_fp)
-                        self.callback.on_file_changed(s_fp, "deleted")
+                        self.callback.on_file_changed(s_fp, "deleted", diff="")
 
                 messages.append({
                     "role": "tool",

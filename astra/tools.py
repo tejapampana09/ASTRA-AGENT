@@ -39,6 +39,7 @@ class ToolResult:
     command: Optional[str] = None
     exit_code: Optional[int] = None
     timed_out: bool = False
+    diff: Optional[str] = None
 
     def to_string(self) -> str:
         if self.output and self.error:
@@ -279,6 +280,21 @@ class ToolExecutor:
             return f"Successfully updated '{file_path}' (replaced 1 instance)."
         except Exception as exc:
             return f"Error editing file '{file_path}': {exc}"
+
+    @staticmethod
+    def compute_diff(file_path: str, old_text: str, new_text: str) -> str:
+        """Generate a standard unified diff between old and new file text."""
+        import difflib
+        old_lines = old_text.splitlines(keepends=True)
+        new_lines = new_text.splitlines(keepends=True)
+        diff_lines = list(difflib.unified_diff(
+            old_lines,
+            new_lines,
+            fromfile=f"a/{file_path}",
+            tofile=f"b/{file_path}",
+            n=3
+        ))
+        return "".join(diff_lines)
 
     def list_dir(self, dir_path: str = ".") -> str:
         """List files and directories in workspace directory."""
@@ -805,6 +821,23 @@ TOOL_DEFINITIONS = [
             "required": ["query"],
         },
     },
+    {
+        "name": "ask_question",
+        "description": "Ask the user an interactive question with multiple-choice options when requirements are ambiguous or you need design guidance. The user's selection will be returned.",
+        "permission": PermissionLevel.SAFE,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "The clear question to ask the user."},
+                "options": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of selectable choices (e.g. ['pytest (Recommended)', 'unittest']).",
+                },
+            },
+            "required": ["question"],
+        },
+    },
 ]
 
 
@@ -896,6 +929,8 @@ class ToolRegistry:
                 )
 
         # Execute handler
+        computed_diff = None
+        exit_code = None
         try:
             if name == "read_file":
                 out = self.executor.read_file(
@@ -904,25 +939,53 @@ class ToolRegistry:
                     end_line=args.get("end_line"),
                 )
             elif name == "write_file":
+                target_fp = args.get("file_path", "")
+                old_text = ""
+                try:
+                    p = self.security.resolve_and_validate_path(target_fp)
+                    if p.exists():
+                        old_text = p.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    pass
                 out = self.executor.write_file(
-                    file_path=args.get("file_path", ""),
+                    file_path=target_fp,
                     content=args.get("content", ""),
                 )
+                if not out.startswith("Error:"):
+                    computed_diff = self.executor.compute_diff(target_fp, old_text, args.get("content", ""))
             elif name == "create_file":
+                target_fp = args.get("file_path", "")
                 out = self.executor.create_file(
-                    file_path=args.get("file_path", ""),
+                    file_path=target_fp,
                     content=args.get("content", ""),
                 )
+                if not out.startswith("Error:"):
+                    computed_diff = self.executor.compute_diff(target_fp, "", args.get("content", ""))
             elif name == "delete_file":
                 out = self.executor.delete_file(
                     file_path=args.get("file_path", ""),
                 )
             elif name == "edit_file":
+                target_fp = args.get("file_path", "")
+                old_text = ""
+                p = None
+                try:
+                    p = self.security.resolve_and_validate_path(target_fp)
+                    if p.exists():
+                        old_text = p.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    pass
                 out = self.executor.edit_file(
-                    file_path=args.get("file_path", ""),
+                    file_path=target_fp,
                     target_snippet=args.get("target_snippet", ""),
                     replacement_snippet=args.get("replacement_snippet", ""),
                 )
+                if not out.startswith("Error:") and old_text and p:
+                    try:
+                        new_text = p.read_text(encoding="utf-8", errors="replace")
+                        computed_diff = self.executor.compute_diff(target_fp, old_text, new_text)
+                    except Exception:
+                        pass
             elif name == "list_dir":
                 out = self.executor.list_dir(dir_path=args.get("dir_path", "."))
             elif name == "search_code":
@@ -937,6 +1000,12 @@ class ToolRegistry:
                     cancel_check=cancel_check,
                     allow_dangerous=approved or (permission != PermissionLevel.DANGEROUS),
                 )
+                m = re.search(r"\[Exit code (-?\d+)\]", out)
+                if m:
+                    try:
+                        exit_code = int(m.group(1))
+                    except Exception:
+                        pass
             elif name == "git_status":
                 out = self.executor.git_status()
             elif name == "git_diff":
@@ -945,6 +1014,14 @@ class ToolRegistry:
                 out = self.executor.web_search(
                     query=args.get("query", ""),
                 )
+            elif name == "ask_question":
+                q = args.get("question", "")
+                opts = args.get("options") or []
+                if approval_callback:
+                    ans = approval_callback("ask_question", q, args)
+                    out = f"User selected/answered: {ans}"
+                else:
+                    out = f"User selected: {opts[0] if opts else '(Accepted default)'}"
             else:
                 out = f"Error: Tool '{name}' handler not implemented."
 
@@ -955,6 +1032,8 @@ class ToolRegistry:
                 output=out if not is_err else "",
                 error=out if is_err else None,
                 duration_ms=duration,
+                diff=computed_diff,
+                exit_code=exit_code,
             )
         except Exception as exc:
             duration = (time.time() - start_time) * 1000
