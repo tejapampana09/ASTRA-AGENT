@@ -85,8 +85,12 @@ class TerminalCallback(AgentCallback):
             preview += f" [dim](+{len(lines)-1} more lines)[/dim]"
         console.print(f"  [dim]↳ Result: {preview[:100]}[/dim]")
 
-    def on_file_changed(self, file_path: str) -> None:
-        console.print(f"  [bold green]📝 Modified File:[/bold green] [cyan]{file_path}[/cyan]")
+    def on_state_change(self, state: Any, details: str = "") -> None:
+        pass
+
+    def on_file_changed(self, file_path: str, action: str = "modified") -> None:
+        tag = "Created" if action == "created" else ("Deleted" if action == "deleted" else "Modified")
+        console.print(f"  [bold green]📝 {tag} File:[/bold green] [cyan]{file_path}[/cyan]")
 
     def on_verification(self, passed: bool, summary: str, details: str = "") -> None:
         if passed:
