@@ -145,17 +145,14 @@ class IndependentVerifier:
                         failing_command="npx tsc --noEmit",
                     )
 
-        # Stage 3: Automated Test Execution ONLY when relevant to user's goal or test files
-        # Do NOT force a full pytest run on everyday tasks or non-test edits
+        # Stage 3: Automated Test Execution when a test suite exists or when requested
         should_run_tests = False
         goal_lower = (goal or "").lower()
         if any(w in goal_lower for w in ["test", "pytest", "failing", "regression", "verify test"]):
             should_run_tests = True
         elif any("test" in f.name.lower() or "tests" in str(f).lower() for f in resolved_files):
             should_run_tests = True
-        elif (self.workspace_path / "tests").is_dir():
-            should_run_tests = True
-        elif any(self.workspace_path.glob("**/test_*.py")):
+        elif (self.workspace_path / "tests").is_dir() or any(self.workspace_path.glob("**/test_*.py")):
             should_run_tests = True
 
         test_summary = ""

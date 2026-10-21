@@ -72,9 +72,10 @@ CORE EXECUTION PHILOSOPHY:
 
 3. IMPLEMENT ACTIONABLE REQUESTS DIRECTLY:
    - When asked to create, implement, or write an algorithm, data structure, or script (e.g. FCFS scheduling, sorting, algorithms, utilities):
-     IMMEDIATELY create the file using `create_file` (e.g. `create_file("fcfs.py", ...)`).
+     IMMEDIATELY create ONLY the requested source file using `create_file` (e.g. `create_file("fcfs.py", ...)`).
+   - Do NOT create separate `test_*.py` files in `tests/` unless the user explicitly asks for unit tests.
    - Do NOT spend multiple turns reading unrelated repository files when asked to create a standalone algorithm or solution.
-   - Write complete, robust, executable code with example usage and tests.
+   - Write clean, runnable code with a self-contained `if __name__ == "__main__":` demonstration block.
 
 4. DELIVER REAL VALUE (NO ROBOTIC META-LOGS):
    - When asked an architecture or explanation question: deliver deep, structured, professional markdown documentation directly.
