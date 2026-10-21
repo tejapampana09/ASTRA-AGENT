@@ -107,3 +107,37 @@ def test_api_token_auth_protection(client):
         assert res_ok.status_code == 200
     finally:
         settings.api_token = original_token
+
+
+def test_websocket_session_event_isolation():
+    """Verify that private session events are strictly isolated to that session's subscribers."""
+    from unittest.mock import patch, MagicMock
+    from astra.server import broadcast_event, session_websockets, connected_websockets
+    from astra.events import AgentEvent, AgentState
+    import astra.server as server
+
+    mock_loop = MagicMock()
+    mock_loop.is_running.return_value = True
+    server.main_event_loop = mock_loop
+
+    ws_a = MagicMock()
+    ws_b = MagicMock()
+    ws_global = MagicMock()
+
+    session_websockets["sess_A"] = {ws_a}
+    session_websockets["sess_B"] = {ws_b}
+    connected_websockets.add(ws_global)
+
+    try:
+        with patch("asyncio.run_coroutine_threadsafe") as mock_dispatch:
+            event = AgentEvent(event_type="test", state=AgentState.EXECUTING, session_id="sess_A", data={})
+            broadcast_event(event)
+            # Event must only be dispatched to session A's subscriber
+            assert mock_dispatch.call_count == 1
+            ws_a.send_text.assert_called_once()
+            ws_b.send_text.assert_not_called()
+            ws_global.send_text.assert_not_called()
+    finally:
+        session_websockets.clear()
+        connected_websockets.clear()
+

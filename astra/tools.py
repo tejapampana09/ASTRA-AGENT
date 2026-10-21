@@ -473,9 +473,22 @@ class ToolExecutor:
 
         start_time = time.time()
         try:
+            # Prefer argument-list execution without shell=True for commands without shell operators
+            has_shell_operators = bool(re.search(r"[&|;><]|^\s*(?:dir|type|cls|del|copy|move|ren|echo|set)\b", cmd, re.IGNORECASE))
+            use_shell = has_shell_operators
+            exec_target: Any = cmd
+            if not use_shell:
+                try:
+                    args = shlex.split(cmd, posix=True)
+                    if args:
+                        exec_target = args
+                except Exception:
+                    use_shell = True
+                    exec_target = cmd
+
             popen_kwargs: Dict[str, Any] = {
                 "cwd": str(self.workspace_path),
-                "shell": True,
+                "shell": use_shell,
                 "stdout": subprocess.PIPE,
                 "stderr": subprocess.PIPE,
                 "text": True,
@@ -485,7 +498,14 @@ class ToolExecutor:
             if os.name != "nt":
                 popen_kwargs["start_new_session"] = True
 
-            proc = subprocess.Popen(cmd, **popen_kwargs)
+            try:
+                proc = subprocess.Popen(exec_target, **popen_kwargs)
+            except FileNotFoundError:
+                if not use_shell:
+                    popen_kwargs["shell"] = True
+                    proc = subprocess.Popen(cmd, **popen_kwargs)
+                else:
+                    raise
 
             # Use communicate() to continuously drain pipes and prevent pipe buffer deadlocks
             stdout_data, stderr_data = "", ""
