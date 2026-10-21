@@ -192,14 +192,41 @@ ipcMain.handle('dialog:openDirectory', async () => {
   return result.filePaths[0];
 });
 
+function isSafeOpenPath(resolvedPath: string): boolean {
+  const normalized = path.normalize(resolvedPath).toLowerCase();
+  const dangerousExts = ['.exe', '.bat', '.cmd', '.ps1', '.vbs', '.msi', '.dll', '.com', '.scr', '.pif'];
+  const ext = path.extname(normalized);
+  if (dangerousExts.includes(ext)) {
+    return false;
+  }
+
+  const parts = normalized.split(path.sep);
+  const sensitiveDirs = ['.ssh', '.aws', '.gnupg', '.docker', 'windows', 'system32', 'program files', 'program files (x86)', 'etc', 'root', 'boot', 'sys', 'proc'];
+  for (const part of parts) {
+    if (sensitiveDirs.includes(part)) {
+      return false;
+    }
+  }
+
+  // Reject drive roots directly (e.g. C:\ or /)
+  if (normalized === path.parse(normalized).root.toLowerCase()) {
+    return false;
+  }
+
+  return true;
+}
+
 ipcMain.handle('shell:openPath', async (_, targetPath: string) => {
   if (!targetPath || typeof targetPath !== 'string') {
     return 'Invalid path provided.';
   }
-  // Prevent executing dangerous shell scripts or control files
   const resolved = path.resolve(targetPath);
   if (!fs.existsSync(resolved)) {
     return 'Target path does not exist.';
+  }
+  if (!isSafeOpenPath(resolved)) {
+    console.warn(`[Electron Security] Blocked attempt to open sensitive or dangerous path: ${resolved}`);
+    return 'Access denied: Target path violates security policy.';
   }
   return await shell.openPath(resolved);
 });

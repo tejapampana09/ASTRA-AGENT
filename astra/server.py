@@ -67,10 +67,23 @@ def verify_api_token(
     x_astra_token: Optional[str] = Header(None, alias="X-Astra-Token"),
     authorization: Optional[str] = Header(None),
 ) -> None:
-    """Optional token authentication check for sensitive operations."""
+    """Explicit token authentication check for sensitive operations.
+    
+    If exposed beyond loopback or if require_auth is enabled, authentication is mandatory.
+    If no token is configured under non-loopback exposure, requests fail closed (HTTP 500).
+    """
     expected_token = getattr(settings, "api_token", "")
-    if not expected_token:
-        return  # No token configured, allow local loopback access
+    require_auth = getattr(settings, "require_auth", False) or not getattr(settings, "is_loopback", True)
+
+    if not expected_token and not require_auth:
+        return  # Local loopback development mode with no token configured
+
+    if not expected_token and require_auth:
+        raise HTTPException(
+            status_code=500,
+            detail="Server security policy violation: ASTRA_API_TOKEN is mandatory when exposed beyond loopback."
+        )
+
     provided = x_astra_token
     if not provided and authorization and authorization.lower().startswith("bearer "):
         provided = authorization[7:].strip()
@@ -79,7 +92,7 @@ def verify_api_token(
 
 
 def validate_authorized_workspace(workspace_path: str) -> Path:
-    """Validate and authorize a workspace path, preventing path traversal and system directory hijacking."""
+    """Validate and authorize a workspace path, preventing path traversal, system hijacking, and arbitrary directory escape."""
     if not workspace_path or not str(workspace_path).strip():
         raise HTTPException(status_code=400, detail="Workspace path cannot be empty.")
 
@@ -103,25 +116,33 @@ def validate_authorized_workspace(workspace_path: str) -> Path:
         raise HTTPException(status_code=403, detail=f"Access denied: System root directory '{p}' cannot be used as a workspace.")
 
     # Check for user credential directories
-    for sensitive_dir in [".ssh", ".aws", ".gnupg", ".docker"]:
+    for sensitive_dir in [".ssh", ".aws", ".gnupg", ".docker", ".kube", ".config"]:
         if sensitive_dir in p.parts:
             raise HTTPException(status_code=403, detail=f"Access denied: Sensitive directory '{p}' cannot be used as a workspace.")
 
-    # If allowed_workspaces are explicitly configured, enforce containment
-    if settings.allowed_workspaces:
-        authorized = False
-        for allowed_root in settings.allowed_workspaces:
-            try:
-                p.relative_to(allowed_root)
-                authorized = True
-                break
-            except ValueError:
-                pass
-        if not authorized:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Access denied: Workspace '{p}' is not within configured allowed workspace roots."
-            )
+    # Strict approved workspace root policy
+    # If allowed_workspaces are configured, target MUST be contained within one of them.
+    # Otherwise, approved roots default to the active workspace and its parent directory.
+    allowed_roots = list(settings.allowed_workspaces)
+    if not allowed_roots:
+        active_ws = current_workspace.workspace_path
+        allowed_roots.append(active_ws)
+        allowed_roots.append(active_ws.parent)
+
+    authorized = False
+    for allowed_root in allowed_roots:
+        try:
+            p.relative_to(allowed_root)
+            authorized = True
+            break
+        except ValueError:
+            pass
+
+    if not authorized:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied: Workspace '{p}' is outside approved workspace roots."
+        )
 
     return p
 
@@ -260,13 +281,13 @@ def set_workspace(req: SetWorkspaceRequest):
     return {"success": True, "workspace_path": str(current_workspace.workspace_path), "metadata": meta.to_dict()}
 
 
-@app.get("/api/workspace/files")
+@app.get("/api/workspace/files", dependencies=[Depends(verify_api_token)])
 def get_workspace_files():
     """Get workspace directory tree for file explorer UI."""
     return current_workspace.get_file_tree(max_depth=4)
 
 
-@app.get("/api/workspace/file")
+@app.get("/api/workspace/file", dependencies=[Depends(verify_api_token)])
 def read_workspace_file(path: str):
     """Read a specific file in workspace with path traversal and security checks."""
     if not path or not path.strip():
@@ -288,7 +309,7 @@ def read_workspace_file(path: str):
     return {"path": path, "content": content}
 
 
-@app.get("/api/workspace/diff")
+@app.get("/api/workspace/diff", dependencies=[Depends(verify_api_token)])
 def get_workspace_diff():
     """Get colorized/plain git diff of current changes."""
     tools = ToolExecutor(current_workspace.workspace_path)
@@ -393,7 +414,7 @@ def rollback_task(session_id: str, checkpoint_id: Optional[str] = None):
     return res
 
 
-@app.get("/api/approvals/pending")
+@app.get("/api/approvals/pending", dependencies=[Depends(verify_api_token)])
 def list_pending_approvals(session_id: Optional[str] = None):
     """List all pending approval requests."""
     return [r.to_dict() for r in approval_manager.list_pending(session_id)]

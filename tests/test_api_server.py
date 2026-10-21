@@ -204,3 +204,65 @@ def test_websocket_token_auth_rejected(client):
         settings.api_token = original_token
 
 
+def test_api_auth_fails_closed_when_exposed_without_token(client):
+    from astra.config import settings
+    orig_is_loopback = settings.is_loopback
+    orig_token = settings.api_token
+    try:
+        settings.is_loopback = False
+        settings.api_token = ""
+        # Requests must fail closed with 500 when non-loopback has no token configured
+        res = client.get("/api/workspace/files")
+        assert res.status_code == 500
+        assert "ASTRA_API_TOKEN is mandatory" in res.json()["detail"]
+    finally:
+        settings.is_loopback = orig_is_loopback
+        settings.api_token = orig_token
+
+
+def test_sensitive_read_endpoints_protected_by_token(client):
+    from astra.config import settings
+    orig_token = settings.api_token
+    try:
+        settings.api_token = "secure-read-token"
+
+        # Reading workspace files without token
+        res_files = client.get("/api/workspace/files")
+        assert res_files.status_code == 401
+
+        # Reading diff without token
+        res_diff = client.get("/api/workspace/diff")
+        assert res_diff.status_code == 401
+
+        # Listing pending approvals without token
+        res_appr = client.get("/api/approvals/pending")
+        assert res_appr.status_code == 401
+
+        # With token, read succeeds
+        res_ok = client.get("/api/workspace/files", headers={"X-Astra-Token": "secure-read-token"})
+        assert res_ok.status_code == 200
+    finally:
+        settings.api_token = orig_token
+
+
+def test_task_endpoint_approved_roots_containment(client):
+    import tempfile
+    import shutil
+    from astra.server import current_workspace
+    from pathlib import Path
+
+    # Create an arbitrary directory outside approved roots
+    outside_dir = tempfile.mkdtemp()
+    try:
+        # Task requested in outside directory must be rejected with 403 Forbidden
+        res = client.post(
+            "/api/tasks",
+            json={"goal": "arbitrary code run", "workspace_path": outside_dir},
+        )
+        assert res.status_code == 403
+        assert "outside approved workspace roots" in res.json()["detail"]
+    finally:
+        shutil.rmtree(outside_dir, ignore_errors=True)
+
+
+

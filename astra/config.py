@@ -39,6 +39,11 @@ class Config:
         self.api_host = os.getenv("ASTRA_HOST", "127.0.0.1")
         self.api_port = int(os.getenv("ASTRA_PORT", "8765"))
         self.api_token = os.getenv("ASTRA_API_TOKEN") or ""
+        self.is_loopback = self.api_host in ("127.0.0.1", "localhost", "::1")
+        self.require_auth = os.getenv("ASTRA_REQUIRE_AUTH", "false").lower() in ("1", "true", "yes")
+        if not self.is_loopback:
+            # Non-loopback network exposure strictly requires authentication
+            self.require_auth = True
         raw_origins = [
             o.strip() for o in (
                 os.getenv("ASTRA_ALLOWED_ORIGINS") or
@@ -77,6 +82,10 @@ class Config:
         self.permission_mode = os.getenv("ASTRA_PERMISSION_MODE", self.permission_mode).lower()
         self.timeout_seconds = int(os.getenv("ASTRA_TIMEOUT", str(self.timeout_seconds)))
         self.api_token = os.getenv("ASTRA_API_TOKEN") or ""
+        self.is_loopback = self.api_host in ("127.0.0.1", "localhost", "::1")
+        self.require_auth = os.getenv("ASTRA_REQUIRE_AUTH", "false").lower() in ("1", "true", "yes")
+        if not self.is_loopback:
+            self.require_auth = True
         raw_origins = [
             o.strip() for o in (
                 os.getenv("ASTRA_ALLOWED_ORIGINS") or
