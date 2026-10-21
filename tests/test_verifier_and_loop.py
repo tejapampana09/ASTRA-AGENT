@@ -50,3 +50,30 @@ def test_independent_verifier_with_passing_pytest(temp_workspace):
     assert res.passed is True
     assert res.phase == "verified"
     assert "pytest passed" in res.details
+    assert len(res.checks_run) >= 1
+
+
+def test_independent_verifier_syntax_error_failure(temp_workspace):
+    # Broken syntax in python file
+    (temp_workspace / "bad.py").write_text("def broken(\n", encoding="utf-8")
+    verifier = IndependentVerifier(temp_workspace)
+    res = verifier.verify(["bad.py"])
+    assert res.passed is False
+    assert res.status.value == "failed"
+    assert res.phase == "syntax_check"
+    assert res.error_category == ErrorCategory.SYNTAX
+    assert len(res.checks_run) == 1
+    assert res.checks_run[0]["status"] == "failed"
+
+
+def test_independent_verifier_failing_test(temp_workspace):
+    (temp_workspace / "calc.py").write_text("def sub(a, b): return a + b\n", encoding="utf-8")
+    tests_dir = temp_workspace / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_calc.py").write_text("from calc import sub\ndef test_sub(): assert sub(5, 2) == 3\n", encoding="utf-8")
+    verifier = IndependentVerifier(temp_workspace)
+    res = verifier.verify(["calc.py"])
+    assert res.passed is False
+    assert res.status.value == "failed"
+    assert res.phase == "test_execution"
+    assert res.error_category == ErrorCategory.TEST_FAILURE

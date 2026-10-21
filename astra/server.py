@@ -11,7 +11,9 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from contextlib import asynccontextmanager
+
+from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -25,14 +27,28 @@ from astra.session import session_manager
 from astra.tools import ToolExecutor
 from astra.workspace import WorkspaceManager
 
-app = FastAPI(title="ASTRA V4 Runtime API", version=__version__)
 
-# Enable CORS for desktop app and dev servers
+# Active WebSocket connections & event loop reference
+connected_websockets: Set[WebSocket] = set()
+session_websockets: Dict[str, Set[WebSocket]] = {}
+main_event_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global main_event_loop
+    main_event_loop = asyncio.get_running_loop()
+    yield
+
+
+app = FastAPI(title="ASTRA V4 Runtime API", version=__version__, lifespan=lifespan)
+
+# Restrict CORS to configured allowed origins (no wildcard '*')
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -43,19 +59,23 @@ agent_threads: Dict[str, threading.Thread] = {}
 # Pending approvals for dangerous commands {approval_id: asyncio.Event or threading.Event}
 pending_approvals: Dict[str, Dict[str, Any]] = {}
 
-# Active WebSocket connections
-connected_websockets: Set[WebSocket] = set()
-session_websockets: Dict[str, Set[WebSocket]] = {}
-main_event_loop: Optional[asyncio.AbstractEventLoop] = None
-
 router = LLMRouter()
 current_workspace = WorkspaceManager(settings.workspace_path)
 
 
-@app.on_event("startup")
-async def on_startup():
-    global main_event_loop
-    main_event_loop = asyncio.get_running_loop()
+def verify_api_token(
+    x_astra_token: Optional[str] = Header(None, alias="X-Astra-Token"),
+    authorization: Optional[str] = Header(None),
+) -> None:
+    """Optional token authentication check for sensitive operations."""
+    expected_token = getattr(settings, "api_token", "")
+    if not expected_token:
+        return  # No token configured, allow local loopback access
+    provided = x_astra_token
+    if not provided and authorization and authorization.lower().startswith("bearer "):
+        provided = authorization[7:].strip()
+    if not provided or provided != expected_token:
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid or missing API token.")
 
 
 # Broadcast AgentEvents to appropriate WebSockets:
@@ -68,9 +88,11 @@ def broadcast_event(event: AgentEvent) -> None:
         return
 
     sess_id = event.session_id
-    recipients = set(connected_websockets)
-    if sess_id and sess_id in session_websockets:
-        recipients.update(session_websockets[sess_id])
+    # Strict session isolation: deliver only to the intended session subscribers
+    if sess_id:
+        recipients = set(session_websockets.get(sess_id, set()))
+    else:
+        recipients = set(connected_websockets)
 
     dead = set()
     for ws in recipients:
@@ -80,9 +102,10 @@ def broadcast_event(event: AgentEvent) -> None:
             dead.add(ws)
 
     if dead:
-        connected_websockets.difference_update(dead)
         if sess_id and sess_id in session_websockets:
             session_websockets[sess_id].difference_update(dead)
+        else:
+            connected_websockets.difference_update(dead)
 
 
 event_bus.subscribe(broadcast_event)
@@ -173,7 +196,7 @@ def get_workspace():
     return meta.to_dict()
 
 
-@app.post("/api/workspace/set")
+@app.post("/api/workspace/set", dependencies=[Depends(verify_api_token)])
 def set_workspace(req: SetWorkspaceRequest):
     """Change the active workspace directory."""
     ok = current_workspace.set_workspace(req.workspace_path)
@@ -192,8 +215,22 @@ def get_workspace_files():
 
 @app.get("/api/workspace/file")
 def read_workspace_file(path: str):
-    """Read a specific file in workspace."""
+    """Read a specific file in workspace with path traversal and security checks."""
+    if not path or not path.strip():
+        raise HTTPException(status_code=400, detail="Query parameter 'path' is required.")
     tools = ToolExecutor(current_workspace.workspace_path)
+    try:
+        resolved = tools.security.resolve_and_validate_path(path)
+    except PermissionError as p_err:
+        raise HTTPException(status_code=403, detail=str(p_err))
+    except ValueError as v_err:
+        raise HTTPException(status_code=400, detail=str(v_err))
+
+    if not resolved.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: '{path}'")
+    if resolved.is_dir():
+        raise HTTPException(status_code=400, detail=f"Target '{path}' is a directory, not a file.")
+
     content = tools.read_file(path)
     return {"path": path, "content": content}
 
@@ -208,7 +245,7 @@ def get_workspace_diff():
     return {"diff": diff, "status": status, "branch": branch}
 
 
-@app.post("/api/tasks")
+@app.post("/api/tasks", dependencies=[Depends(verify_api_token)])
 def start_task(req: StartTaskRequest):
     """Start autonomous coding task in background thread."""
     ws_path = Path(req.workspace_path or current_workspace.workspace_path).resolve()
@@ -241,7 +278,7 @@ def start_task(req: StartTaskRequest):
     return {"status": "started", "session_id": session_id, "goal": req.goal, "model": model_name}
 
 
-@app.post("/api/tasks/{session_id}/stop")
+@app.post("/api/tasks/{session_id}/stop", dependencies=[Depends(verify_api_token)])
 def stop_task(session_id: str):
     """Stop/cancel a running agent task."""
     agent = active_agents.get(session_id)
@@ -251,7 +288,7 @@ def stop_task(session_id: str):
     return {"status": "cancelling", "session_id": session_id}
 
 
-@app.post("/api/tasks/{session_id}/resume")
+@app.post("/api/tasks/{session_id}/resume", dependencies=[Depends(verify_api_token)])
 def resume_task(session_id: str):
     """Resume an interrupted or stopped task from saved TaskState."""
     saved = session_manager.get_task_state(session_id)
@@ -286,7 +323,7 @@ def resume_task(session_id: str):
     return {"status": "resumed", "session_id": session_id}
 
 
-@app.post("/api/tasks/{session_id}/rollback")
+@app.post("/api/tasks/{session_id}/rollback", dependencies=[Depends(verify_api_token)])
 def rollback_task(session_id: str, checkpoint_id: Optional[str] = None):
     """Revert changes back to a specific checkpoint safely."""
     agent = active_agents.get(session_id)
@@ -306,7 +343,7 @@ def list_pending_approvals(session_id: Optional[str] = None):
     return [r.to_dict() for r in approval_manager.list_pending(session_id)]
 
 
-@app.post("/api/approvals/{approval_id}")
+@app.post("/api/approvals/{approval_id}", dependencies=[Depends(verify_api_token)])
 def handle_approval(approval_id: str, req: ApprovalResponseRequest):
     """Approve or reject a pending dangerous command."""
     ok = approval_manager.respond(approval_id, req.approved)

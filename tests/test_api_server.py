@@ -58,3 +58,52 @@ def test_api_session_crud(client):
     res_del = client.delete(f"/api/sessions/{session_id}")
     assert res_del.status_code == 200
     assert res_del.json()["deleted"] is True
+
+
+def test_api_workspace_file_path_traversal_blocked(client):
+    # Attempting to read outside workspace should return 403 Forbidden
+    res = client.get("/api/workspace/file?path=../../windows/win.ini")
+    assert res.status_code == 403
+    assert "Security Violation" in res.json()["detail"]
+
+
+def test_api_workspace_file_sensitive_blocked(client):
+    # Attempting to read sensitive configuration file like .env should return 403 Forbidden
+    res = client.get("/api/workspace/file?path=.env")
+    assert res.status_code == 403
+    assert "Security Protection" in res.json()["detail"]
+
+
+def test_api_workspace_file_missing_returns_404(client):
+    res = client.get("/api/workspace/file?path=non_existent_file_xyz123.py")
+    assert res.status_code == 404
+
+
+def test_api_token_auth_protection(client):
+    from astra.config import settings
+    original_token = settings.api_token
+    try:
+        settings.api_token = "secret-test-token"
+
+        # Request without token should return 401 Unauthorized
+        res_unauth = client.post("/api/workspace/set", json={"workspace_path": "."})
+        assert res_unauth.status_code == 401
+        assert "Unauthorized" in res_unauth.json()["detail"]
+
+        # Request with invalid token should return 401 Unauthorized
+        res_bad = client.post(
+            "/api/workspace/set",
+            json={"workspace_path": "."},
+            headers={"X-Astra-Token": "wrong-token"},
+        )
+        assert res_bad.status_code == 401
+
+        # Request with valid header token should succeed
+        res_ok = client.post(
+            "/api/workspace/set",
+            json={"workspace_path": "."},
+            headers={"X-Astra-Token": "secret-test-token"},
+        )
+        assert res_ok.status_code == 200
+    finally:
+        settings.api_token = original_token

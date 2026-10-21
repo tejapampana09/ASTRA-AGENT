@@ -1,51 +1,51 @@
-# ASTRA V4 — Standalone Autonomous Software Engineering Agent
+# ASTRA V5 — Hardened Autonomous Software Engineering Agent
 
-ASTRA V4 is a local-first, production-oriented autonomous software engineering agent built from scratch. It inspects local projects, plans surgical modifications, edits source code, runs terminal builds/linters/tests, autonomously fixes failures, and verifies completion with independent verifiers before declaring success.
+ASTRA is a local-first, hardened, autonomous software engineering runtime and desktop environment. It inspects local projects, plans surgical modifications, executes shell commands and file tools within a defense-in-depth security perimeter, autonomously verifies code changes with independent multi-language verifiers, and handles LLM provider quota exhaustion with adaptive failover.
 
 ---
 
 ## 🏗️ Architecture
 
 ```
-                    ASTRA DESKTOP
-                         │
-                  Electron + React (Echo AI Design)
-                         │
-              IPC / Localhost REST + WebSocket
-                         │
-                         ▼
-                  ASTRA RUNTIME
-                         │
-              ┌──────────┼──────────┐
-              ▼          ▼          ▼
-          ORCHESTRATOR  CONTEXT   SESSION
-              │          │          │
-              ▼          ▼          ▼
-           LLM ROUTER   SEARCH    STORAGE (SQLite)
-              │
-       ┌──────┼──────────────┐
-       ▼      ▼              ▼
-    Ollama  Gemini        TejaAI / Groq
-              │
-              ▼
-          TOOL REGISTRY & SECURITY SANDBOX
-              │
-      ┌───────┼────────┬─────────┐
-      ▼       ▼        ▼         ▼
-    Files   Terminal   Git      Web
-      │       │        │
-      └───────┼────────┘
-              ▼
-          WORKSPACE
-              │
-              ▼
-       INDEPENDENT VERIFICATION ENGINE
-              │
-        ┌─────┴─────┐
-        ▼           ▼
-      PASS         FAIL
-        │           │
-      DONE       FIX LOOP (Max 3 / Loop Detection)
+                    ASTRA DESKTOP (Electron + React)
+                                │
+               IPC (Validated) / Local REST + WebSocket
+                                │
+                                ▼
+                    ASTRA RUNTIME (FastAPI)
+         (127.0.0.1 Binding | Strict CORS | Token Auth | Session WS)
+                                │
+               ┌────────────────┼────────────────┐
+               ▼                ▼                ▼
+         CONTROLLER (v5)     COGNITIVE STATE   SESSION & DB (SQLite)
+               │                │                │
+               ▼                ▼                ▼
+           PLANNER         PROGRESS TRACKER   CHECKPOINTS (Containment)
+               │
+               ▼
+           LLM ROUTER & QUOTA CIRCUIT BREAKER
+     (Adaptive Fallback: Gemini ⮂ Groq ⮂ Ollama | No Circular Loops)
+               │
+               ▼
+           TOOL REGISTRY & DEFENSE-IN-DEPTH SECURITY
+     (Command Chaining Checks | Secret Redaction | Output Bounding)
+               │
+       ┌───────┼────────┬─────────┐
+       ▼       ▼        ▼         ▼
+     Files   Terminal   Git      Web
+       │       │        │
+       └───────┼────────┘
+               ▼
+           WORKSPACE
+               │
+               ▼
+        INDEPENDENT MULTI-LANGUAGE VERIFIER
+               │
+         ┌─────┴─────┐
+         ▼           ▼
+       PASS         FAIL / UNAVAILABLE
+         │           │
+       DONE       FIX LOOP (Max Attempts / Stagnation Detection)
 ```
 
 ---
@@ -53,129 +53,126 @@ ASTRA V4 is a local-first, production-oriented autonomous software engineering a
 ## 🚀 Quickstart
 
 ### 1. Prerequisites
-- **Python**: 3.10+ (tested on Python 3.12)
-- **Node.js**: 18+ (tested on Node v24.19)
-- **Local Ollama** (Recommended for local-first execution):
+- **Python**: 3.10, 3.11, 3.12, or 3.13
+- **Node.js**: 18.x or later (tested on Node v20/v24)
+- **Local Ollama** (Optional for local-first offline execution):
   - Download from [ollama.com](https://ollama.com)
   - Pull a coding model:
     ```bash
     ollama pull qwen2.5-coder:7b
     ```
 
-### 2. Launch Standalone Desktop Application
-Double-click `astra_desktop.bat` or run:
+### 2. Python Environment Setup
 ```bash
-# Start desktop application
-.\astra_desktop.bat
+# Install Python dependencies
+pip install -r requirements.txt
+```
 
-# Or manually:
+### 3. Desktop Application Setup & Build
+```bash
 cd desktop
+npm install
+npm run build
+npm run build:electron
 npm start
 ```
-The desktop app automatically detects and launches the local Python ASTRA runtime server on `http://127.0.0.1:8765`.
+Double-clicking `astra_desktop.bat` also automatically launches the runtime and desktop application.
 
-### 3. Launch CLI Mode (100% Backward Compatible)
+### 4. CLI Mode
 Interactive Terminal REPL:
 ```bash
 python astra.py
-# or:
-.\astra.bat
 ```
 
-Direct Goal Execution:
+Headless API Server:
 ```bash
-python astra.py "Fix the failing test in calculator.py and verify with pytest"
-```
-
-Start ASTRA Runtime API Server independently:
-```bash
-python astra.py --serve
+python astra.py --serve --port 8765
 ```
 
 ---
 
-## 🦙 Ollama First-Class Integration
+## 🛡️ Security Hardening & Safeguards
 
-ASTRA V4 treats Ollama as a first-class local runtime:
-- **Automatic Status Detection**: Real-time status indicator (`Ollama ● Connected` or `Ollama ● Disconnected`).
-- **Dynamic Model Discovery**: Queries `http://localhost:11434/api/tags` to populate installed models in the dropdown.
-- **Native Tool Calling**: Structured tool definitions sent directly to Ollama chat endpoint with automatic token/JSON fallback parsing.
-- **Fail-Safe Offline Instructions**: Clear step-by-step guidance if the local daemon is not running.
+### Electron Security
+- `webSecurity: true` and `allowRunningInsecureContent: false` strictly enforced.
+- `nodeIntegration: false` and `contextIsolation: true` preserve process boundaries.
+- Navigation restricted via `will-navigate` to trusted application destinations only.
+- Window opening restricted with `setWindowOpenHandler` denying arbitrary popups and routing trusted links to default browser via `shell.openExternal`.
+- IPC calls validated (e.g. `shell:openPath` rejects non-strings and non-existent targets).
+- Strict Content Security Policy (CSP) headers applied in `index.html`.
+
+### Terminal & Shell Execution Security
+- **Command Operator Parsing**: Chained shell commands (`&&`, `;`, `|`, `||`, `&`) are tokenized and every individual sub-command is verified against dangerous patterns.
+- **Fail-Closed Permission Model**: High-risk operations (disk wiping, system manipulation, fork bombs, forced git pushes) are classified as `DANGEROUS` and blocked unless explicit interactive approval is granted.
+- **Sensitive Token Redaction**: Output from commands, tools, and error messages is filtered through automated redaction expressions, preventing API keys (`gsk_*`, `AIzaSy*`, `sk-*`, `Bearer *`, etc.) from leaking into logs or LLM context.
+- **Pipe Buffer Deadlock Prevention**: Subprocess execution uses `communicate()` with non-blocking threads to continually drain pipes, preventing OS pipe buffer deadlocks.
+- **Bounded Buffer Protection**: Output is bounded (default 65,536 chars) to prevent runaway processes from causing memory exhaustion.
+
+### Backend API Security
+- Bound to loopback interface `127.0.0.1` by default.
+- Strict CORS configuration using explicit allowed origins (defaulting to local dev/desktop hosts; no wildcard `*`).
+- Optional token authentication (`ASTRA_API_TOKEN` / header `X-Astra-Token`) on mutating endpoints.
+- Path traversal validation on `/api/workspace/file` with explicit HTTP 403 Forbidden responses.
+- WebSocket session isolation: session events route strictly to session subscribers.
+
+### Quota-Aware LLM Routing & Circuit Breaker
+- Centralized `QuotaCircuitBreaker` tracking error categories (`RATE_LIMITED`, `QUOTA_EXHAUSTED`, `AUTH_ERROR`).
+- Circular fallback prevention: providers attempted in a request chain are never re-entered.
+- Healthy local Ollama fallback when cloud provider quotas are exhausted.
+- Exponential backoff with jitter on transient network/5xx errors.
+
+### Checkpoints and Rollback Safety
+- Strict path containment checks on snapshot and rollback operations (`relative_to` validation).
+- Absolute or traversal paths outside workspace are blocked from creation or deletion.
+- Pre-existing workspace files created prior to the session are safeguarded from deletion.
 
 ---
 
-## ⚙️ Configuration & Environment (`.env`)
+## ⚙️ Configuration Reference (`.env`)
 
 ```ini
-# Primary Provider & Model
-ASTRA_PROVIDER=ollama
-ASTRA_MODEL=ollama/qwen2.5-coder:7b
+# LLM Provider Keys
+GROQ_API_KEY=your_groq_key
+GEMINI_API_KEY=your_gemini_key
+
+# Default Model Selection
+ASTRA_MODEL=gemini-3.5-flash-lite
+
+# Local Ollama URL
 OLLAMA_BASE_URL=http://localhost:11434
 
-# Cloud LLM Backends (Optional)
-GROQ_API_KEY=gsk_...
-GEMINI_API_KEY=AQ...
-TEJA_MODEL_URL=https://...trycloudflare.com/v1
+# Server & Security Controls
+ASTRA_HOST=127.0.0.1
+ASTRA_PORT=8765
+ASTRA_API_TOKEN=
 
-# Security & Execution Limits
+# Allowed CORS Origins
+ASTRA_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:8765,http://127.0.0.1:8765,app://-
+
+# Execution Limits
 ASTRA_MAX_ITERATIONS=30
 ASTRA_COMMAND_TIMEOUT=120
-ASTRA_PERMISSION_MODE=balanced
+ASTRA_MAX_OUTPUT_CHARS=65536
+ASTRA_CIRCUIT_BREAKER=true
 ```
 
-### Permission Modes:
-- **`balanced`** (default): Safe commands run automatically; dangerous commands (`rm -rf`, `format`, `git reset --hard`, `git push --force`) require interactive user approval.
-- **`strict`**: Prompts the user before running any terminal command or deleting files.
-- **`safe`**: Completely blocks destructive actions.
-
 ---
 
-## 🛡️ Filesystem & Terminal Security
-- **Path Traversal Protection**: Every file access is strictly validated against the active workspace root. Any attempt to escape via `../../` is blocked.
-- **Secret Protection**: `.env`, private keys (`id_rsa`, `id_ed25519`, `*.key`), and sensitive credential files are shielded from unauthorized LLM reading.
-- **Execution Limits**: Configurable timeouts on all commands, external tools, and LLM calls. Process kill and cancellation supported at any moment via the **STOP** button.
+## 🧪 Verification & Test Suite
 
----
-
-## 🧪 Comprehensive Testing Suite
-
-ASTRA V4 includes unit, integration, and full end-to-end tests:
+Run the full automated test suite:
 ```bash
-python -m pytest tests/ -v
+python -m pytest -v
 ```
 
-### Verified Test Categories (35/35 passing):
-- **Tool Registry & Security**: Path traversal escapes, sensitive file locks, destructive command classification.
-- **Workspace Manager**: Project detection across Python, Node.js, React, TypeScript, Rust, Go.
-- **Independent Verifier & Loop Detector**: AST checks, error categorization, 3-attempt loop detector.
-- **Session Persistence**: SQLite session CRUD, messages, events, file modifications.
-- **FastAPI Endpoints**: Health, models, workspace, sessions, tasks.
-- **Section 41 E2E Test**: Intentionally broken project (`def add(a, b): return a - b`) autonomously diagnosed, surgically fixed (`return a + b`), and verified via pytest.
+Run byte-compilation check:
+```bash
+python -m compileall -q astra tests
+```
 
----
-
-## 🖥️ UI Features & Echo Design Layout
-- **Left Sidebar**:
-  - `+ New Chat`, `Chat`, `Workspace`, `Models`, `Usage`
-  - Session history grouped by `PINNED`, `TODAY`, `YESTERDAY`
-  - Live Ollama connection card (`● Connected`)
-  - Workspace switcher and user profile
-- **Center Canvas**:
-  - Glowing purple ambient top-right atmosphere
-  - Central orbital logo & welcome banner
-  - 3 Instant suggestion cards
-  - Floating glowing input pill with model picker, workspace attachment, mic, and action button
-- **Inspection Drawers**:
-  - **Tool Calls & Sources**: Slide-over drawer with real-time tool trace
-  - **Terminal**: Real-time process streaming
-  - **Diff Viewer**: Line-by-line colored git diffs
-  - **Model Catalog**: Multi-category model browser
-  - **Usage Dashboard**: Visual token and request metrics
-- **Approval Modal**: Interactive prompt for dangerous terminal operations.
-
----
-
-## 🤝 Troubleshooting
-- **Ollama Disconnected**: Run `ollama serve` in a terminal or launch the Ollama desktop application.
-- **No Models Available**: Run `ollama pull qwen2.5-coder:7b`.
-- **Port Conflict (8765)**: Set `ASTRA_PORT=8766` in `.env` or pass `--port 8766` to `python astra.py --serve`.
+Build desktop frontend & Electron scripts:
+```bash
+cd desktop
+npm run build
+npm run build:electron
+```

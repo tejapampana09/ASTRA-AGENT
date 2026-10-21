@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+from astra.config import settings
+
 
 class PermissionLevel(str, enum.Enum):
     SAFE = "SAFE"
@@ -73,6 +75,12 @@ class SecurityManager:
         r"del\s+/[fqs]",
         r"rmdir\s+/[sq]",
         r"format\s+[a-z]:",
+        r"diskpart",
+        r"bcdedit",
+        r"reg\s+delete",
+        r"vssadmin\s+delete",
+        r"takeown",
+        r"icacls.*\/grant.*everyone",
         r"git\s+reset\s+--hard",
         r"git\s+clean\s+-[a-z]*f",
         r"git\s+push\s+.*--force",
@@ -81,8 +89,13 @@ class SecurityManager:
         r"dd\s+if=",
         r":\(\)\s*\{\s*:\|:&\s*\};:", # fork bomb
         r"chmod\s+-R\s+777\s+/",
+        r"chmod\s+777\s+/",
+        r"chown\s+-R.*root",
         r"shutdown",
         r"reboot",
+        r"curl.*\|\s*(?:bash|sh|powershell|pwsh)",
+        r"wget.*\|\s*(?:bash|sh|powershell|pwsh)",
+        r"powershell.*-(?:enc|encodedcommand)",
     ]
 
     MODERATE_COMMAND_PATTERNS = [
@@ -96,8 +109,30 @@ class SecurityManager:
         r"docker-compose",
     ]
 
+    # Patterns of sensitive tokens and credentials to redact from outputs and logs
+    REDACTION_PATTERNS = [
+        (re.compile(r"gsk_[0-9A-Za-z]{20,}", re.IGNORECASE), "gsk_[REDACTED]"),
+        (re.compile(r"AIzaSy[0-9A-Za-z\-_]{20,}"), "AIzaSy[REDACTED]"),
+        (re.compile(r"sk-[a-zA-Z0-9_\-]{20,}"), "sk-[REDACTED]"),
+        (re.compile(r"hf_[0-9A-Za-z]{20,}"), "hf_[REDACTED]"),
+        (re.compile(r"ghp_[0-9A-Za-z]{20,}"), "ghp_[REDACTED]"),
+        (re.compile(r"github_pat_[0-9A-Za-z_]{30,}"), "github_pat_[REDACTED]"),
+        (re.compile(r"AKIA[0-9A-Z]{16}"), "AKIA[REDACTED]"),
+        (re.compile(r"Bearer\s+[a-zA-Z0-9_\-\.]{20,}", re.IGNORECASE), "Bearer [REDACTED]"),
+    ]
+
     def __init__(self, workspace_path: Path):
         self.workspace_path = workspace_path.resolve()
+
+    @classmethod
+    def redact_sensitive(cls, text: str) -> str:
+        """Redact known API keys, tokens, and credentials from text output."""
+        if not text:
+            return ""
+        redacted = text
+        for pattern, replacement in cls.REDACTION_PATTERNS:
+            redacted = pattern.sub(replacement, redacted)
+        return redacted
 
     def resolve_and_validate_path(self, target_path: str, allow_sensitive_read: bool = False) -> Path:
         """Resolve a path and ensure it strictly stays within workspace_path without traversal."""
@@ -137,18 +172,38 @@ class SecurityManager:
         return p
 
     def classify_command(self, cmd: str) -> PermissionLevel:
-        """Determine permission tier of command."""
+        """Determine permission tier of command with support for chained operators."""
         cmd_clean = cmd.strip()
-        
+        if not cmd_clean:
+            return PermissionLevel.SAFE
+
+        # 1. Check raw command against dangerous patterns first (e.g. pipes, flags, redirects)
         for pat in self.DANGEROUS_COMMAND_PATTERNS:
             if re.search(pat, cmd_clean, re.IGNORECASE):
                 return PermissionLevel.DANGEROUS
+
+        # 2. Split on common shell chaining/subshell operators: &&, ||, ;, |, &
+        sub_commands = re.split(r"(?:&&|\|\||;|\||&)", cmd_clean)
+        sub_commands = [c.strip() for c in sub_commands if c.strip()]
+        if not sub_commands:
+            sub_commands = [cmd_clean]
+
+        highest_level = PermissionLevel.SAFE
+
+        for sub_cmd in sub_commands:
+            for pat in self.DANGEROUS_COMMAND_PATTERNS:
+                if re.search(pat, sub_cmd, re.IGNORECASE):
+                    return PermissionLevel.DANGEROUS
+
+            for pat in self.MODERATE_COMMAND_PATTERNS:
+                if re.search(pat, sub_cmd, re.IGNORECASE):
+                    highest_level = PermissionLevel.MODERATE
 
         for pat in self.MODERATE_COMMAND_PATTERNS:
             if re.search(pat, cmd_clean, re.IGNORECASE):
                 return PermissionLevel.MODERATE
 
-        return PermissionLevel.SAFE
+        return highest_level
 
 
 class ToolExecutor:
@@ -432,23 +487,42 @@ class ToolExecutor:
 
             proc = subprocess.Popen(cmd, **popen_kwargs)
 
-            # Non-blocking poll with timeout & cancellation
-            while True:
-                if cancel_check and cancel_check():
+            # Use communicate() to continuously drain pipes and prevent pipe buffer deadlocks
+            stdout_data, stderr_data = "", ""
+            if not cancel_check:
+                try:
+                    stdout_data, stderr_data = proc.communicate(timeout=timeout)
+                except subprocess.TimeoutExpired:
                     self._kill_process_tree(proc)
-                    return "Error: Command execution cancelled by user."
+                    return f"Error: Command timed out after {timeout} seconds."
+            else:
+                def _cancel_monitor():
+                    while proc.poll() is None:
+                        if cancel_check and cancel_check():
+                            self._kill_process_tree(proc)
+                            break
+                        time.sleep(0.05)
 
-                if time.time() - start_time > timeout:
+                monitor = threading.Thread(target=_cancel_monitor, daemon=True)
+                monitor.start()
+                try:
+                    stdout_data, stderr_data = proc.communicate(timeout=timeout)
+                except subprocess.TimeoutExpired:
                     self._kill_process_tree(proc)
                     return f"Error: Command timed out after {timeout} seconds."
 
-                ret = proc.poll()
-                if ret is not None:
-                    break
-                time.sleep(0.05)
-
-            stdout_data, stderr_data = proc.communicate(timeout=5)
+                if cancel_check and cancel_check():
+                    return "Error: Command execution cancelled by user."
             
+            # Enforce bounded buffer limit to prevent memory exhaustion
+            max_chars = getattr(settings, "max_output_chars", 65536)
+            if stdout_data and len(stdout_data) > max_chars:
+                half = max_chars // 2
+                stdout_data = stdout_data[:half] + f"\n... [Output truncated: exceeded {max_chars} chars] ...\n" + stdout_data[-half:]
+            if stderr_data and len(stderr_data) > max_chars:
+                half = max_chars // 2
+                stderr_data = stderr_data[:half] + f"\n... [STDERR truncated: exceeded {max_chars} chars] ...\n" + stderr_data[-half:]
+
             output = []
             if stdout_data and stdout_data.strip():
                 output.append(stdout_data.strip())
@@ -456,6 +530,8 @@ class ToolExecutor:
                 output.append(f"[STDERR]\n{stderr_data.strip()}")
 
             out_str = "\n".join(output) if output else "(No output)"
+            # Redact secrets, keys, and credentials before returning to model or logs
+            out_str = self.security.redact_sensitive(out_str)
             return f"[Exit code {proc.returncode}]\n{out_str}"
         except subprocess.TimeoutExpired:
             self._kill_process_tree(proc)

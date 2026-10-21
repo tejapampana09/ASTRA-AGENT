@@ -34,6 +34,14 @@ class ErrorCategory(str, Enum):
     UNKNOWN = "unknown_error"
 
 
+class VerificationStatus(str, Enum):
+    PASSED = "passed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    UNAVAILABLE = "unavailable"
+    INCONCLUSIVE = "inconclusive"
+
+
 @dataclass
 class VerificationResult:
     """Outcome of an independent verification check."""
@@ -41,22 +49,26 @@ class VerificationResult:
     summary: str
     details: str = ""
     phase: str = "complete"
+    status: VerificationStatus = VerificationStatus.PASSED
     error_category: Optional[ErrorCategory] = None
     failing_command: Optional[str] = None
+    checks_run: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "passed": self.passed,
+            "status": self.status.value if isinstance(self.status, VerificationStatus) else str(self.status),
             "summary": self.summary,
             "details": self.details,
             "phase": self.phase,
             "error_category": self.error_category.value if self.error_category else None,
             "failing_command": self.failing_command,
+            "checks_run": self.checks_run,
         }
 
     def __repr__(self) -> str:
-        status = "PASSED" if self.passed else "FAILED"
-        return f"<VerificationResult [{status}] phase={self.phase}: {self.summary}>"
+        stat_name = self.status.value.upper() if isinstance(self.status, VerificationStatus) else str(self.status).upper()
+        return f"<VerificationResult [{stat_name}] phase={self.phase}: {self.summary}>"
 
 
 class LoopDetector:
@@ -115,6 +127,7 @@ class IndependentVerifier:
                 resolved_files.append(p)
 
         meta = self.workspace_manager.scan()
+        checks_run: List[Dict[str, Any]] = []
 
         # Stage 1: Syntax & Static parse check for Python files
         py_files = [f for f in resolved_files if f.suffix == ".py"]
@@ -122,27 +135,49 @@ class IndependentVerifier:
             syntax_err = self._check_python_syntax(py_files)
             if syntax_err:
                 cat = self.classify_error(syntax_err)
+                checks_run.append({
+                    "name": "python_syntax",
+                    "status": "failed",
+                    "files_checked": len(py_files),
+                    "error": syntax_err,
+                })
                 return VerificationResult(
                     passed=False,
+                    status=VerificationStatus.FAILED,
                     summary="Python syntax or compilation check failed.",
                     details=syntax_err,
                     phase="syntax_check",
                     error_category=cat,
+                    checks_run=checks_run,
                 )
+            checks_run.append({
+                "name": "python_syntax",
+                "status": "passed",
+                "files_checked": len(py_files),
+            })
 
         # Stage 2: TypeScript / Node type-check or build if TS project
         if meta.project_type in (ProjectType.TYPESCRIPT, ProjectType.REACT):
             if (self.workspace_path / "tsconfig.json").exists():
-                ts_err = self._check_typescript()
+                ts_err, ts_status = self._check_typescript()
+                checks_run.append({
+                    "name": "typescript_typecheck",
+                    "command": "npx tsc --noEmit",
+                    "status": ts_status,
+                    "error": ts_err,
+                })
                 if ts_err:
                     cat = self.classify_error(ts_err)
+                    v_stat = VerificationStatus.UNAVAILABLE if ts_status == "unavailable" else VerificationStatus.FAILED
                     return VerificationResult(
                         passed=False,
-                        summary="TypeScript compiler check failed.",
+                        status=v_stat,
+                        summary=f"TypeScript compiler check {ts_status}.",
                         details=ts_err,
                         phase="type_check",
                         error_category=cat,
                         failing_command="npx tsc --noEmit",
+                        checks_run=checks_run,
                     )
 
         # Stage 3: Automated Test Execution when a test suite exists or when requested
@@ -156,26 +191,51 @@ class IndependentVerifier:
             should_run_tests = True
 
         test_summary = ""
+        overall_status = VerificationStatus.PASSED
         if should_run_tests:
             test_err, test_summary, test_cmd = self._run_project_tests(meta)
             if test_err:
                 cat = self.classify_error(test_err)
+                checks_run.append({
+                    "name": "project_tests",
+                    "command": test_cmd,
+                    "status": "failed",
+                    "error": test_err,
+                })
                 return VerificationResult(
                     passed=False,
+                    status=VerificationStatus.FAILED,
                     summary=f"Automated test execution failed ({test_cmd}).",
                     details=test_err,
                     phase="test_execution",
                     error_category=cat,
                     failing_command=test_cmd,
+                    checks_run=checks_run,
                 )
+            if "no automated test suite detected" in (test_summary or "").lower():
+                checks_run.append({
+                    "name": "project_tests",
+                    "command": test_cmd,
+                    "status": "skipped",
+                    "message": test_summary,
+                })
+            else:
+                checks_run.append({
+                    "name": "project_tests",
+                    "command": test_cmd,
+                    "status": "passed",
+                    "summary": test_summary,
+                })
 
-        # All stages passed
+        # All stages completed
         details = test_summary or f"Verified {len(resolved_files)} file(s) with clean syntax."
         return VerificationResult(
             passed=True,
+            status=overall_status,
             summary="All independent verification checks passed successfully.",
             details=details,
             phase="verified",
+            checks_run=checks_run,
         )
 
     def _check_python_syntax(self, py_files: List[Path]) -> Optional[str]:
@@ -204,7 +264,7 @@ class IndependentVerifier:
 
         return None
 
-    def _check_typescript(self) -> Optional[str]:
+    def _check_typescript(self) -> Tuple[Optional[str], str]:
         try:
             res = subprocess.run(
                 ["npx", "tsc", "--noEmit"],
@@ -220,10 +280,12 @@ class IndependentVerifier:
             if res.returncode != 0:
                 out = (res.stdout + "\n" + res.stderr).strip()
                 lines = out.splitlines()[:25]
-                return "\n".join(lines)
-            return None
-        except Exception:
-            return None
+                return "\n".join(lines), "failed"
+            return None, "passed"
+        except subprocess.TimeoutExpired:
+            return "TypeScript type-checking timed out after 40 seconds.", "failed"
+        except Exception as exc:
+            return f"TypeScript verification tool error: {exc}", "unavailable"
 
     def _run_project_tests(self, meta: ProjectMetadata) -> Tuple[Optional[str], str, Optional[str]]:
         # 1. Python Project

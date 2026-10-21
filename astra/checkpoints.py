@@ -191,7 +191,20 @@ class CheckpointManager:
         deleted_files: List[str] = []
 
         for rel_path, content in target_cp.file_snapshots.items():
-            full_path = (self.workspace_path / rel_path).resolve()
+            clean_rel = Path(rel_path)
+            if clean_rel.is_absolute():
+                full_path = clean_rel.resolve()
+            else:
+                full_path = (self.workspace_path / clean_rel).resolve()
+
+            # Strict path containment check
+            try:
+                full_path.relative_to(self.workspace_path)
+                if full_path == self.workspace_path:
+                    continue
+            except ValueError:
+                # Traversal or out-of-workspace path in checkpoint - block execution
+                continue
 
             if content is None:
                 # File did not exist at the checkpoint

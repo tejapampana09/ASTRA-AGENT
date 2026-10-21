@@ -35,10 +35,19 @@ class Config:
         self.permission_mode = os.getenv("ASTRA_PERMISSION_MODE", "balanced").lower() # safe, balanced, strict
         self.timeout_seconds = int(os.getenv("ASTRA_TIMEOUT", "300"))
         
-        # API Server
+        # API Server & Security
         self.api_host = os.getenv("ASTRA_HOST", "127.0.0.1")
         self.api_port = int(os.getenv("ASTRA_PORT", "8765"))
-        
+        self.api_token = os.getenv("ASTRA_API_TOKEN") or ""
+        self.allowed_origins = [
+            o.strip() for o in (
+                os.getenv("ASTRA_ALLOWED_ORIGINS") or
+                "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8765,http://127.0.0.1:8765,app://-"
+            ).split(",") if o.strip()
+        ]
+        self.max_output_chars = int(os.getenv("ASTRA_MAX_OUTPUT_CHARS", "65536"))
+        self.circuit_breaker_enabled = os.getenv("ASTRA_CIRCUIT_BREAKER", "true").lower() in ("1", "true", "yes")
+
         # Data directory for sessions & persistence
         self.data_dir = Path(os.getenv("ASTRA_DATA_DIR") or Path.home() / ".astra").resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -59,6 +68,15 @@ class Config:
         self.command_timeout = int(os.getenv("ASTRA_COMMAND_TIMEOUT", str(self.command_timeout)))
         self.permission_mode = os.getenv("ASTRA_PERMISSION_MODE", self.permission_mode).lower()
         self.timeout_seconds = int(os.getenv("ASTRA_TIMEOUT", str(self.timeout_seconds)))
+        self.api_token = os.getenv("ASTRA_API_TOKEN") or ""
+        self.allowed_origins = [
+            o.strip() for o in (
+                os.getenv("ASTRA_ALLOWED_ORIGINS") or
+                "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8765,http://127.0.0.1:8765,app://-"
+            ).split(",") if o.strip()
+        ]
+        self.max_output_chars = int(os.getenv("ASTRA_MAX_OUTPUT_CHARS", "65536"))
+        self.circuit_breaker_enabled = os.getenv("ASTRA_CIRCUIT_BREAKER", "true").lower() in ("1", "true", "yes")
 
 
 settings = Config()

@@ -62,3 +62,22 @@ def test_checkpoint_never_deletes_pre_existing_files(temp_workspace):
     assert res["success"] is True
     assert pre.exists()
     assert pre.read_text(encoding="utf-8") == "pre-existing content"
+
+
+def test_checkpoint_rollback_blocks_path_traversal(temp_workspace):
+    # Craft a malicious checkpoint entry attempting to escape workspace
+    mgr = CheckpointManager(temp_workspace)
+    cp = mgr.create_checkpoint(session_id="s4", description="test traversal")
+    
+    # Inject a traversal path directly into checkpoint snapshots
+    outside_file = temp_workspace.parent / "should_not_be_written.txt"
+    if outside_file.exists():
+        outside_file.unlink()
+
+    cp.file_snapshots["../../should_not_be_written.txt"] = "malicious payload"
+
+    res = mgr.rollback(cp.checkpoint_id)
+    assert res["success"] is True
+    # Verify that outside_file was NEVER created
+    assert not outside_file.exists()
+    assert "../../should_not_be_written.txt" not in res["restored_files"]

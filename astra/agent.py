@@ -532,6 +532,9 @@ class AstraAgent:
                     cancel_check=self.is_cancelled,
                 )
 
+                if self._is_cancelled:
+                    return self._build_result("cancelled", "Task cancelled by user.", iteration, start_time)
+
                 tool_out = tool_res.to_string()
                 self.callback.on_tool_result(
                     fn_name,

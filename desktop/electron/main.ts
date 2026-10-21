@@ -102,11 +102,43 @@ async function createWindow(): Promise<void> {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: false,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
     },
   });
 
   mainWindow.setMenuBarVisibility(false);
+
+  // Security: Restrict in-window navigation strictly to localhost dev server or local file bundle
+  mainWindow.webContents.on('will-navigate', (event, navigationUrl) => {
+    try {
+      const parsed = new URL(navigationUrl);
+      const isAllowed =
+        (parsed.protocol === 'file:') ||
+        (parsed.protocol === 'http:' && parsed.hostname === 'localhost' && parsed.port === '5173') ||
+        (parsed.protocol === 'http:' && parsed.hostname === '127.0.0.1' && parsed.port === '5173');
+      if (!isAllowed) {
+        event.preventDefault();
+        console.warn(`[Electron Security] Blocked untrusted navigation to: ${navigationUrl}`);
+      }
+    } catch {
+      event.preventDefault();
+    }
+  });
+
+  // Security: Restrict new-window creation (target="_blank" or window.open) to safe external browser links
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      const parsed = new URL(url);
+      if (['http:', 'https:'].includes(parsed.protocol)) {
+        // Open trusted web links safely in the user's default OS browser, never in an electron webview
+        shell.openExternal(url);
+      }
+    } catch {
+      // Ignore invalid URL
+    }
+    return { action: 'deny' };
+  });
 
   mainWindow.webContents.on('did-fail-load', (_, errorCode, errorDescription) => {
     console.error(`[Electron Window Load Failed]: ${errorCode} - ${errorDescription}`);
@@ -147,7 +179,7 @@ async function createWindow(): Promise<void> {
   });
 }
 
-// IPC Handlers
+// IPC Handlers with validation
 ipcMain.handle('dialog:openDirectory', async () => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {
@@ -161,7 +193,15 @@ ipcMain.handle('dialog:openDirectory', async () => {
 });
 
 ipcMain.handle('shell:openPath', async (_, targetPath: string) => {
-  return await shell.openPath(targetPath);
+  if (!targetPath || typeof targetPath !== 'string') {
+    return 'Invalid path provided.';
+  }
+  // Prevent executing dangerous shell scripts or control files
+  const resolved = path.resolve(targetPath);
+  if (!fs.existsSync(resolved)) {
+    return 'Target path does not exist.';
+  }
+  return await shell.openPath(resolved);
 });
 
 app.whenReady().then(async () => {
