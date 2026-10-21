@@ -129,114 +129,150 @@ class IndependentVerifier:
         meta = self.workspace_manager.scan()
         checks_run: List[Dict[str, Any]] = []
 
-        # Stage 1: Syntax & Static parse check for Python files
-        py_files = [f for f in resolved_files if f.suffix == ".py"]
-        if py_files or meta.project_type == ProjectType.PYTHON:
-            syntax_err = self._check_python_syntax(py_files)
-            if syntax_err:
-                cat = self.classify_error(syntax_err)
+        try:
+            # Stage 1: Syntax & Static parse check for Python files
+            py_files = [f for f in resolved_files if f.suffix == ".py"]
+            if py_files or meta.project_type == ProjectType.PYTHON:
+                syntax_err = self._check_python_syntax(py_files)
+                if syntax_err:
+                    cat = self.classify_error(syntax_err)
+                    checks_run.append({
+                        "name": "python_syntax",
+                        "status": "failed",
+                        "files_checked": len(py_files),
+                        "error": syntax_err,
+                    })
+                    return VerificationResult(
+                        passed=False,
+                        status=VerificationStatus.FAILED,
+                        summary="Python syntax or compilation check failed.",
+                        details=syntax_err,
+                        phase="syntax_check",
+                        error_category=cat,
+                        checks_run=checks_run,
+                    )
                 checks_run.append({
                     "name": "python_syntax",
-                    "status": "failed",
+                    "status": "passed",
                     "files_checked": len(py_files),
-                    "error": syntax_err,
                 })
-                return VerificationResult(
-                    passed=False,
-                    status=VerificationStatus.FAILED,
-                    summary="Python syntax or compilation check failed.",
-                    details=syntax_err,
-                    phase="syntax_check",
-                    error_category=cat,
-                    checks_run=checks_run,
-                )
-            checks_run.append({
-                "name": "python_syntax",
-                "status": "passed",
-                "files_checked": len(py_files),
-            })
 
-        # Stage 2: TypeScript / Node type-check or build if TS project
-        if meta.project_type in (ProjectType.TYPESCRIPT, ProjectType.REACT):
-            if (self.workspace_path / "tsconfig.json").exists():
-                ts_err, ts_status = self._check_typescript()
-                checks_run.append({
-                    "name": "typescript_typecheck",
-                    "command": "npx tsc --noEmit",
-                    "status": ts_status,
-                    "error": ts_err,
-                })
-                if ts_err:
-                    cat = self.classify_error(ts_err)
-                    v_stat = VerificationStatus.UNAVAILABLE if ts_status == "unavailable" else VerificationStatus.FAILED
+            # Stage 2: TypeScript / Node type-check or build if TS project
+            if meta.project_type in (ProjectType.TYPESCRIPT, ProjectType.REACT):
+                if (self.workspace_path / "tsconfig.json").exists():
+                    ts_err, ts_status = self._check_typescript()
+                    checks_run.append({
+                        "name": "typescript_typecheck",
+                        "command": "npx tsc --noEmit",
+                        "status": ts_status,
+                        "error": ts_err,
+                    })
+                    if ts_err:
+                        cat = self.classify_error(ts_err)
+                        v_stat = VerificationStatus.UNAVAILABLE if ts_status == "unavailable" else VerificationStatus.FAILED
+                        return VerificationResult(
+                            passed=False,
+                            status=v_stat,
+                            summary=f"TypeScript compiler check {ts_status}.",
+                            details=ts_err,
+                            phase="type_check",
+                            error_category=cat,
+                            failing_command="npx tsc --noEmit",
+                            checks_run=checks_run,
+                        )
+
+            # Stage 3: Automated Test Execution when a test suite exists or when requested
+            should_run_tests = False
+            goal_lower = (goal or "").lower()
+            if any(w in goal_lower for w in ["test", "pytest", "failing", "regression", "verify test"]):
+                should_run_tests = True
+            elif any("test" in f.name.lower() or "tests" in str(f).lower() for f in resolved_files):
+                should_run_tests = True
+            elif (self.workspace_path / "tests").is_dir() or any(self.workspace_path.glob("**/test_*.py")):
+                should_run_tests = True
+
+            test_summary = ""
+            overall_status = VerificationStatus.PASSED
+            if should_run_tests:
+                test_err, test_summary, test_cmd = self._run_project_tests(meta)
+                if test_err:
+                    cat = self.classify_error(test_err)
+                    is_unavailable = "not found" in test_err.lower() or "unavailable" in test_err.lower()
+                    status_str = "unavailable" if is_unavailable else "failed"
+                    v_stat = VerificationStatus.UNAVAILABLE if is_unavailable else VerificationStatus.FAILED
+                    checks_run.append({
+                        "name": "project_tests",
+                        "command": test_cmd,
+                        "status": status_str,
+                        "error": test_err,
+                    })
                     return VerificationResult(
                         passed=False,
                         status=v_stat,
-                        summary=f"TypeScript compiler check {ts_status}.",
-                        details=ts_err,
-                        phase="type_check",
+                        summary=f"Automated test execution {status_str} ({test_cmd}).",
+                        details=test_err,
+                        phase="test_execution",
                         error_category=cat,
-                        failing_command="npx tsc --noEmit",
+                        failing_command=test_cmd,
                         checks_run=checks_run,
                     )
+                if "no automated test suite detected" in (test_summary or "").lower():
+                    checks_run.append({
+                        "name": "project_tests",
+                        "command": test_cmd,
+                        "status": "skipped",
+                        "message": test_summary,
+                    })
+                else:
+                    checks_run.append({
+                        "name": "project_tests",
+                        "command": test_cmd,
+                        "status": "passed",
+                        "summary": test_summary,
+                    })
 
-        # Stage 3: Automated Test Execution when a test suite exists or when requested
-        should_run_tests = False
-        goal_lower = (goal or "").lower()
-        if any(w in goal_lower for w in ["test", "pytest", "failing", "regression", "verify test"]):
-            should_run_tests = True
-        elif any("test" in f.name.lower() or "tests" in str(f).lower() for f in resolved_files):
-            should_run_tests = True
-        elif (self.workspace_path / "tests").is_dir() or any(self.workspace_path.glob("**/test_*.py")):
-            should_run_tests = True
-
-        test_summary = ""
-        overall_status = VerificationStatus.PASSED
-        if should_run_tests:
-            test_err, test_summary, test_cmd = self._run_project_tests(meta)
-            if test_err:
-                cat = self.classify_error(test_err)
-                checks_run.append({
-                    "name": "project_tests",
-                    "command": test_cmd,
-                    "status": "failed",
-                    "error": test_err,
-                })
+            # Check if any check failed or was unavailable
+            if any(c.get("status") == "failed" for c in checks_run):
                 return VerificationResult(
                     passed=False,
                     status=VerificationStatus.FAILED,
-                    summary=f"Automated test execution failed ({test_cmd}).",
-                    details=test_err,
-                    phase="test_execution",
-                    error_category=cat,
-                    failing_command=test_cmd,
+                    summary="One or more verification checks failed.",
+                    details=test_summary,
+                    phase="failed",
+                    error_category=ErrorCategory.TEST_FAILURE,
                     checks_run=checks_run,
                 )
-            if "no automated test suite detected" in (test_summary or "").lower():
-                checks_run.append({
-                    "name": "project_tests",
-                    "command": test_cmd,
-                    "status": "skipped",
-                    "message": test_summary,
-                })
-            else:
-                checks_run.append({
-                    "name": "project_tests",
-                    "command": test_cmd,
-                    "status": "passed",
-                    "summary": test_summary,
-                })
+            if any(c.get("status") == "unavailable" for c in checks_run):
+                return VerificationResult(
+                    passed=False,
+                    status=VerificationStatus.UNAVAILABLE,
+                    summary="One or more verification checks were unavailable.",
+                    details=test_summary,
+                    phase="unavailable",
+                    error_category=ErrorCategory.MISSING_DEPENDENCY,
+                    checks_run=checks_run,
+                )
 
-        # All stages completed
-        details = test_summary or f"Verified {len(resolved_files)} file(s) with clean syntax."
-        return VerificationResult(
-            passed=True,
-            status=overall_status,
-            summary="All independent verification checks passed successfully.",
-            details=details,
-            phase="verified",
-            checks_run=checks_run,
-        )
+            # All stages completed successfully
+            details = test_summary or f"Verified {len(resolved_files)} file(s) with clean syntax."
+            return VerificationResult(
+                passed=True,
+                status=overall_status,
+                summary="All independent verification checks passed successfully.",
+                details=details,
+                phase="verified",
+                checks_run=checks_run,
+            )
+        except Exception as exc:
+            return VerificationResult(
+                passed=False,
+                status=VerificationStatus.UNAVAILABLE,
+                summary=f"Independent verification failed due to internal error: {exc}",
+                details=str(exc),
+                phase="error",
+                error_category=ErrorCategory.RUNTIME,
+                checks_run=checks_run,
+            )
 
     def _check_python_syntax(self, py_files: List[Path]) -> Optional[str]:
         for pf in py_files:
@@ -259,8 +295,8 @@ class IndependentVerifier:
                 py_compile.compile(str(pf), doraise=True)
             except py_compile.PyCompileError as pyc_err:
                 return f"Byte-compilation failed for '{pf.name}': {pyc_err}"
-            except Exception:
-                pass
+            except Exception as exc:
+                return f"Byte-compilation error for '{pf.name}': {exc}"
 
         return None
 

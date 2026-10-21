@@ -150,3 +150,54 @@ def test_run_command_bounded_output(temp_workspace):
     res = tools.run_command("python -c \"print('A' * 70000)\"")
     assert "[Output truncated:" in res
     assert len(res) < 70000
+
+
+def test_run_command_argument_list_quoting(temp_workspace):
+    tools = ToolExecutor(temp_workspace)
+    res = tools.run_command("python -c \"print('ASTRA_QUOTING_TEST_OK')\"")
+    assert "[Exit code 0]" in res
+    assert "ASTRA_QUOTING_TEST_OK" in res
+
+
+def test_run_command_shell_operators(temp_workspace):
+    tools = ToolExecutor(temp_workspace)
+    res = tools.run_command("python -c \"print('PART1')\" && python -c \"print('PART2')\"")
+    assert "[Exit code 0]" in res
+    assert "PART1" in res
+    assert "PART2" in res
+
+
+def test_run_command_missing_executable_does_not_fallback_to_shell(temp_workspace):
+    tools = ToolExecutor(temp_workspace)
+    res = tools.run_command("completely_nonexistent_binary_12345_xyz --version")
+    assert "executable not found" in res
+    assert "Error executing command" in res
+
+
+def test_run_command_unclosed_quotes_fails_closed(temp_workspace):
+    tools = ToolExecutor(temp_workspace)
+    res = tools.run_command("python -c \"unclosed string without end")
+    assert "invalid syntax or unclosed quotes" in res
+
+
+def test_run_command_timeout(temp_workspace):
+    tools = ToolExecutor(temp_workspace)
+    res = tools.run_command("python -c \"import time; time.sleep(5)\"", timeout=1)
+    assert "timed out after 1 seconds" in res
+
+
+def test_run_command_dangerous_blocking_and_approval(temp_workspace):
+    tools = ToolExecutor(temp_workspace)
+    # Blocked without allow_dangerous
+    res = tools.run_command("rm -rf /")
+    assert "classified as DANGEROUS and was blocked" in res
+
+    # Registry approval rejection
+    reg = ToolRegistry(temp_workspace)
+    res_rejected = reg.execute(
+        "run_command",
+        {"cmd": "rm -rf /"},
+        approval_callback=lambda name, desc, args: False,
+    )
+    assert res_rejected.success is False
+    assert "requires user approval" in res_rejected.error or "blocked" in res_rejected.error.lower()

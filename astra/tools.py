@@ -482,9 +482,8 @@ class ToolExecutor:
                     args = shlex.split(cmd, posix=True)
                     if args:
                         exec_target = args
-                except Exception:
-                    use_shell = True
-                    exec_target = cmd
+                except Exception as parse_err:
+                    return f"Error: Command '{cmd}' has invalid syntax or unclosed quotes: {parse_err}"
 
             popen_kwargs: Dict[str, Any] = {
                 "cwd": str(self.workspace_path),
@@ -500,12 +499,11 @@ class ToolExecutor:
 
             try:
                 proc = subprocess.Popen(exec_target, **popen_kwargs)
-            except FileNotFoundError:
-                if not use_shell:
-                    popen_kwargs["shell"] = True
-                    proc = subprocess.Popen(cmd, **popen_kwargs)
-                else:
-                    raise
+            except FileNotFoundError as fnf_err:
+                # Never silently or unsafely fall back to shell=True for missing executables
+                return f"Error executing command '{cmd}': executable not found ({fnf_err})"
+            except PermissionError as perm_err:
+                return f"Error executing command '{cmd}': permission denied ({perm_err})"
 
             # Use communicate() to continuously drain pipes and prevent pipe buffer deadlocks
             stdout_data, stderr_data = "", ""

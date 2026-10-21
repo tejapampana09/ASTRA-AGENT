@@ -110,9 +110,12 @@ class QuotaCircuitBreaker:
             if any(k in err_msg for k in ["invalid_api_key", "api key not valid", "401", "unauthorized", "forbidden"]):
                 state = ProviderState.AUTH_ERROR
                 self._cooldown_until[provider] = now + 86400
-            elif any(k in err_msg for k in ["quota", "resourceexhausted", "resource_exhausted", "daily limit", "generatetokensperday"]):
+            elif any(k in err_msg for k in ["daily limit", "generatetokensperday", "daily quota", "quota exceeded for quota metric", "day limit"]):
                 state = ProviderState.QUOTA_EXHAUSTED
-                self._cooldown_until[provider] = now + 3600
+                self._cooldown_until[provider] = now + 86400  # 24-hour cooldown for daily quota exhaustion
+            elif any(k in err_msg for k in ["quota", "resourceexhausted", "resource_exhausted"]):
+                state = ProviderState.QUOTA_EXHAUSTED
+                self._cooldown_until[provider] = now + 3600   # 1-hour cooldown for general quota exhaustion
             elif any(k in err_msg for k in ["429", "too many requests", "rate limit", "tpm", "rpm"]):
                 state = ProviderState.RATE_LIMITED
                 self._cooldown_until[provider] = now + 60
@@ -935,16 +938,28 @@ class LLMClient:
         self.circuit_breaker = circuit_breaker
 
     def _get_fallback_candidates(self, primary_name: str) -> List[Tuple[str, LLMProvider, str]]:
-        """Ordered candidate providers for fallback."""
-        candidates = []
-        if settings.groq_api_key:
-            candidates.append(("groq", self.router.groq, "openai/gpt-oss-120b"))
-        if settings.gemini_api_key:
-            candidates.append(("gemini", self.router.gemini, "gemini-3.5-flash-lite"))
-        # Check local Ollama
-        ollama_h = self.router.ollama.health()
-        if ollama_h.get("connected"):
-            candidates.append(("ollama", self.router.ollama, "qwen2.5-coder:7b"))
+        """Ordered candidate providers for fallback: Cloud Alternate -> Local Ollama."""
+        candidates: List[Tuple[str, LLMProvider, str]] = []
+        if primary_name == "gemini":
+            # Primary is Gemini -> try alternate cloud provider Groq, then local Ollama
+            if settings.groq_api_key:
+                candidates.append(("groq", self.router.groq, "openai/gpt-oss-120b"))
+            ollama_h = self.router.ollama.health()
+            if ollama_h.get("connected"):
+                candidates.append(("ollama", self.router.ollama, "qwen2.5-coder:7b"))
+        elif primary_name == "groq":
+            # Primary is Groq -> try alternate cloud provider Gemini, then local Ollama
+            if settings.gemini_api_key:
+                candidates.append(("gemini", self.router.gemini, "gemini-3.5-flash-lite"))
+            ollama_h = self.router.ollama.health()
+            if ollama_h.get("connected"):
+                candidates.append(("ollama", self.router.ollama, "qwen2.5-coder:7b"))
+        else:
+            # Primary is Ollama or custom -> try cloud Gemini, then Groq
+            if settings.gemini_api_key:
+                candidates.append(("gemini", self.router.gemini, "gemini-3.5-flash-lite"))
+            if settings.groq_api_key:
+                candidates.append(("groq", self.router.groq, "openai/gpt-oss-120b"))
 
         return [c for c in candidates if c[0] != primary_name]
 

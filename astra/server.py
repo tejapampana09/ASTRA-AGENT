@@ -78,6 +78,54 @@ def verify_api_token(
         raise HTTPException(status_code=401, detail="Unauthorized: Invalid or missing API token.")
 
 
+def validate_authorized_workspace(workspace_path: str) -> Path:
+    """Validate and authorize a workspace path, preventing path traversal and system directory hijacking."""
+    if not workspace_path or not str(workspace_path).strip():
+        raise HTTPException(status_code=400, detail="Workspace path cannot be empty.")
+
+    try:
+        p = Path(workspace_path).resolve()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid workspace path: {exc}")
+
+    if not p.exists() or not p.is_dir():
+        raise HTTPException(status_code=400, detail=f"Workspace path does not exist or is not a directory: '{p}'")
+
+    # Reject system root and critical directories
+    p_str = str(p).lower().rstrip("\\/")
+    dangerous_roots = {
+        "c:", "c:\\", "c:/", "c:\\windows", "c:/windows",
+        "c:\\program files", "c:/program files",
+        "c:\\program files (x86)", "c:/program files (x86)",
+        "", "/", "/etc", "/root", "/boot", "/sys", "/proc", "/usr", "/bin", "/sbin"
+    }
+    if p_str in dangerous_roots or p == p.parent:
+        raise HTTPException(status_code=403, detail=f"Access denied: System root directory '{p}' cannot be used as a workspace.")
+
+    # Check for user credential directories
+    for sensitive_dir in [".ssh", ".aws", ".gnupg", ".docker"]:
+        if sensitive_dir in p.parts:
+            raise HTTPException(status_code=403, detail=f"Access denied: Sensitive directory '{p}' cannot be used as a workspace.")
+
+    # If allowed_workspaces are explicitly configured, enforce containment
+    if settings.allowed_workspaces:
+        authorized = False
+        for allowed_root in settings.allowed_workspaces:
+            try:
+                p.relative_to(allowed_root)
+                authorized = True
+                break
+            except ValueError:
+                pass
+        if not authorized:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access denied: Workspace '{p}' is not within configured allowed workspace roots."
+            )
+
+    return p
+
+
 # Broadcast AgentEvents to appropriate WebSockets:
 # Session-scoped events route strictly to that session's subscribers.
 # Global / system-wide events route to connected_websockets.
@@ -162,10 +210,14 @@ def list_sessions():
     return session_manager.list_sessions()
 
 
-@app.post("/api/sessions")
+@app.post("/api/sessions", dependencies=[Depends(verify_api_token)])
 def create_session(req: CreateSessionRequest):
     """Create a new session."""
-    ws = req.workspace_path or str(current_workspace.workspace_path)
+    if req.workspace_path:
+        target_ws = validate_authorized_workspace(req.workspace_path)
+        ws = str(target_ws)
+    else:
+        ws = str(current_workspace.workspace_path)
     m = req.model or settings.default_model
     session_id = session_manager.create_session(ws, m, req.title)
     return {"session_id": session_id, "workspace_path": ws, "model": m}
@@ -180,7 +232,7 @@ def get_session(session_id: str):
     return sess
 
 
-@app.delete("/api/sessions/{session_id}")
+@app.delete("/api/sessions/{session_id}", dependencies=[Depends(verify_api_token)])
 def delete_session(session_id: str):
     """Delete a session."""
     ok = session_manager.delete_session(session_id)
@@ -199,7 +251,8 @@ def get_workspace():
 @app.post("/api/workspace/set", dependencies=[Depends(verify_api_token)])
 def set_workspace(req: SetWorkspaceRequest):
     """Change the active workspace directory."""
-    ok = current_workspace.set_workspace(req.workspace_path)
+    target_path = validate_authorized_workspace(req.workspace_path)
+    ok = current_workspace.set_workspace(str(target_path))
     if not ok:
         raise HTTPException(status_code=400, detail="Invalid workspace path or directory does not exist.")
     settings.workspace_path = current_workspace.workspace_path
@@ -248,7 +301,10 @@ def get_workspace_diff():
 @app.post("/api/tasks", dependencies=[Depends(verify_api_token)])
 def start_task(req: StartTaskRequest):
     """Start autonomous coding task in background thread."""
-    ws_path = Path(req.workspace_path or current_workspace.workspace_path).resolve()
+    if req.workspace_path:
+        ws_path = validate_authorized_workspace(req.workspace_path)
+    else:
+        ws_path = current_workspace.workspace_path
     model_name = req.model or settings.default_model
     session_id = req.session_id or session_manager.create_session(str(ws_path), model_name, title=req.goal[:40])
 
@@ -359,7 +415,30 @@ def handle_approval(approval_id: str, req: ApprovalResponseRequest):
 
 # WebSocket for Live Events
 @app.websocket("/ws/events")
-async def websocket_events(websocket: WebSocket, session_id: Optional[str] = None):
+async def websocket_events(
+    websocket: WebSocket,
+    session_id: Optional[str] = None,
+    token: Optional[str] = None,
+):
+    # 1. Token authentication check if token is configured
+    expected_token = getattr(settings, "api_token", "")
+    if expected_token:
+        provided = token or websocket.headers.get("x-astra-token")
+        if not provided and "authorization" in websocket.headers:
+            auth_hdr = websocket.headers["authorization"]
+            if auth_hdr.lower().startswith("bearer "):
+                provided = auth_hdr[7:].strip()
+        if not provided or provided != expected_token:
+            await websocket.close(code=1008, reason="Unauthorized: Invalid API token.")
+            return
+
+    # 2. Session authorization: ensure session exists before subscribing
+    if session_id:
+        sess = session_manager.get_session(session_id)
+        if not sess and session_id not in active_agents and session_id != "default":
+            await websocket.close(code=1008, reason=f"Unauthorized: Session '{session_id}' not found.")
+            return
+
     await websocket.accept()
     if session_id:
         if session_id not in session_websockets:
@@ -388,13 +467,13 @@ async def websocket_events(websocket: WebSocket, session_id: Optional[str] = Non
             if msg == "ping":
                 await websocket.send_text("pong")
     except (WebSocketDisconnect, Exception):
-        connected_websockets.discard(websocket)
-        if session_id and session_id in session_websockets:
-            session_websockets[session_id].discard(websocket)
+        pass
     finally:
         connected_websockets.discard(websocket)
         if session_id and session_id in session_websockets:
             session_websockets[session_id].discard(websocket)
+            if not session_websockets[session_id]:
+                session_websockets.pop(session_id, None)
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8765):

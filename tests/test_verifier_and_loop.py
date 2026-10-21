@@ -77,3 +77,49 @@ def test_independent_verifier_failing_test(temp_workspace):
     assert res.status.value == "failed"
     assert res.phase == "test_execution"
     assert res.error_category == ErrorCategory.TEST_FAILURE
+
+
+def test_independent_verifier_exceptions_never_report_success(temp_workspace):
+    from unittest.mock import patch
+    (temp_workspace / "valid.py").write_text("x = 1\n", encoding="utf-8")
+    verifier = IndependentVerifier(temp_workspace)
+
+    # Simulate an internal unexpected exception during syntax check
+    with patch.object(verifier, "_check_python_syntax", side_effect=RuntimeError("Simulated internal parser crash")):
+        res = verifier.verify(["valid.py"])
+        assert res.passed is False
+        assert res.status.value == "unavailable"
+        assert "Simulated internal parser crash" in res.summary or "Simulated internal parser crash" in res.details
+
+
+def test_independent_verifier_unavailable_tool_never_reports_success(temp_workspace):
+    from unittest.mock import patch
+    (temp_workspace / "code.py").write_text("def run(): pass\n", encoding="utf-8")
+    tests_dir = temp_workspace / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_code.py").write_text("def test_run(): pass\n", encoding="utf-8")
+
+    verifier = IndependentVerifier(temp_workspace)
+    # Simulate missing pytest executable
+    with patch.object(verifier, "_run_project_tests", return_value=("pytest executable not found: [Errno 2]", "", "pytest")):
+        res = verifier.verify(["code.py"], goal="run pytest")
+        assert res.passed is False
+        assert res.status.value == "unavailable"
+        assert "unavailable" in res.summary.lower()
+
+
+def test_independent_verifier_typescript_unavailable_fails_honestly(temp_workspace):
+    from unittest.mock import patch
+    from astra.workspace import ProjectMetadata, ProjectType
+    (temp_workspace / "tsconfig.json").write_text("{}", encoding="utf-8")
+    (temp_workspace / "app.ts").write_text("const x: number = 42;", encoding="utf-8")
+
+    verifier = IndependentVerifier(temp_workspace)
+    mock_meta = ProjectMetadata(workspace_path=str(temp_workspace), project_type=ProjectType.TYPESCRIPT)
+    with patch.object(verifier.workspace_manager, "scan", return_value=mock_meta), \
+         patch.object(verifier, "_check_typescript", return_value=("npx: command not found", "unavailable")):
+        res = verifier.verify(["app.ts"])
+        assert res.passed is False
+        assert res.status.value == "unavailable"
+        assert "unavailable" in res.summary.lower()
+

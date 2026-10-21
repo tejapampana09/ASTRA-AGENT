@@ -106,3 +106,49 @@ def test_llm_client_circular_fallback_prevented_when_all_fail():
         # Each provider should be called EXACTLY once — no circular re-entry!
         assert mock_gemini.complete.call_count == 1
         assert mock_groq.complete.call_count == 1
+
+
+def test_circuit_breaker_daily_quota_exhaustion():
+    cb = QuotaCircuitBreaker()
+    # Daily quota error like Gemini GenerateTokensPerDay
+    state = cb.record_error("gemini", Exception("ResourceExhausted: GenerateTokensPerDay quota exceeded"))
+    assert state == ProviderState.QUOTA_EXHAUSTED
+    assert cb.is_available("gemini") is False
+    status = cb.get_status("gemini")
+    # Cooldown should be ~86400s (24 hours)
+    assert status["cooldown_remaining_sec"] > 80000
+
+
+def test_fallback_does_not_call_quota_exhausted_provider():
+    client = LLMClient()
+    mock_gemini = MagicMock(spec=LLMProvider)
+    mock_groq = MagicMock(spec=LLMProvider)
+    mock_ollama = MagicMock(spec=LLMProvider)
+    mock_ollama.complete.return_value = LLMResponse(content="Ollama response", provider="ollama", model="qwen")
+
+    client.router.gemini = mock_gemini
+    client.router.groq = mock_groq
+    client.router.ollama = mock_ollama
+
+    client.circuit_breaker.reset()
+    # Simulate Gemini having previously exhausted daily quota
+    client.circuit_breaker.record_error("gemini", Exception("daily limit exceeded"))
+    assert client.circuit_breaker.is_available("gemini") is False
+
+    # Groq fails with an error
+    mock_groq.complete.side_effect = RuntimeError("Groq connection timeout")
+
+    with patch.object(settings, "gemini_api_key", "test-gemini-key"), \
+         patch.object(settings, "groq_api_key", "test-groq-key"), \
+         patch.object(client.router.ollama, "health", return_value={"connected": True}), \
+         patch.object(client.router, "get_provider_and_model", return_value=(mock_groq, "qwen/qwen3.8-27b")), \
+         patch.object(client.router, "get_provider_name", return_value="groq"):
+
+        res = client.complete([{"role": "user", "content": "test"}])
+        assert res.provider == "ollama"
+        assert res.content == "Ollama response"
+        # Gemini must NEVER be called because it is quota exhausted
+        mock_gemini.complete.assert_not_called()
+        mock_groq.complete.assert_called_once()
+        mock_ollama.complete.assert_called_once()
+

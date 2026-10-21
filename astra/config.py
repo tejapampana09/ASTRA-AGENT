@@ -39,11 +39,19 @@ class Config:
         self.api_host = os.getenv("ASTRA_HOST", "127.0.0.1")
         self.api_port = int(os.getenv("ASTRA_PORT", "8765"))
         self.api_token = os.getenv("ASTRA_API_TOKEN") or ""
-        self.allowed_origins = [
+        raw_origins = [
             o.strip() for o in (
                 os.getenv("ASTRA_ALLOWED_ORIGINS") or
                 "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8765,http://127.0.0.1:8765,app://-"
             ).split(",") if o.strip()
+        ]
+        # Never allow wildcard '*' when credentials or sensitive operations are enabled
+        self.allowed_origins = [o for o in raw_origins if o != "*"]
+        if not self.allowed_origins:
+            self.allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8765", "http://127.0.0.1:8765", "app://-"]
+
+        self.allowed_workspaces = [
+            Path(p.strip()).resolve() for p in os.getenv("ASTRA_ALLOWED_WORKSPACES", "").split(",") if p.strip()
         ]
         self.max_output_chars = int(os.getenv("ASTRA_MAX_OUTPUT_CHARS", "65536"))
         self.circuit_breaker_enabled = os.getenv("ASTRA_CIRCUIT_BREAKER", "true").lower() in ("1", "true", "yes")
@@ -69,11 +77,18 @@ class Config:
         self.permission_mode = os.getenv("ASTRA_PERMISSION_MODE", self.permission_mode).lower()
         self.timeout_seconds = int(os.getenv("ASTRA_TIMEOUT", str(self.timeout_seconds)))
         self.api_token = os.getenv("ASTRA_API_TOKEN") or ""
-        self.allowed_origins = [
+        raw_origins = [
             o.strip() for o in (
                 os.getenv("ASTRA_ALLOWED_ORIGINS") or
                 "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8765,http://127.0.0.1:8765,app://-"
             ).split(",") if o.strip()
+        ]
+        self.allowed_origins = [o for o in raw_origins if o != "*"]
+        if not self.allowed_origins:
+            self.allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8765", "http://127.0.0.1:8765", "app://-"]
+
+        self.allowed_workspaces = [
+            Path(p.strip()).resolve() for p in os.getenv("ASTRA_ALLOWED_WORKSPACES", "").split(",") if p.strip()
         ]
         self.max_output_chars = int(os.getenv("ASTRA_MAX_OUTPUT_CHARS", "65536"))
         self.circuit_breaker_enabled = os.getenv("ASTRA_CIRCUIT_BREAKER", "true").lower() in ("1", "true", "yes")

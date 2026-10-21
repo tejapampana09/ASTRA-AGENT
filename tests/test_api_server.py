@@ -141,3 +141,66 @@ def test_websocket_session_event_isolation():
         session_websockets.clear()
         connected_websockets.clear()
 
+
+def test_cors_headers_strict_origins(client):
+    # Allowed origin gets explicit access control origin header
+    res_allowed = client.options(
+        "/api/health",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert res_allowed.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+    # Untrusted origin does not get access control origin header
+    res_untrusted = client.options(
+        "/api/health",
+        headers={
+            "Origin": "http://evil-attacker.com",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert res_untrusted.headers.get("access-control-allow-origin") is None
+
+
+def test_workspace_authorization_system_root_blocked(client):
+    # System root directory must be rejected with 403
+    import sys
+    dangerous_path = "C:\\Windows" if sys.platform == "win32" else "/etc"
+    res = client.post("/api/workspace/set", json={"workspace_path": dangerous_path})
+    assert res.status_code == 403
+    assert "Access denied" in res.json()["detail"]
+
+    # Non-existent directory must be rejected with 400
+    res_missing = client.post("/api/workspace/set", json={"workspace_path": "/path/does/not/exist/12345"})
+    assert res_missing.status_code == 400
+
+
+def test_websocket_unauthorized_session_rejected(client):
+    from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+    # Non-existent session must be rejected with code 1008
+    with pytest.raises(Exception):
+        with client.websocket_connect("/ws/events?session_id=completely_unknown_session_xyz") as ws:
+            ws.receive_text()
+
+
+def test_websocket_token_auth_rejected(client):
+    from astra.config import settings
+    original_token = settings.api_token
+    try:
+        settings.api_token = "secret-token-ws"
+        # Connecting without token must be rejected
+        with pytest.raises(Exception):
+            with client.websocket_connect("/ws/events") as ws:
+                ws.receive_text()
+
+        # Connecting with valid token succeeds
+        with client.websocket_connect("/ws/events?token=secret-token-ws") as ws:
+            init_msg = ws.receive_text()
+            assert "connection_established" in init_msg
+    finally:
+        settings.api_token = original_token
+
+
