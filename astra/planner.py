@@ -80,10 +80,18 @@ class Planner:
 
         # Construct specific recovery step
         short_reason = (failure_reason or "Verification failed")[:60]
+        step_title = f"Resolve Blocker: {short_reason}"
+
+        # If a blocker step with this exact reason already exists and is IN_PROGRESS, do not duplicate
+        existing = [s for s in current_plan.steps if s.title == step_title]
+        if existing:
+            existing[0].status = StepStatus.IN_PROGRESS
+            return current_plan
+
         step_id = len(current_plan.steps) + 1
         recovery_step = TaskStep(
             step_id=step_id,
-            title=f"Resolve Blocker: {short_reason}",
+            title=step_title,
             description=f"Diagnose and remediate root cause:\n{error_details[:300] if error_details else failure_reason}",
             status=StepStatus.IN_PROGRESS,
             started_at=time.time(),

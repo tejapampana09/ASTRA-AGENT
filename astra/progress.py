@@ -97,6 +97,8 @@ class ProgressTracker:
         if len(self.history) >= 4:
             recent_tools = [h["tool"] for h in self.history[-4:]]
             if all(t in ("read_file", "search_code", "list_dir") for t in recent_tools):
+                # Clear last 2 from window so we only trigger every 3-4 reads rather than every single step
+                self.history = self.history[:-2]
                 self.stagnation_score += 2
                 return ProgressReport(
                     is_progressing=False,
