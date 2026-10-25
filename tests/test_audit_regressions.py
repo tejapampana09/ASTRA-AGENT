@@ -58,7 +58,10 @@ def test_workspace_switch_cannot_walk_trust_roots(api_env):
 def test_workspace_symlink_escape(api_env):
     outside = api_env.parent / 'outside'
     outside.mkdir()
-    (api_env / 'link').symlink_to(outside, target_is_directory=True)
+    try:
+        (api_env / 'link').symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip('Symlink creation requires elevated privilege on Windows')
     with pytest.raises(HTTPException):
         server.validate_authorized_workspace(str(api_env / 'link'))
 
@@ -303,12 +306,16 @@ def test_unanswered_question_is_not_fabricated(isolated):
 
 
 def test_typescript_compiler_rejects_real_type_error(isolated):
+    import shutil
     from astra.verifier import IndependentVerifier
     compiler = Path(__file__).resolve().parents[1] / 'desktop/node_modules/typescript'
     if not compiler.exists():
         pytest.skip('Run npm ci in desktop for compiler integration test')
     (isolated / 'node_modules').mkdir()
-    (isolated / 'node_modules/typescript').symlink_to(compiler, target_is_directory=True)
+    try:
+        (isolated / 'node_modules/typescript').symlink_to(compiler, target_is_directory=True)
+    except OSError:
+        shutil.copytree(compiler, isolated / 'node_modules/typescript')
     (isolated / 'tsconfig.json').write_text(json.dumps({'compilerOptions': {'skipLibCheck': True}, 'files': ['bad.ts']}))
     (isolated / 'bad.ts').write_text('const value: number = "wrong";')
     error, status = IndependentVerifier(isolated)._check_typescript()
@@ -386,7 +393,10 @@ def test_file_tree_does_not_enumerate_outside_symlink(isolated):
     inside, outside = isolated / 'inside', isolated / 'outside'
     inside.mkdir(); outside.mkdir()
     (outside / 'private-name.txt').write_text('private')
-    (inside / 'link').symlink_to(outside, target_is_directory=True)
+    try:
+        (inside / 'link').symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip('Symlink creation requires elevated privilege on Windows')
     assert WorkspaceManager(inside).get_file_tree() == []
 
 
