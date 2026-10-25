@@ -19,7 +19,7 @@ const approvedOpenRoots = new Set<string>();
 function backendHealthy(): Promise<boolean> {
   return new Promise((resolve) => {
     const req = http.get(`${BACKEND_URL}/api/health`, {
-      headers: { 'X-Astra-Token': backendToken }, timeout: 2000,
+      headers: { 'X-Astra-Token': backendToken }, timeout: 5000,
     }, (res) => {
       let body = '';
       res.on('data', (chunk) => { body += chunk; });

@@ -312,12 +312,12 @@ class LLMProvider(abc.ABC):
 class OllamaProvider(LLMProvider):
     """First-Class Ollama Provider.
     
-    Communicates directly with Ollama daemon on http://localhost:11434.
+    Communicates directly with Ollama daemon on http://127.0.0.1:11434.
     Supports tool calling, model discovery, and connection status.
     """
 
     def __init__(self, base_url: Optional[str] = None):
-        self.base_url = (base_url or settings.ollama_base_url or "http://localhost:11434").rstrip("/")
+        self.base_url = (base_url or settings.ollama_base_url or "http://127.0.0.1:11434").rstrip("/")
 
     def health(self) -> Dict[str, Any]:
         """Check if local Ollama daemon is active and reachable."""

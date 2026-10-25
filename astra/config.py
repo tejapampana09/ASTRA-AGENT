@@ -17,7 +17,7 @@ class Config:
         # Provider & Model Settings
         self.provider = os.getenv("ASTRA_PROVIDER") or "ollama"
         self.default_model = os.getenv("ASTRA_MODEL") or os.getenv("LLM_MODEL") or "qwen2.5-coder:7b"
-        self.ollama_base_url = (os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434").rstrip("/")
+        self.ollama_base_url = (os.getenv("OLLAMA_BASE_URL") or "http://127.0.0.1:11434").rstrip("/")
         
         # Keys & Remote Endpoints
         self.gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
@@ -81,7 +81,7 @@ class Config:
         self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY") or ""
         self.openai_api_key = os.getenv("OPENAI_API_KEY") or ""
         self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY") or ""
-        self.ollama_base_url = (os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434").rstrip("/")
+        self.ollama_base_url = (os.getenv("OLLAMA_BASE_URL") or "http://127.0.0.1:11434").rstrip("/")
         self.teja_model_url = os.getenv("TEJA_MODEL_URL") or ""
         self.default_model = os.getenv("ASTRA_MODEL") or os.getenv("LLM_MODEL") or self.default_model
         self.max_iterations = int(os.getenv("ASTRA_MAX_ITERATIONS", str(self.max_iterations)))
