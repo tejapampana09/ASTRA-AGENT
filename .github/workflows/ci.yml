@@ -11,7 +11,7 @@ jobs:
       matrix:
         python: ['3.10', '3.12', '3.13']
     env:
-      ASTRA_DATA_DIR: ${{ runner.temp }}/astra-tests
+      ASTRA_DATA_DIR: /tmp/astra-tests
       GEMINI_API_KEY: ''
       GOOGLE_API_KEY: ''
       GROQ_API_KEY: ''
