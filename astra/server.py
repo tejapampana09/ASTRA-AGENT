@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import secrets
+import ipaddress
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -15,7 +17,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from typing import Literal
+from urllib.parse import urlparse
+from astra.quota import request_ledger
 
 from astra import __version__
 from astra.agent import AstraAgent
@@ -55,12 +61,36 @@ app.add_middleware(
 # Active running agents mapped by session_id
 active_agents: Dict[str, AstraAgent] = {}
 agent_threads: Dict[str, threading.Thread] = {}
+worker_lock = threading.RLock()
 
 # Pending approvals for dangerous commands {approval_id: asyncio.Event or threading.Event}
 pending_approvals: Dict[str, Dict[str, Any]] = {}
 
 router = LLMRouter()
 current_workspace = WorkspaceManager(settings.workspace_path)
+# Trust roots are fixed at startup; workspace switching must never widen them.
+approved_workspace_roots = tuple(settings.allowed_workspaces or [settings.workspace_path.resolve()])
+
+
+def _network_exposed(scope) -> bool:
+    # Honor the real ASGI listener/client as well as configuration. This also
+    # covers `uvicorn astra.server:app --host 0.0.0.0` bypassing run_server().
+    for key in ("server", "client"):
+        address = scope.get(key)
+        if address:
+            try:
+                if not ipaddress.ip_address(address[0]).is_loopback:
+                    return True
+            except ValueError:
+                pass  # Non-network test transports and hostnames use configured policy.
+    return False
+
+
+@app.middleware("http")
+async def enforce_listener_auth(request, call_next):
+    if request.method != "OPTIONS" and _network_exposed(request.scope) and not settings.api_token:
+        return JSONResponse(status_code=500, content={"detail": "ASTRA_API_TOKEN is mandatory for a network-exposed listener."})
+    return await call_next(request)
 
 
 def verify_api_token(
@@ -87,7 +117,7 @@ def verify_api_token(
     provided = x_astra_token
     if not provided and authorization and authorization.lower().startswith("bearer "):
         provided = authorization[7:].strip()
-    if not provided or provided != expected_token:
+    if not provided or not secrets.compare_digest(provided.encode("utf-8"), expected_token.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Unauthorized: Invalid or missing API token.")
 
 
@@ -117,17 +147,10 @@ def validate_authorized_workspace(workspace_path: str) -> Path:
 
     # Check for user credential directories
     for sensitive_dir in [".ssh", ".aws", ".gnupg", ".docker", ".kube", ".config"]:
-        if sensitive_dir in p.parts:
+        if sensitive_dir in [part.lower() for part in p.parts]:
             raise HTTPException(status_code=403, detail=f"Access denied: Sensitive directory '{p}' cannot be used as a workspace.")
 
-    # Strict approved workspace root policy
-    # If allowed_workspaces are configured, target MUST be contained within one of them.
-    # Otherwise, approved roots default to the active workspace and its parent directory.
-    allowed_roots = list(settings.allowed_workspaces)
-    if not allowed_roots:
-        active_ws = current_workspace.workspace_path
-        allowed_roots.append(active_ws)
-        allowed_roots.append(active_ws.parent)
+    allowed_roots = approved_workspace_roots
 
     authorized = False
     for allowed_root in allowed_roots:
@@ -202,8 +225,45 @@ class ApprovalResponseRequest(BaseModel):
     approved: bool
 
 
+class RuntimeSettingsRequest(BaseModel):
+    ollamaBaseUrl: str
+    model: str = Field(min_length=1, max_length=200)
+    maxIterations: int = Field(ge=1, le=100)
+    commandTimeout: int = Field(ge=1, le=600)
+    permissionMode: Literal["balanced", "strict", "safe", "ask"]
+
+
+@app.get("/api/usage", dependencies=[Depends(verify_api_token)])
+def get_usage():
+    return request_ledger().summary()
+
+
+@app.get("/api/settings", dependencies=[Depends(verify_api_token)])
+def get_runtime_settings():
+    return {"ollamaBaseUrl": settings.ollama_base_url, "model": settings.default_model,
+            "maxIterations": settings.max_iterations, "commandTimeout": settings.command_timeout,
+            "permissionMode": settings.permission_mode}
+
+
+@app.put("/api/settings", dependencies=[Depends(verify_api_token)])
+def update_runtime_settings(req: RuntimeSettingsRequest):
+    url = urlparse(req.ollamaBaseUrl)
+    if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password:
+        raise HTTPException(status_code=400, detail="Ollama URL must be an HTTP(S) endpoint without credentials.")
+    with worker_lock:
+        if any(_worker_alive(sid) for sid in agent_threads):
+            raise HTTPException(status_code=409, detail="Stop active tasks before updating runtime settings.")
+        settings.ollama_base_url = req.ollamaBaseUrl.rstrip("/")
+        settings.default_model = req.model
+        settings.max_iterations = req.maxIterations
+        settings.command_timeout = req.commandTimeout
+        settings.permission_mode = req.permissionMode
+        router.ollama.base_url = settings.ollama_base_url
+    return get_runtime_settings()
+
+
 # REST Endpoints
-@app.get("/api/health")
+@app.get("/api/health", dependencies=[Depends(verify_api_token)])
 def get_health():
     """System health check, version, and Ollama connection status."""
     ollama_health = router.ollama.health()
@@ -215,17 +275,17 @@ def get_health():
         "active_workspace": str(current_workspace.workspace_path),
         "project_type": meta.project_type.value,
         "default_model": settings.default_model,
-        "active_tasks_count": len([a for a in active_agents.values() if not a.is_cancelled() and a.state not in (AgentState.COMPLETED, AgentState.FAILED, AgentState.CANCELLED, AgentState.IDLE)]),
+        "active_tasks_count": sum(t.is_alive() for t in list(agent_threads.values())),
     }
 
 
-@app.get("/api/models")
+@app.get("/api/models", dependencies=[Depends(verify_api_token)])
 def get_models():
     """Retrieve all available models across providers (Ollama, Gemini, Groq, TejaAI)."""
     return router.list_all_models()
 
 
-@app.get("/api/sessions")
+@app.get("/api/sessions", dependencies=[Depends(verify_api_token)])
 def list_sessions():
     """List all previous sessions."""
     return session_manager.list_sessions()
@@ -244,7 +304,7 @@ def create_session(req: CreateSessionRequest):
     return {"session_id": session_id, "workspace_path": ws, "model": m}
 
 
-@app.get("/api/sessions/{session_id}")
+@app.get("/api/sessions/{session_id}", dependencies=[Depends(verify_api_token)])
 def get_session(session_id: str):
     """Get full details of a session."""
     sess = session_manager.get_session(session_id)
@@ -256,13 +316,16 @@ def get_session(session_id: str):
 @app.delete("/api/sessions/{session_id}", dependencies=[Depends(verify_api_token)])
 def delete_session(session_id: str):
     """Delete a session."""
-    ok = session_manager.delete_session(session_id)
+    with worker_lock:
+        if _worker_alive(session_id):
+            raise HTTPException(status_code=409, detail="Cannot delete a running session.")
+        ok = session_manager.delete_session(session_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"deleted": True, "session_id": session_id}
 
 
-@app.get("/api/workspace")
+@app.get("/api/workspace", dependencies=[Depends(verify_api_token)])
 def get_workspace():
     """Get active workspace metadata."""
     meta = current_workspace.scan(force_refresh=True)
@@ -319,99 +382,104 @@ def get_workspace_diff():
     return {"diff": diff, "status": status, "branch": branch}
 
 
-@app.post("/api/tasks", dependencies=[Depends(verify_api_token)])
-def start_task(req: StartTaskRequest):
-    """Start autonomous coding task in background thread."""
-    if req.workspace_path:
-        ws_path = validate_authorized_workspace(req.workspace_path)
-    else:
-        ws_path = current_workspace.workspace_path
-    model_name = req.model or settings.default_model
-    session_id = req.session_id or session_manager.create_session(str(ws_path), model_name, title=req.goal[:40])
+def _worker_alive(session_id: str) -> bool:
+    thread = agent_threads.get(session_id)
+    return thread is not None and thread.is_alive()
 
-    # Check if already running
-    if session_id in active_agents and not active_agents[session_id].is_cancelled() and active_agents[session_id].state not in (AgentState.COMPLETED, AgentState.FAILED, AgentState.CANCELLED, AgentState.IDLE):
-        return {"status": "already_running", "session_id": session_id}
 
-    agent = AstraAgent(
-        workspace_path=ws_path,
-        model_name=model_name,
-        session_id=session_id,
-        max_iterations=settings.max_iterations,
-    )
-    active_agents[session_id] = agent
-
-    def _run_worker():
+def _launch_worker(session_id: str, agent: AstraAgent, operation) -> None:
+    """Caller holds worker_lock from reservation through Thread.start()."""
+    def run():
         try:
-            agent.run(req.goal)
+            operation()
         except Exception as exc:
             agent._set_state(AgentState.FAILED, {"error": str(exc)})
             agent._emit_event(EventType.AGENT_FAILED, {"error": str(exc)})
+        finally:
+            with worker_lock:
+                if active_agents.get(session_id) is agent:
+                    active_agents.pop(session_id, None)
+                    agent_threads.pop(session_id, None)
 
-    t = threading.Thread(target=_run_worker, daemon=True)
-    agent_threads[session_id] = t
-    t.start()
+    thread = threading.Thread(target=run, daemon=True)
+    active_agents[session_id] = agent
+    agent_threads[session_id] = thread
+    try:
+        thread.start()
+    except Exception:
+        active_agents.pop(session_id, None)
+        agent_threads.pop(session_id, None)
+        raise
 
+
+def _session(session_id: str) -> Dict[str, Any]:
+    session = session_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return session
+
+
+@app.post("/api/tasks", dependencies=[Depends(verify_api_token)])
+def start_task(req: StartTaskRequest):
+    if not req.goal.strip():
+        raise HTTPException(status_code=400, detail="Task goal cannot be empty.")
+    with worker_lock:
+        sess = _session(req.session_id) if req.session_id else None
+        ws_path = validate_authorized_workspace(
+            req.workspace_path or (sess or {}).get("workspace_path") or str(current_workspace.workspace_path)
+        )
+        if sess and ws_path != Path(sess["workspace_path"]).resolve():
+            raise HTTPException(status_code=409, detail="Create a new session to change its workspace.")
+        model_name = req.model or (sess or {}).get("model") or settings.default_model
+        session_id = req.session_id or session_manager.create_session(str(ws_path), model_name, title=req.goal[:40])
+        if _worker_alive(session_id):
+            raise HTTPException(status_code=409, detail="Session worker is still running.")
+        agent = AstraAgent(workspace_path=ws_path, model_name=model_name,
+                           session_id=session_id, max_iterations=settings.max_iterations)
+        history = session_manager.get_messages(session_id) if sess else []
+        if history:
+            history.append({"role": "user", "content": req.goal})
+            session_manager.add_message(session_id, "user", req.goal)
+        _launch_worker(session_id, agent, lambda: agent.run(req.goal, existing_messages=history or None))
     return {"status": "started", "session_id": session_id, "goal": req.goal, "model": model_name}
 
 
 @app.post("/api/tasks/{session_id}/stop", dependencies=[Depends(verify_api_token)])
 def stop_task(session_id: str):
-    """Stop/cancel a running agent task."""
-    agent = active_agents.get(session_id)
-    if not agent:
-        raise HTTPException(status_code=404, detail="No active task found for session.")
-    agent.cancel()
+    with worker_lock:
+        agent = active_agents.get(session_id)
+        if not agent:
+            raise HTTPException(status_code=404, detail="No active task found for session.")
+        agent.cancel()
     return {"status": "cancelling", "session_id": session_id}
 
 
 @app.post("/api/tasks/{session_id}/resume", dependencies=[Depends(verify_api_token)])
 def resume_task(session_id: str):
-    """Resume an interrupted or stopped task from saved TaskState."""
-    saved = session_manager.get_task_state(session_id)
-    if not saved:
-        sess = session_manager.get_session(session_id)
-        if not sess:
-            raise HTTPException(status_code=404, detail="Session not found.")
-        ws_path = Path(sess.get("workspace_path") or current_workspace.workspace_path)
-        model = sess.get("model") or settings.default_model
-    else:
-        ws_path = Path(saved.get("workspace_path") or current_workspace.workspace_path)
-        model = saved.get("model_name") or settings.default_model
-
-    agent = AstraAgent(
-        workspace_path=ws_path,
-        model_name=model,
-        session_id=session_id,
-        max_iterations=settings.max_iterations,
-    )
-    active_agents[session_id] = agent
-
-    def _run_resume():
-        try:
-            agent.resume()
-        except Exception as exc:
-            agent._set_state(AgentState.FAILED, {"error": str(exc)})
-            agent._emit_event(EventType.AGENT_FAILED, {"error": str(exc)})
-
-    t = threading.Thread(target=_run_resume, daemon=True)
-    agent_threads[session_id] = t
-    t.start()
+    with worker_lock:
+        if _worker_alive(session_id):
+            raise HTTPException(status_code=409, detail="Session worker is still running.")
+        sess = _session(session_id)
+        saved = session_manager.get_task_state(session_id) or {}
+        ws_path = validate_authorized_workspace(saved.get("workspace_path") or sess["workspace_path"])
+        if ws_path != Path(sess["workspace_path"]).resolve():
+            raise HTTPException(status_code=409, detail="Saved workspace does not match the session.")
+        agent = AstraAgent(workspace_path=ws_path, model_name=saved.get("model_name") or sess["model"],
+                           session_id=session_id, max_iterations=settings.max_iterations)
+        _launch_worker(session_id, agent, agent.resume)
     return {"status": "resumed", "session_id": session_id}
 
 
 @app.post("/api/tasks/{session_id}/rollback", dependencies=[Depends(verify_api_token)])
 def rollback_task(session_id: str, checkpoint_id: Optional[str] = None):
-    """Revert changes back to a specific checkpoint safely."""
-    agent = active_agents.get(session_id)
-    if not agent:
-        sess = session_manager.get_session(session_id)
-        if not sess:
-            raise HTTPException(status_code=404, detail="Session not found.")
-        ws = Path(sess.get("workspace_path") or current_workspace.workspace_path)
-        agent = AstraAgent(workspace_path=ws, session_id=session_id)
-    res = agent.checkpoint_manager.rollback(checkpoint_id)
-    return res
+    with worker_lock:
+        if _worker_alive(session_id):
+            raise HTTPException(status_code=409, detail="Stop the worker and wait for it to exit before rollback.")
+        sess = _session(session_id)
+        ws = validate_authorized_workspace(sess["workspace_path"])
+        from astra.checkpoints import CheckpointManager
+        manager = CheckpointManager(ws, session_manager, session_id=session_id)
+        return manager.rollback(checkpoint_id)
 
 
 @app.get("/api/approvals/pending", dependencies=[Depends(verify_api_token)])
@@ -441,17 +509,18 @@ async def websocket_events(
     session_id: Optional[str] = None,
     token: Optional[str] = None,
 ):
-    # 1. Token authentication check if token is configured
-    expected_token = getattr(settings, "api_token", "")
-    if expected_token:
-        provided = token or websocket.headers.get("x-astra-token")
-        if not provided and "authorization" in websocket.headers:
-            auth_hdr = websocket.headers["authorization"]
-            if auth_hdr.lower().startswith("bearer "):
-                provided = auth_hdr[7:].strip()
-        if not provided or provided != expected_token:
-            await websocket.close(code=1008, reason="Unauthorized: Invalid API token.")
-            return
+    if _network_exposed(websocket.scope) and not settings.api_token:
+        await websocket.close(code=1008, reason="Server credentials are required for network exposure.")
+        return
+    origin = websocket.headers.get("origin")
+    if origin and origin not in settings.allowed_origins:
+        await websocket.close(code=1008, reason="Untrusted origin.")
+        return
+    try:
+        verify_api_token(token or websocket.headers.get("x-astra-token"), websocket.headers.get("authorization"))
+    except HTTPException:
+        await websocket.close(code=1008, reason="Unauthorized or missing server credentials.")
+        return
 
     # 2. Session authorization: ensure session exists before subscribing
     if session_id:
@@ -469,7 +538,7 @@ async def websocket_events(
         connected_websockets.add(websocket)
     try:
         # Send initial status
-        meta = current_workspace.scan()
+        meta = await asyncio.to_thread(current_workspace.scan)
         initial_event = AgentEvent(
             event_type="connection_established",
             state=AgentState.IDLE,
@@ -478,7 +547,7 @@ async def websocket_events(
                 "message": "Connected to ASTRA V4 runtime engine",
                 "workspace": str(current_workspace.workspace_path),
                 "project_type": meta.project_type.value,
-                "ollama": router.ollama.health(),
+                "ollama": await asyncio.to_thread(router.ollama.health),
             }
         )
         await websocket.send_text(initial_event.to_json())
@@ -497,9 +566,15 @@ async def websocket_events(
                 session_websockets.pop(session_id, None)
 
 
-def run_server(host: str = "127.0.0.1", port: int = 8765):
+def run_server(host: Optional[str] = None, port: Optional[int] = None):
     """Launch uvicorn server programmatically."""
     import uvicorn
+    host = host or settings.api_host
+    port = port or settings.api_port
+    if host not in ("127.0.0.1", "localhost", "::1") and not settings.api_token:
+        raise RuntimeError("ASTRA_API_TOKEN is mandatory for a non-loopback listener.")
+    # Match authentication policy to the actual listener, including programmatic overrides.
+    settings.is_loopback = host in ("127.0.0.1", "localhost", "::1")
     uvicorn.run(app, host=host, port=port, log_level="warning")
 
 

@@ -101,6 +101,10 @@ class SessionManager:
                 FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
             );
             """)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
+            for name in ("name", "tool_call_id", "raw_content"):
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE messages ADD COLUMN {name} TEXT")
             conn.commit()
 
     def create_session(
@@ -175,6 +179,8 @@ class SessionManager:
 
     def delete_session(self, session_id: str) -> bool:
         with self._get_connection() as conn:
+            for table in ("messages", "events", "file_changes", "verifications", "task_states", "checkpoints"):
+                conn.execute(f"DELETE FROM {table} WHERE session_id = ?", (session_id,))
             cur = conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
             conn.commit()
             return cur.rowcount > 0
@@ -210,16 +216,22 @@ class SessionManager:
         role: str,
         content: str,
         tool_calls: Optional[List[Dict[str, Any]]] = None,
+        name: Optional[str] = None,
+        tool_call_id: Optional[str] = None,
+        raw_content: Any = None,
     ) -> None:
+        if hasattr(raw_content, "model_dump"):
+            raw_content = raw_content.model_dump(mode="json")
+        raw_json = json.dumps(raw_content) if raw_content is not None else None
         tc_json = json.dumps(tool_calls) if tool_calls else None
         now = time.time()
         with self._get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO messages (session_id, role, content, tool_calls, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO messages (session_id, role, content, tool_calls, created_at, name, tool_call_id, raw_content)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (session_id, role, str(content), tc_json, now),
+                (session_id, role, str(content), tc_json, now, name, tool_call_id, raw_json),
             )
             conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id))
             conn.commit()
@@ -227,7 +239,7 @@ class SessionManager:
     def get_messages(self, session_id: str) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:
             cur = conn.execute(
-                "SELECT role, content, tool_calls FROM messages WHERE session_id = ? ORDER BY id ASC",
+                "SELECT role, content, tool_calls, name, tool_call_id, raw_content FROM messages WHERE session_id = ? ORDER BY id ASC",
                 (session_id,),
             )
             res: List[Dict[str, Any]] = []
@@ -241,6 +253,11 @@ class SessionManager:
                 msg: Dict[str, Any] = {"role": r["role"], "content": r["content"]}
                 if tc:
                     msg["tool_calls"] = tc
+                for key in ("name", "tool_call_id"):
+                    if r[key]:
+                        msg[key] = r[key]
+                if r["raw_content"]:
+                    msg["raw_content"] = json.loads(r["raw_content"])
                 res.append(msg)
             return res
 

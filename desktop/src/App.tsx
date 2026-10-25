@@ -272,6 +272,8 @@ export const App: React.FC = () => {
       const meta = await api.getWorkspace();
       setMetadata(meta);
 
+      const runtimeSettings = await api.getSettings();
+      setAppSettings(runtimeSettings);
       const sessList = await api.listSessions();
       setSessions(sessList);
 
@@ -286,31 +288,32 @@ export const App: React.FC = () => {
     refreshAll();
   }, []);
 
-  // Connect WebSocket for live background agent events
+  // Subscribe before starting a task so fast tasks cannot lose their first events.
   useEffect(() => {
+    if (!activeSessionId) return;
     let ws: WebSocket | null = null;
-    let reconnectTimeout: any = null;
-
+    let reconnectTimeout: ReturnType<typeof setTimeout> | undefined;
+    let disposed = false;
     const connect = () => {
+      if (disposed) return;
       ws = api.connectWebSocket(
-        (event: AgentEvent) => {
-          handleIncomingEvent(event);
-        },
+        (event: AgentEvent) => { if (!disposed) handleIncomingEvent(event); },
         (connected: boolean) => {
-          if (!connected) {
+          if (!connected && !disposed) {
+            clearTimeout(reconnectTimeout);
             reconnectTimeout = setTimeout(connect, 3000);
           }
-        }
+        },
+        activeSessionId,
       );
     };
-
     connect();
-
     return () => {
+      disposed = true;
+      clearTimeout(reconnectTimeout);
       if (ws) ws.close();
-      if (reconnectTimeout) clearTimeout(reconnectTimeout);
     };
-  }, []);
+  }, [activeSessionId]);
 
   // Helper to update or append to the active assistant message
   const updateAssistantMessage = (updater: (msg: ChatMessage) => ChatMessage) => {
@@ -767,7 +770,10 @@ export const App: React.FC = () => {
     setCurrentAction('Analyzing objective & planning steps...');
 
     try {
-      const res = await api.startTask(goal, metadata?.workspace_path, selectedModel, activeSessionId);
+      const sessionId = activeSessionId || (await api.createSession(metadata?.workspace_path, selectedModel, goal.slice(0, 40))).session_id;
+      setActiveSessionId(sessionId);
+      await api.waitForSessionConnection(sessionId);
+      const res = await api.startTask(goal, metadata?.workspace_path, selectedModel, sessionId);
       setActiveSessionId(res.session_id);
       api.listSessions().then(setSessions).catch(() => {});
     } catch (err: any) {
@@ -812,7 +818,7 @@ export const App: React.FC = () => {
       const s = await api.getSession(id);
       setActiveSessionId(id);
       if (s.messages) {
-        const mapped = s.messages.map((m: any, idx: number) => {
+        const mapped = s.messages.filter((m: any) => m.role === 'user' || m.role === 'assistant').map((m: any, idx: number) => {
           let acts: any[] = [];
           if (m.tool_calls && Array.isArray(m.tool_calls)) {
             acts = m.tool_calls.map((tc: any, tcIdx: number) => {
@@ -846,7 +852,7 @@ export const App: React.FC = () => {
             role: m.role,
             content: m.content,
             actions: acts,
-            timestamp: m.created_at || Date.now(),
+            timestamp: m.created_at ? m.created_at * 1000 : Date.now(),
           };
         });
         setMessages(mapped);
@@ -1170,9 +1176,10 @@ export const App: React.FC = () => {
         <SettingsModal
           currentSettings={appSettings}
           onClose={() => setShowSettings(false)}
-          onSave={(newSet) => {
-            setAppSettings(newSet);
-            setSelectedModel(newSet.model);
+          onSave={async (newSet) => {
+            const applied = await api.saveSettings(newSet);
+            setAppSettings(applied);
+            setSelectedModel(applied.model);
           }}
         />
       )}

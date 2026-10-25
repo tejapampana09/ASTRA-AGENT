@@ -6,6 +6,7 @@ and plan execution to differentiate genuine progress from unproductive loops.
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -96,14 +97,15 @@ class ProgressTracker:
         # Check for repeated read operations without actions
         if len(self.history) >= 4:
             recent_tools = [h["tool"] for h in self.history[-4:]]
-            if all(t in ("read_file", "search_code", "list_dir") for t in recent_tools):
+            signatures = {(h["tool"], json.dumps(h["args"], sort_keys=True, default=str)) for h in self.history[-4:]}
+            if all(t in ("read_file", "search_code", "list_dir") for t in recent_tools) and len(signatures) == 1:
                 # Clear last 2 from window so we only trigger every 3-4 reads rather than every single step
                 self.history = self.history[:-2]
                 self.stagnation_score += 2
                 return ProgressReport(
                     is_progressing=False,
                     stagnation_score=self.stagnation_score,
-                    reason="Agent has performed 4 consecutive exploratory read calls without writing or executing code.",
+                    reason="Agent repeated the same exploratory read 4 times without new evidence.",
                     recommended_action=ProgressAction.REPLAN,
                     details={"recent_tools": recent_tools},
                 )

@@ -17,6 +17,7 @@ import re
 import shlex
 import subprocess
 import time
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
@@ -159,6 +160,10 @@ class SecurityManager:
                 f"which is outside active workspace '{self.workspace_path}'."
             )
 
+        # Credential and repository metadata directories are protected at every depth.
+        protected_dirs = {".ssh", ".aws", ".gnupg", ".kube", ".git"}
+        if any(part.lower() in protected_dirs for part in p.relative_to(self.workspace_path).parts):
+            raise PermissionError("Security Protection: Access to credential or repository metadata directories is restricted.")
         # Check secret protection
         if not allow_sensitive_read:
             file_name = p.name.lower()
@@ -447,7 +452,17 @@ class ToolExecutor:
                 )
             else:
                 import signal
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                os.killpg(proc.pid, signal.SIGTERM)
+                try:
+                    proc.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass
+                try:
+                    # A descendant may ignore SIGTERM even after the shell exits.
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                proc.wait(timeout=2)
         except Exception:
             try:
                 proc.kill()
@@ -505,41 +520,51 @@ class ToolExecutor:
             except PermissionError as perm_err:
                 return f"Error executing command '{cmd}': permission denied ({perm_err})"
 
-            # Use communicate() to continuously drain pipes and prevent pipe buffer deadlocks
-            stdout_data, stderr_data = "", ""
-            if not cancel_check:
+            # Drain both pipes concurrently, retaining only bounded head/tail
+            # buffers. Truncating communicate() after collection was unbounded.
+            max_chars = max(1024, getattr(settings, "max_output_chars", 65536))
+            half = max_chars // 2
+            captured = [{"head": "", "tail": "", "size": 0}, {"head": "", "tail": "", "size": 0}]
+            def drain(stream, buffer):
                 try:
-                    stdout_data, stderr_data = proc.communicate(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    self._kill_process_tree(proc)
-                    return f"Error: Command timed out after {timeout} seconds."
-            else:
-                def _cancel_monitor():
-                    while proc.poll() is None:
-                        if cancel_check and cancel_check():
-                            self._kill_process_tree(proc)
+                    while True:
+                        chunk = stream.read(4096)
+                        if not chunk:
                             break
-                        time.sleep(0.05)
+                        buffer["size"] += len(chunk)
+                        remaining = half - len(buffer["head"])
+                        if remaining > 0:
+                            buffer["head"] += chunk[:remaining]
+                            chunk = chunk[remaining:]
+                        if chunk:
+                            buffer["tail"] = (buffer["tail"] + chunk)[-half:]
+                finally:
+                    stream.close()
 
-                monitor = threading.Thread(target=_cancel_monitor, daemon=True)
-                monitor.start()
-                try:
-                    stdout_data, stderr_data = proc.communicate(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    self._kill_process_tree(proc)
-                    return f"Error: Command timed out after {timeout} seconds."
-
+            readers = [threading.Thread(target=drain, args=(stream, buffer), daemon=True)
+                       for stream, buffer in zip((proc.stdout, proc.stderr), captured)]
+            for reader in readers:
+                reader.start()
+            deadline = time.monotonic() + min(max(1, timeout), settings.command_timeout)
+            while proc.poll() is None or any(reader.is_alive() for reader in readers):
                 if cancel_check and cancel_check():
+                    self._kill_process_tree(proc)
+                    for reader in readers:
+                        reader.join(timeout=1)
                     return "Error: Command execution cancelled by user."
-            
-            # Enforce bounded buffer limit to prevent memory exhaustion
-            max_chars = getattr(settings, "max_output_chars", 65536)
-            if stdout_data and len(stdout_data) > max_chars:
-                half = max_chars // 2
-                stdout_data = stdout_data[:half] + f"\n... [Output truncated: exceeded {max_chars} chars] ...\n" + stdout_data[-half:]
-            if stderr_data and len(stderr_data) > max_chars:
-                half = max_chars // 2
-                stderr_data = stderr_data[:half] + f"\n... [STDERR truncated: exceeded {max_chars} chars] ...\n" + stderr_data[-half:]
+                if time.monotonic() >= deadline:
+                    self._kill_process_tree(proc)
+                    for reader in readers:
+                        reader.join(timeout=1)
+                    return f"Error: Command timed out after {min(max(1, timeout), settings.command_timeout)} seconds."
+                time.sleep(0.01)
+            proc.wait()
+            def collected(buffer, label):
+                if buffer["size"] > max_chars:
+                    return buffer["head"] + f"\n... [{label} truncated: exceeded {max_chars} chars] ...\n" + buffer["tail"]
+                return buffer["head"] + buffer["tail"]
+            stdout_data = collected(captured[0], "Output")
+            stderr_data = collected(captured[1], "STDERR")
 
             output = []
             if stdout_data and stdout_data.strip():
@@ -991,7 +1016,7 @@ class ToolRegistry:
         perm_mode = getattr(settings, "permission_mode", "balanced").lower()
         requires_approval = (
             (permission == PermissionLevel.DANGEROUS)
-            or (perm_mode in ("strict", "ask") and permission != PermissionLevel.SAFE)
+            or (perm_mode in ("strict", "ask", "safe") and permission != PermissionLevel.SAFE)
             or (approval_callback is not None and name == "run_command")
         )
 
@@ -1115,11 +1140,11 @@ class ToolRegistry:
                     ans = approval_callback("ask_question", q, args)
                     out = f"User selected/answered: {ans}"
                 else:
-                    out = f"User selected: {opts[0] if opts else '(Accepted default)'}"
+                    out = "Error: User input is required; no interactive question handler is available."
             else:
                 out = f"Error: Tool '{name}' handler not implemented."
 
-            is_err = out.startswith("Error:") or out.startswith("Security Violation:") or out.startswith("Security Protection:")
+            is_err = (exit_code is not None and exit_code != 0) or out.startswith("Error:") or out.startswith("Security Violation:") or out.startswith("Security Protection:")
             duration = (time.time() - start_time) * 1000
             return ToolResult(
                 success=not is_err,

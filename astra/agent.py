@@ -17,7 +17,7 @@ Core Architecture:
      ↓
     ACTION VALIDATOR (Controller gates: safe, non-repetitive, investigation-first)
      ↓
-    TOOL EXECUTOR (Carries out action safely in sandbox)
+    TOOL EXECUTOR (Applies file path policy and command approval)
      ↓
     OBSERVATION & EVIDENCE
      ↓
@@ -41,6 +41,7 @@ from astra.config import settings
 from astra.controller import DeterministicAgentController, TaskModel, classify_task_intent
 from astra.events import AgentEvent, AgentState, ControllerPhase, EventType, event_bus
 from astra.llm import LLMClient, LLMResponse, parse_tool_calls_from_text
+from astra.quota import RequestBudgetExceeded
 from astra.planner import Planner
 from astra.progress import ProgressAction, ProgressReport, ProgressTracker
 from astra.session import SessionManager, session_manager as global_session_manager
@@ -147,6 +148,7 @@ class AstraAgent:
         self.session_manager = session_manager or global_session_manager
         self.session_id = session_id or self.session_manager.create_session(str(self.workspace_path), self.model_name)
 
+        self.llm.budget_key = self.session_id
         self.max_iterations = max_iterations or settings.max_iterations
         self.max_verification_attempts = max_verification_attempts
         self.callback = callback or AgentCallback()
@@ -308,6 +310,10 @@ class AstraAgent:
             self._emit_event(EventType.TASK_COMPLETED, {"summary": reply})
             return self._build_result("completed", reply, 1, start_time)
 
+        if not existing_messages:
+            self.session_manager.add_message(self.session_id, "system", SYSTEM_PROMPT)
+            self.session_manager.add_message(self.session_id, "user", goal)
+
         # Autonomous Engineering Task Workflow
         meta = self.workspace_manager.scan()
         self._set_state(AgentState.PLANNING, {"goal": goal})
@@ -325,7 +331,9 @@ class AstraAgent:
             self.callback.on_plan_updated(self.controller.task_state.plan.steps)
 
         if existing_messages:
-            messages: List[Dict[str, Any]] = existing_messages
+            messages: List[Dict[str, Any]] = list(existing_messages)
+            if not any(m.get("role") == "system" for m in messages):
+                messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
         else:
             _now = _dt.datetime.now()
             initial_user_prompt = (
@@ -373,12 +381,21 @@ class AstraAgent:
             # LLM Completion
             try:
                 response = self.llm.complete(compressed_msgs, tools=self.tool_registry.get_definitions())
+            except RequestBudgetExceeded as exc:
+                msg = str(exc)
+                self.controller.set_phase(ControllerPhase.BLOCKED, {"reason": msg})
+                self._set_state(AgentState.BLOCKED, {"message": msg})
+                self._emit_event(EventType.TASK_BLOCKED, {"reason": msg})
+                return self._build_result("budget_exhausted", msg, iteration, start_time, error=msg)
             except Exception as exc:
                 err_msg = f"LLM error: {exc}"
                 self.controller.set_phase(ControllerPhase.BLOCKED, {"error": err_msg})
                 self._set_state(AgentState.FAILED, {"error": err_msg})
                 self._emit_event(EventType.AGENT_FAILED, {"error": err_msg})
                 return self._build_result("error", err_msg, iteration, start_time, error=err_msg)
+
+            if self._is_cancelled:
+                return self._build_result("cancelled", "Task cancelled by user.", iteration, start_time)
 
             # Process Thoughts & Reasoning
             if response.content:
@@ -490,7 +507,7 @@ class AstraAgent:
                 "raw_content": response.raw_content,
             }
             messages.append(assistant_msg)
-            self.session_manager.add_message(self.session_id, "assistant", response.content, response.tool_calls)
+            self.session_manager.add_message(self.session_id, "assistant", response.content, response.tool_calls, raw_content=response.raw_content)
 
             for tc in response.tool_calls:
                 if self._is_cancelled:
@@ -515,7 +532,7 @@ class AstraAgent:
                         "tool_call_id": tc.get("id"),
                         "content": block_content,
                     })
-                    self.session_manager.add_message(self.session_id, "tool", block_content)
+                    self.session_manager.add_message(self.session_id, "tool", block_content, name=fn_name, tool_call_id=tc.get("id"))
                     continue
 
                 # 2. ACTION EXECUTION VIA CONTROLLER
@@ -584,7 +601,7 @@ class AstraAgent:
                     "tool_call_id": tc.get("id"),
                     "content": tool_out,
                 })
-                self.session_manager.add_message(self.session_id, "tool", tool_out)
+                self.session_manager.add_message(self.session_id, "tool", tool_out, name=fn_name, tool_call_id=tc.get("id"))
 
         # Max iterations reached without clean finish
         status = "max_iterations_reached"
@@ -633,110 +650,15 @@ class AstraAgent:
         changed_files: List[str],
         verification_result: Optional[VerificationResult] = None,
     ) -> str:
-        """Ensure the user receives a complete, rich, Antigravity-style final summary."""
-        words = current_summary.strip().split()
-        has_structure = any(s in current_summary for s in ["###", "**", "- "])
-        is_mere_file_listing = (
-            ("The current directory contains" in current_summary or "# Folder Contents" in current_summary or "contains the following files" in current_summary)
-            and not any(term in current_summary.lower() for term in ["architecture", "pipeline", "component", "function", "handles", "implements", "logic", "responsibilit", "entry point", "framework"])
-        )
-
-        if len(words) >= 40 and has_structure and not is_mere_file_listing:
-            return current_summary
-
-        is_info_or_doc = self.controller.cognitive_state.task_type in (
-            TaskType.DOCUMENTATION,
-            TaskType.INVESTIGATION,
-        ) or not changed_files
-
-        if is_info_or_doc:
-            summary_prompt = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are ASTRA, a senior autonomous software engineering agent. "
-                        "The user asked an architectural, explanatory, or documentation question about the codebase. "
-                        "Deliver a comprehensive, beautifully formatted, deep architectural guide or documentation answering their request directly.\n"
-                        "Include:\n"
-                        "- 🏛️ Executive Architecture Overview\n"
-                        "- 🧩 Core Components & Modules (directory layout, key files, responsibilities)\n"
-                        "- 🔄 Execution Pipeline & Data Flow\n"
-                        "- ⚡ Key Technologies & Design Patterns\n"
-                        "- 🚀 Entry Points & Setup\n\n"
-                        "DO NOT write a meta-log about yourself or recount which tools were called. Deliver the actual requested architecture documentation in rich Markdown with clean sections, code blocks, and diagrams."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"User Objective: {goal}\n"
-                        f"Workspace context / observations gathered:\n{current_summary}\n\n"
-                        f"Provide the complete, in-depth architectural documentation now."
-                    ),
-                },
-            ]
-        else:
-            summary_prompt = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are ASTRA, a senior autonomous engineering agent. "
-                        "The task is complete. Provide a complete, professional, beautifully structured Final Task Summary for the user.\n"
-                        "Use this exact format:\n"
-                        "### 🎯 Executive Summary\n"
-                        "Direct explanation of what was achieved and the outcome.\n\n"
-                        "### 🛠️ Actions & Changes Made\n"
-                        "Bullet points detailing the files modified, created, or inspected, with specific updates.\n\n"
-                        "### 🧪 Verification & Results\n"
-                        "Specific commands executed (e.g. tests or status checks) and their results.\n\n"
-                        "### ✅ Current Status\n"
-                        "Confirmation that everything is verified and the workspace is clean.\n\n"
-                        "Use clean markdown with bullet points and code chips (`code`). NEVER give a 1-sentence or 2-sentence response."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"User Objective: {goal}\n"
-                        f"Files Modified: {changed_files}\n"
-                        f"Commands Executed: {[c['command'] for c in self.commands_executed]}\n"
-                        f"Verification Status: {'Passed' if verification_result and verification_result.passed else 'All steps complete'}\n"
-                        f"Previous observation: {current_summary}\n\n"
-                        f"Generate the full, complete Final Task Summary now."
-                    ),
-                },
-            ]
-
-        try:
-            resp = self.llm.complete(summary_prompt)
-            if resp.content and len(resp.content.strip().split()) >= 30:
-                return resp.content.strip()
-        except Exception:
-            pass
-
-        if is_info_or_doc:
-            return (
-                f"### 🏛️ Architecture & System Overview\n\n"
-                f"**Objective:** {goal}\n\n"
-                f"ASTRA completed repository exploration and context discovery. "
-                f"The repository comprises core service logic, API server endpoints, and frontend desktop components.\n\n"
-                f"{current_summary}"
-            )
-
-        cmds_list = "\n".join(f"- `{c['command']}`" for c in self.commands_executed[-5:]) if self.commands_executed else "- Workspace inspection completed"
-        files_list = "\n".join(f"- `{f}`" for f in changed_files) if changed_files else "- Workspace files inspected"
-        v_status = "All automated checks and independent verifications passed." if (verification_result and verification_result.passed) else "Task execution completed successfully."
-
-        return (
-            f"### 🎯 Executive Summary\n"
-            f"Successfully processed and resolved the objective: **{goal}**.\n\n"
-            f"### 🛠️ Actions & Changes Made\n"
-            f"{files_list}\n\n"
-            f"### 🧪 Verification & Commands Executed\n"
-            f"{cmds_list}\n\n"
-            f"### ✅ Current Status\n"
-            f"{v_status}"
-        )
+        """Return the actual answer and recorded verification; no extra API call."""
+        summary = current_summary.strip() or f"Task processed: {goal}"
+        if verification_result is not None:
+            status = verification_result.status
+            label = status.value if hasattr(status, "value") else str(status)
+            summary += f"\n\nVerification: **{label}**. {verification_result.summary}"
+        elif changed_files:
+            summary += "\n\nVerification: **not run**."
+        return summary
 
     def _build_result(
         self,
@@ -758,7 +680,7 @@ class AstraAgent:
             "files_created": list(self.files_created),
             "files_deleted": list(self.files_deleted),
             "commands_executed": [c["command"] for c in self.commands_executed],
-            "verification": verification or ("passed" if status == "completed" else "unverified"),
+            "verification": verification or "not_run",
         }
         if error:
             res["error"] = error

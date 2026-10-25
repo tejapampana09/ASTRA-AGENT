@@ -245,7 +245,7 @@ def test_tool_action_gating_loop_detection(temp_workspace):
 # =====================================================================
 
 def test_stagnation_triggers_replanning(temp_workspace):
-    """4 consecutive read actions without code modification must trigger REPLAN."""
+    """Repeated reads of the same evidence must trigger REPLAN."""
     workspace, sess_mgr = temp_workspace
     sess_id = sess_mgr.create_session(str(workspace), title="Stagnation Test")
 
@@ -263,7 +263,7 @@ def test_stagnation_triggers_replanning(temp_workspace):
     (workspace / "d.py").write_text("d = 4")
 
     # Record 4 read steps
-    for f in ["a.py", "b.py", "c.py", "d.py"]:
+    for f in ["a.py", "a.py", "a.py", "a.py"]:
         res = controller.execute_action("read_file", {"file_path": f})
         report = controller.record_and_evaluate_action("read_file", {"file_path": f}, res)
 

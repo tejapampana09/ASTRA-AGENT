@@ -41,8 +41,9 @@ class Checkpoint:
 class CheckpointManager:
     """Manages workspace snapshots and non-destructive rollbacks backed by SQLite persistence."""
 
-    def __init__(self, workspace_path: Path, session_manager: Optional[Any] = None):
+    def __init__(self, workspace_path: Path, session_manager: Optional[Any] = None, session_id: Optional[str] = None):
         self.workspace_path = workspace_path.resolve()
+        self.session_id = session_id
         self.session_manager = session_manager or global_session_manager
         self.checkpoints: List[Checkpoint] = []
         self._initial_files: set[str] = self._scan_initial_files()
@@ -51,8 +52,10 @@ class CheckpointManager:
     def _load_persisted_checkpoints(self) -> None:
         """Load stored checkpoints from SQLite database for crash recovery."""
         try:
-            persisted = self.session_manager.get_checkpoints()
+            persisted = self.session_manager.get_checkpoints(self.session_id)
             for p in persisted:
+                if not self._belongs_to_workspace(p):
+                    continue
                 cp = Checkpoint(
                     checkpoint_id=p["checkpoint_id"],
                     session_id=p["session_id"],
@@ -64,6 +67,12 @@ class CheckpointManager:
                 self.checkpoints.append(cp)
         except Exception:
             pass
+
+    def _belongs_to_workspace(self, record: Dict[str, Any]) -> bool:
+        if self.session_id and record["session_id"] != self.session_id:
+            return False
+        session = self.session_manager.get_session(record["session_id"])
+        return bool(session and Path(session["workspace_path"]).resolve() == self.workspace_path)
 
     def _scan_initial_files(self) -> set[str]:
         """Record all files that existed before the agent performed any mutations."""
@@ -102,6 +111,8 @@ class CheckpointManager:
         files: Optional[List[str]] = None,
     ) -> Checkpoint:
         """Create a snapshot of specified files (or touched files) before modification."""
+        if self.session_id and session_id != self.session_id:
+            raise ValueError("Checkpoint session does not match its manager.")
         chk_id = f"chk_{uuid.uuid4().hex[:10]}"
         git_head = self._get_git_head()
         snapshots: Dict[str, Optional[str]] = {}
@@ -121,9 +132,9 @@ class CheckpointManager:
 
                 if full_path.exists() and full_path.is_file():
                     try:
-                        snapshots[rel] = full_path.read_text(encoding="utf-8", errors="replace")
-                    except Exception:
-                        snapshots[rel] = None
+                        snapshots[rel] = full_path.read_text(encoding="utf-8")
+                    except (OSError, UnicodeError) as exc:
+                        raise ValueError(f"Cannot safely snapshot '{rel}': {exc}") from exc
                 else:
                     # File did not exist at this checkpoint
                     snapshots[rel] = None
@@ -170,7 +181,7 @@ class CheckpointManager:
                 # Try SQLite fallback
                 try:
                     p = self.session_manager.get_checkpoint(checkpoint_id)
-                    if p:
+                    if p and self._belongs_to_workspace(p):
                         target_cp = Checkpoint(
                             checkpoint_id=p["checkpoint_id"],
                             session_id=p["session_id"],
@@ -184,11 +195,14 @@ class CheckpointManager:
         elif self.checkpoints:
             target_cp = self.checkpoints[-1]
 
+        if target_cp and self.session_id and target_cp.session_id != self.session_id:
+            target_cp = None
         if not target_cp:
             return {"success": False, "error": f"Checkpoint '{checkpoint_id}' not found." if checkpoint_id else "No checkpoints available to rollback."}
 
         restored_files: List[str] = []
         deleted_files: List[str] = []
+        errors: List[str] = []
 
         for rel_path, content in target_cp.file_snapshots.items():
             clean_rel = Path(rel_path)
@@ -213,19 +227,20 @@ class CheckpointManager:
                     try:
                         full_path.unlink()
                         deleted_files.append(rel_path)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        errors.append(f"{rel_path}: {exc}")
             else:
                 # Restore previous content
                 try:
                     full_path.parent.mkdir(parents=True, exist_ok=True)
                     full_path.write_text(content, encoding="utf-8")
                     restored_files.append(rel_path)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    errors.append(f"{rel_path}: {exc}")
 
         return {
-            "success": True,
+            "success": not errors,
+            "errors": errors,
             "checkpoint_id": target_cp.checkpoint_id,
             "restored_files": restored_files,
             "deleted_files": deleted_files,
@@ -234,11 +249,11 @@ class CheckpointManager:
     def list_checkpoints(self, session_id: Optional[str] = None) -> List[Dict[str, Any]]:
         # Sync with SQLite to ensure all checkpoints (even from prior runs) are present
         try:
-            persisted = self.session_manager.get_checkpoints(session_id)
+            persisted = self.session_manager.get_checkpoints(self.session_id or session_id)
             if persisted:
                 known_ids = {c.checkpoint_id for c in self.checkpoints}
                 for p in persisted:
-                    if p["checkpoint_id"] not in known_ids:
+                    if self._belongs_to_workspace(p) and p["checkpoint_id"] not in known_ids:
                         self.checkpoints.append(
                             Checkpoint(
                                 checkpoint_id=p["checkpoint_id"],

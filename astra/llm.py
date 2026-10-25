@@ -12,11 +12,14 @@ import random
 import re
 import threading
 import time
+import uuid
 import urllib.error
 import urllib.request
 from enum import Enum
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 from astra.config import settings
+from astra.quota import (RequestBudgetExceeded, ProviderBudgetExceeded, pacific_window,
+                         quota_scope, request_ledger)
 
 
 class LLMResponse:
@@ -29,12 +32,14 @@ class LLMResponse:
         raw_content: Any = None,
         provider: str = "",
         model: str = "",
+        usage: Optional[Dict[str, Any]] = None,
     ):
         self.content = content or ""
         self.tool_calls = tool_calls or []
         self.raw_content = raw_content
         self.provider = provider
         self.model = model
+        self.usage = usage or {}
 
     def has_tool_calls(self) -> bool:
         return len(self.tool_calls) > 0
@@ -62,7 +67,8 @@ class ProviderState(str, Enum):
 class QuotaCircuitBreaker:
     """Thread-safe circuit breaker tracking provider quotas, rate-limits, and errors."""
 
-    def __init__(self):
+    def __init__(self, persistent: bool = False):
+        self.persistent = persistent
         self._lock = threading.RLock()
         self._provider_states: Dict[str, ProviderState] = {}
         self._cooldown_until: Dict[str, float] = {}
@@ -71,6 +77,14 @@ class QuotaCircuitBreaker:
 
     def is_available(self, provider: str) -> bool:
         with self._lock:
+            if self.persistent:
+                saved = request_ledger().cooldown(provider)
+                if saved:
+                    self._provider_states[provider] = ProviderState(saved[0])
+                    self._cooldown_until[provider] = saved[1]
+                else:
+                    self._provider_states.pop(provider, None)
+                    self._cooldown_until.pop(provider, None)
             state = self._provider_states.get(provider, ProviderState.HEALTHY)
             if state == ProviderState.AUTH_ERROR:
                 return False
@@ -83,13 +97,14 @@ class QuotaCircuitBreaker:
 
     def get_status(self, provider: str) -> Dict[str, Any]:
         with self._lock:
+            available = self.is_available(provider)
             state = self._provider_states.get(provider, ProviderState.HEALTHY)
             until = self._cooldown_until.get(provider, 0.0)
             rem = max(0.0, until - time.time())
             return {
                 "provider": provider,
                 "state": state.value,
-                "available": self.is_available(provider),
+                "available": available,
                 "cooldown_remaining_sec": round(rem, 1),
                 "last_error": self._last_error.get(provider, ""),
             }
@@ -99,35 +114,56 @@ class QuotaCircuitBreaker:
             self._provider_states[provider] = ProviderState.HEALTHY
             self._cooldown_until.pop(provider, None)
             self._error_counts[provider] = 0
+            if self.persistent:
+                request_ledger().clear_cooldown(provider)
 
     def record_error(self, provider: str, exc: Exception) -> ProviderState:
-        err_msg = str(exc).lower()
+        # SDK exceptions expose structured quota violations in details/response_json.
+        payload = getattr(exc, "response_json", None) or getattr(exc, "details", None) or {}
+        if hasattr(payload, "model_dump"):
+            payload = payload.model_dump()
+        err_msg = (str(exc) + " " + json.dumps(payload, default=str)).lower()
+        compact = re.sub(r"[^a-z0-9]", "", err_msg)
+        code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
         now = time.time()
+        retry = 60.0
+        def retry_delay(obj):
+            nonlocal retry
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    if key in ("retryDelay", "retry_delay"):
+                        try:
+                            retry = float(value.get("seconds", 0)) + float(value.get("nanos", 0)) / 1e9 if isinstance(value, dict) else float(str(value).rstrip("s"))
+                        except (ValueError, TypeError):
+                            pass
+                    retry_delay(value)
+            elif isinstance(obj, list):
+                for value in obj:
+                    retry_delay(value)
+        retry_delay(payload)
+        retry = min(max(retry, 1.0), 3600.0)
         with self._lock:
-            self._last_error[provider] = str(exc)[:200]
+            # Store a bounded diagnostic; never persist raw provider error payloads.
+            self._last_error[provider] = type(exc).__name__
             self._error_counts[provider] = self._error_counts.get(provider, 0) + 1
-
-            if any(k in err_msg for k in ["invalid_api_key", "api key not valid", "401", "unauthorized", "forbidden"]):
-                state = ProviderState.AUTH_ERROR
-                self._cooldown_until[provider] = now + 86400
-            elif any(k in err_msg for k in ["daily limit", "generatetokensperday", "daily quota", "quota exceeded for quota metric", "day limit"]):
-                state = ProviderState.QUOTA_EXHAUSTED
-                self._cooldown_until[provider] = now + 86400  # 24-hour cooldown for daily quota exhaustion
-            elif any(k in err_msg for k in ["quota", "resourceexhausted", "resource_exhausted"]):
-                state = ProviderState.QUOTA_EXHAUSTED
-                self._cooldown_until[provider] = now + 3600   # 1-hour cooldown for general quota exhaustion
-            elif any(k in err_msg for k in ["429", "too many requests", "rate limit", "tpm", "rpm"]):
-                state = ProviderState.RATE_LIMITED
-                self._cooldown_until[provider] = now + 60
+            if code == 401 or any(k in compact for k in ("invalidapikey", "apikeynotvalid", "unauthorized")):
+                state, until = ProviderState.AUTH_ERROR, now + 86400
+            elif any(k in compact for k in ("perday", "dailylimit", "dailyquota", "daylimit")):
+                state, until = ProviderState.QUOTA_EXHAUSTED, pacific_window(now)[1]
+            elif code == 429 or any(k in compact for k in ("429", "resourceexhausted", "quota", "ratelimit", "toomanyrequests")):
+                state, until = ProviderState.RATE_LIMITED, now + retry
             else:
-                state = ProviderState.UNAVAILABLE
-                self._cooldown_until[provider] = now + 15
-
+                state, until = ProviderState.UNAVAILABLE, now + 15
             self._provider_states[provider] = state
+            self._cooldown_until[provider] = until
+            if self.persistent:
+                request_ledger().save_cooldown(provider, state.value, until)
             return state
 
     def reset(self, provider: Optional[str] = None) -> None:
         with self._lock:
+            if self.persistent:
+                request_ledger().clear_cooldown(provider)
             if provider:
                 self._provider_states.pop(provider, None)
                 self._cooldown_until.pop(provider, None)
@@ -140,7 +176,8 @@ class QuotaCircuitBreaker:
                 self._last_error.clear()
 
 
-circuit_breaker = QuotaCircuitBreaker()
+circuit_breaker = QuotaCircuitBreaker(persistent=True)
+_gemini_transport_lock = threading.Lock()
 
 
 def check_endpoint_health(url: str, timeout: int = 3) -> bool:
@@ -504,7 +541,11 @@ class GeminiProvider(LLMProvider):
         from google import genai
         from google.genai import types
 
-        client = genai.Client(api_key=api_key)
+        # One transport attempt per ledger reservation; avoid hidden SDK retries.
+        client = genai.Client(api_key=api_key, http_options=types.HttpOptions(
+            timeout=settings.timeout_seconds * 1000,
+            retry_options=types.HttpRetryOptions(attempts=1),
+        ))
         model_id = model or "gemini-3.5-flash-lite"
         if model_id.startswith("gemini/"):
             model_id = model_id[len("gemini/"):]
@@ -524,7 +565,7 @@ class GeminiProvider(LLMProvider):
                 gemini_contents.append(types.Content(role="user", parts=[types.Part.from_text(text=content)]))
             elif role == "assistant":
                 if msg.get("raw_content"):
-                    gemini_contents.append(msg["raw_content"])
+                    gemini_contents.append(types.Content.model_validate(msg["raw_content"]) if isinstance(msg["raw_content"], dict) else msg["raw_content"])
                 else:
                     parts = []
                     if content:
@@ -564,15 +605,16 @@ class GeminiProvider(LLMProvider):
 
         config = types.GenerateContentConfig(
             temperature=temperature,
+            max_output_tokens=4096,
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
             system_instruction=system_instruction,
             tools=genai_tools if genai_tools else None,
         )
 
-        response = client.models.generate_content(
-            model=model_id,
-            contents=gemini_contents,
-            config=config,
-        )
+        try:
+            response = client.models.generate_content(model=model_id, contents=gemini_contents, config=config)
+        finally:
+            client.close()
 
         text_content = ""
         tool_calls = []
@@ -597,7 +639,8 @@ class GeminiProvider(LLMProvider):
                         )
 
         raw_content = response.candidates[0].content if response.candidates else None
-        return LLMResponse(content=text_content, tool_calls=tool_calls, raw_content=raw_content, provider="gemini", model=model_id)
+        return LLMResponse(content=text_content, tool_calls=tool_calls, raw_content=raw_content, provider="gemini", model=model_id,
+                           usage=response.usage_metadata.model_dump(mode="json") if response.usage_metadata else {})
 
 
 class TejaAIProvider(LLMProvider):
@@ -933,6 +976,7 @@ class LLMClient:
     """Robust, quota-aware LLMClient with circular-fallback prevention and backoff."""
 
     def __init__(self, model_name: Optional[str] = None):
+        self.budget_key = uuid.uuid4().hex
         self.model_name = model_name or settings.default_model
         self.router = LLMRouter()
         self.circuit_breaker = circuit_breaker
@@ -969,45 +1013,51 @@ class LLMClient:
         tools: Optional[List[Dict[str, Any]]] = None,
         temperature: float = 0.1,
     ) -> LLMResponse:
-        primary_provider, model_id = self.router.get_provider_and_model(self.model_name)
-        primary_name = self.router.get_provider_name(primary_provider)
-
-        attempted_providers: Set[str] = set()
+        primary, model = self.router.get_provider_and_model(self.model_name)
+        primary_name = self.router.get_provider_name(primary)
+        candidates = [(primary_name, primary, model)]
+        attempted = set()
         last_exception: Optional[Exception] = None
-
-        # 1. Try Primary Provider (if not in circuit-breaker cooldown)
-        if self.circuit_breaker.is_available(primary_name):
-            attempted_providers.add(primary_name)
-            try:
-                res = primary_provider.complete(messages, tools=tools, temperature=temperature, model=model_id)
-                self.circuit_breaker.record_success(primary_name)
-                return res
-            except Exception as exc:
-                last_exception = exc
-                self.circuit_breaker.record_error(primary_name, exc)
-        else:
-            last_exception = RuntimeError(
-                f"Primary provider '{primary_name}' is in cooldown: {self.circuit_breaker.get_status(primary_name)}"
-            )
-
-        # 2. Ordered Non-Circular Fallback
-        fallback_candidates = self._get_fallback_candidates(primary_name)
-        for fb_name, fb_provider, fb_model in fallback_candidates:
-            if fb_name in attempted_providers:
+        # Compute fallbacks lazily: a healthy primary should not probe other services.
+        index = 0
+        while index < len(candidates):
+            name, provider, model_id = candidates[index]
+            index += 1
+            if name in attempted:
                 continue
-            if not self.circuit_breaker.is_available(fb_name):
-                continue
-
-            attempted_providers.add(fb_name)
-            try:
-                res = fb_provider.complete(messages, tools=tools, temperature=temperature, model=fb_model)
-                self.circuit_breaker.record_success(fb_name)
-                return res
-            except Exception as exc:
-                last_exception = exc
-                self.circuit_breaker.record_error(fb_name, exc)
-
-        # 3. All failed - raise clean sanitized error
+            attempted.add(name)
+            scope = quota_scope(name, model_id)
+            if not (self.circuit_breaker.is_available(name) and self.circuit_breaker.is_available(scope)):
+                last_exception = RuntimeError(f"Provider '{name}' is in cooldown; select another model or wait.")
+            else:
+                attempt_id = None
+                # Serialize Gemini admission AND transport so queued callers cannot
+                # all pass the breaker before the first quota error arrives.
+                lock = _gemini_transport_lock if name == "gemini" else threading.RLock()
+                with lock:
+                    if not self.circuit_breaker.is_available(scope):
+                        last_exception = RuntimeError(f"Provider '{name}' is in cooldown.")
+                    else:
+                        try:
+                            attempt_id = request_ledger().reserve(self.budget_key, name, model_id)
+                            res = provider.complete(messages, tools=tools, temperature=temperature, model=model_id)
+                            request_ledger().finish(attempt_id, "success", res.usage)
+                            self.circuit_breaker.record_success(scope)
+                            return res
+                        except RequestBudgetExceeded:
+                            # A task budget cannot be bypassed through fallback.
+                            raise
+                        except ProviderBudgetExceeded as exc:
+                            last_exception = exc
+                        except Exception as exc:
+                            if attempt_id is not None:
+                                request_ledger().finish(attempt_id, "error")
+                            last_exception = exc
+                            self.circuit_breaker.record_error(scope, exc)
+                            if getattr(exc, "code", None) in (400, 404) or isinstance(exc, ValueError):
+                                raise
+            if index == 1:
+                candidates.extend(self._get_fallback_candidates(primary_name))
         if last_exception:
             raise last_exception
-        raise RuntimeError(f"All LLM providers unavailable. Attempted: {list(attempted_providers)}")
+        raise RuntimeError("All configured providers are unavailable.")

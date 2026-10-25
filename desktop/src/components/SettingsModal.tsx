@@ -10,7 +10,7 @@ interface SettingsModalProps {
     commandTimeout: number;
     permissionMode: string;
   };
-  onSave: (newSettings: any) => void;
+  onSave: (newSettings: any) => Promise<void>;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -20,10 +20,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const [form, setForm] = useState({ ...currentSettings });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onSave(form);
-    onClose();
+    setSaving(true);
+    setError('');
+    try { await onSave(form); onClose(); }
+    catch (err) { setError(err instanceof Error ? err.message : 'Settings were not saved.'); }
+    finally { setSaving(false); }
   };
 
   return (
@@ -40,6 +45,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+          <p>Changes apply to this running server. Use .env for startup defaults.</p>
+          {error && <p role="alert" className="text-red-300">{error}</p>}
           {/* Ollama URL */}
           <div className="space-y-1">
             <label className="text-[#8b949e] font-medium flex items-center space-x-1.5">
@@ -124,7 +131,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               Cancel
             </button>
             <button
-              type="submit"
+              type="submit" disabled={saving}
               className="px-4 py-1.5 rounded-lg bg-[#1f6feb] hover:bg-[#388bfd] text-white font-medium flex items-center space-x-1.5 shadow-xs transition-colors"
             >
               <Save className="w-3.5 h-3.5" />

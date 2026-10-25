@@ -176,3 +176,11 @@ cd desktop
 npm run build
 npm run build:electron
 ```
+
+
+## Audit fixes and runtime limits
+
+See [AUDIT.md](AUDIT.md) for the October 25, 2026 audit, validated fixes, Gemini
+request-budget configuration, fixed workspace trust roots, desktop authentication,
+and testing limitations. The usage dashboard shows recorded usage; runtime settings
+now update the backend. New sessions have a cumulative request budget by default.

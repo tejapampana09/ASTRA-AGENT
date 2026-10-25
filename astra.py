@@ -21,5 +21,5 @@ from astra.cli import main
 if __name__ == "__main__":
     try:
         main()
-    except (KeyboardInterrupt, SystemExit):
-        sys.exit(0)
+    except KeyboardInterrupt:
+        sys.exit(130)

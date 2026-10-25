@@ -15,6 +15,8 @@ import os
 import py_compile
 import re
 import subprocess
+import shutil
+import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -163,7 +165,7 @@ class IndependentVerifier:
                     ts_err, ts_status = self._check_typescript()
                     checks_run.append({
                         "name": "typescript_typecheck",
-                        "command": "npx tsc --noEmit",
+                        "command": "node node_modules/typescript/bin/tsc --noEmit",
                         "status": ts_status,
                         "error": ts_err,
                     })
@@ -177,7 +179,7 @@ class IndependentVerifier:
                             details=ts_err,
                             phase="type_check",
                             error_category=cat,
-                            failing_command="npx tsc --noEmit",
+                            failing_command="node node_modules/typescript/bin/tsc --noEmit",
                             checks_run=checks_run,
                         )
 
@@ -216,7 +218,7 @@ class IndependentVerifier:
                         failing_command=test_cmd,
                         checks_run=checks_run,
                     )
-                if "no automated test suite detected" in (test_summary or "").lower():
+                if any(text in (test_summary or "").lower() for text in ("no automated test suite detected", "no tests configured")):
                     checks_run.append({
                         "name": "project_tests",
                         "command": test_cmd,
@@ -253,6 +255,10 @@ class IndependentVerifier:
                     checks_run=checks_run,
                 )
 
+            if not any(c.get("status") == "passed" and (c.get("name") != "python_syntax" or c.get("files_checked", 0) > 0) for c in checks_run):
+                return VerificationResult(passed=False, status=VerificationStatus.INCONCLUSIVE,
+                                          summary="No executable verification checks were performed.",
+                                          phase="inconclusive", checks_run=checks_run)
             # All stages completed successfully
             details = test_summary or f"Verified {len(resolved_files)} file(s) with clean syntax."
             return VerificationResult(
@@ -301,9 +307,13 @@ class IndependentVerifier:
         return None
 
     def _check_typescript(self) -> Tuple[Optional[str], str]:
+        compiler = self.workspace_path / "node_modules" / "typescript" / "bin" / "tsc"
+        node = shutil.which("node")
+        if not node or not compiler.is_file():
+            return "TypeScript compiler unavailable. Install the project's locked dependencies.", "unavailable"
         try:
             res = subprocess.run(
-                ["npx", "tsc", "--noEmit"],
+                [node, str(compiler), "--noEmit"],
                 cwd=self.workspace_path,
                 capture_output=True,
                 text=True,
@@ -311,7 +321,7 @@ class IndependentVerifier:
                 errors="replace",
                 timeout=40,
                 check=False,
-                shell=True,
+                shell=False,
             )
             if res.returncode != 0:
                 out = (res.stdout + "\n" + res.stderr).strip()
@@ -337,7 +347,7 @@ class IndependentVerifier:
             if not has_tests:
                 return None, "No automated test suite detected in workspace. Syntax verified.", None
 
-            cmd = ["python", "-m", "pytest", "-q", "--tb=short", "-o", "pythonpath=."]
+            cmd = [sys.executable, "-m", "pytest", "-q", "--tb=short", "-o", "pythonpath=."]
             env = os.environ.copy()
             env["PYTHONPATH"] = str(self.workspace_path) + (os.pathsep + env["PYTHONPATH"] if "PYTHONPATH" in env else "")
             try:

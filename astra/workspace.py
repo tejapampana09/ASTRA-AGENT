@@ -243,6 +243,11 @@ class WorkspaceManager:
             for entry in entries:
                 if entry.name in ignored or entry.name.startswith(".pytest_cache"):
                     continue
+                # Do not enumerate symlink targets outside the trusted workspace.
+                try:
+                    entry.resolve().relative_to(self.workspace_path)
+                except (ValueError, OSError):
+                    continue
 
                 rel_path = str(entry.relative_to(self.workspace_path)).replace("\\", "/")
                 if entry.is_dir():

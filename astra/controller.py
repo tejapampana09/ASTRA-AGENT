@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from astra.approval import ApprovalManager, approval_manager as global_approval_manager
+from astra.config import settings
 from astra.checkpoints import CheckpointManager
 from astra.events import AgentEvent, AgentState, ControllerPhase, EventType, event_bus
 from astra.planner import Planner
@@ -194,7 +195,7 @@ def classify_task_intent(
         )
 
     # 8. Ambiguous fallback: If LLM is available, consult it for classification; otherwise default to IMPLEMENTATION
-    if llm_client:
+    if llm_client and settings.llm_classification_enabled:
         try:
             classification_prompt = [
                 {
@@ -265,7 +266,7 @@ class DeterministicAgentController:
         self.session_manager = session_manager or global_session_manager
         self.approval_manager = approval_manager or global_approval_manager
         self.tool_registry = tool_registry or ToolRegistry(self.workspace_path)
-        self.checkpoint_manager = CheckpointManager(self.workspace_path, self.session_manager)
+        self.checkpoint_manager = CheckpointManager(self.workspace_path, self.session_manager, session_id=self.session_id)
         self.verifier = IndependentVerifier(self.workspace_path)
         self.loop_detector = StagnationAndLoopDetector()
         self.progress_tracker = ProgressTracker(self.workspace_path)

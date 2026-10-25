@@ -34,9 +34,9 @@ def test_circuit_breaker_state_transitions():
     cb.reset(provider)
     assert cb.is_available(provider) is True
 
-    # Quota exhausted error
+    # Generic quota wording does not prove daily exhaustion.
     state = cb.record_error(provider, Exception("ResourceExhausted: Quota exceeded for quota metric"))
-    assert state == ProviderState.QUOTA_EXHAUSTED
+    assert state == ProviderState.RATE_LIMITED
     assert cb.is_available(provider) is False
 
     # Auth error
@@ -115,8 +115,10 @@ def test_circuit_breaker_daily_quota_exhaustion():
     assert state == ProviderState.QUOTA_EXHAUSTED
     assert cb.is_available("gemini") is False
     status = cb.get_status("gemini")
-    # Cooldown should be ~86400s (24 hours)
-    assert status["cooldown_remaining_sec"] > 80000
+    # Daily cooldown ends at the next Pacific midnight, including DST.
+    from astra.quota import pacific_window
+    remaining = pacific_window()[1] - time.time()
+    assert abs(status["cooldown_remaining_sec"] - remaining) < 1
 
 
 def test_fallback_does_not_call_quota_exhausted_provider():

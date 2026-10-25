@@ -7,7 +7,7 @@ from typing import Optional
 from dotenv import load_dotenv
 
 # Load local .env
-load_dotenv(override=True)
+load_dotenv(override=False)
 
 
 class Config:
@@ -60,6 +60,13 @@ class Config:
         ]
         self.max_output_chars = int(os.getenv("ASTRA_MAX_OUTPUT_CHARS", "65536"))
         self.circuit_breaker_enabled = os.getenv("ASTRA_CIRCUIT_BREAKER", "true").lower() in ("1", "true", "yes")
+        # Local caps, not claims about the project's actual provider entitlement.
+        self.max_llm_calls_per_task = int(os.getenv("ASTRA_MAX_LLM_CALLS_PER_TASK", "20"))
+        self.gemini_rpd_budget = int(os.getenv("ASTRA_GEMINI_RPD_BUDGET", "50"))
+        self.gemini_rpm_budget = int(os.getenv("ASTRA_GEMINI_RPM_BUDGET", "5"))
+        self.gemini_project_id = os.getenv("ASTRA_GEMINI_PROJECT_ID", "")
+        self.llm_classification_enabled = os.getenv("ASTRA_LLM_CLASSIFICATION", "false").lower() in ("1", "true", "yes")
+
 
         # Data directory for sessions & persistence
         self.data_dir = Path(os.getenv("ASTRA_DATA_DIR") or Path.home() / ".astra").resolve()
@@ -67,7 +74,7 @@ class Config:
         self.db_path = self.data_dir / "astra_v4.db"
 
     def reload(self) -> None:
-        load_dotenv(override=True)
+        load_dotenv(override=False)
         self.provider = os.getenv("ASTRA_PROVIDER") or self.provider
         self.gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
         self.groq_api_key = os.getenv("GROQ_API_KEY") or ""
@@ -101,6 +108,13 @@ class Config:
         ]
         self.max_output_chars = int(os.getenv("ASTRA_MAX_OUTPUT_CHARS", "65536"))
         self.circuit_breaker_enabled = os.getenv("ASTRA_CIRCUIT_BREAKER", "true").lower() in ("1", "true", "yes")
+        # Local caps, not claims about the project's actual provider entitlement.
+        self.max_llm_calls_per_task = int(os.getenv("ASTRA_MAX_LLM_CALLS_PER_TASK", "20"))
+        self.gemini_rpd_budget = int(os.getenv("ASTRA_GEMINI_RPD_BUDGET", "50"))
+        self.gemini_rpm_budget = int(os.getenv("ASTRA_GEMINI_RPM_BUDGET", "5"))
+        self.gemini_project_id = os.getenv("ASTRA_GEMINI_PROJECT_ID", "")
+        self.llm_classification_enabled = os.getenv("ASTRA_LLM_CLASSIFICATION", "false").lower() in ("1", "true", "yes")
+
 
 
 settings = Config()
